@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>News Reader v1.0</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>News Reader</h1>
+      <div class="controls">
+        <input id="searchInput" type="search" placeholder="搜索标题/摘要/来源" />
+        <button id="showAllBtn">全部显示</button>
+        <button id="showUnreadBtn">仅未读</button>
+        <button id="markAllReadBtn">当前结果全部标为已读</button>
+        <button id="refreshBtn">刷新索引</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="meta" class="meta"></div>
+      <ul id="newsList" class="news-list"></ul>
+      <div class="pager">
+        <button id="prevBtn">上一页</button>
+        <span id="pageInfo">1 / 1</span>
+        <button id="nextBtn">下一页</button>
+      </div>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+  </html>
