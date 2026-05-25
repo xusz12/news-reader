@@ -15,12 +15,13 @@
 
 ### v1.1（已完成）
 - 已读/未读状态（`item_state.read_at`）
-- 已读行灰度显示
+- 未读红点提示（已读不再灰度）
 - `全部显示` / `仅未读` 过滤
 - 单条 `标为已读` / `标为未读`
 - `当前结果全部标为已读`（按当前筛选条件，跨分页生效）
 - 点击原文自动标已读
-- 自动曝光标已读（自适应可见高度 + 持续 2 秒）
+- 自动已读（向下滚动后条目滑出屏幕顶部触发）
+- 列表底部阅读缓冲区（约 `100vh`）
 
 ## 技术结构
 
@@ -32,7 +33,7 @@
 ## 运行方式
 
 ```bash
-cd /Users/x/news-reader
+cd /Users/x/Library/Mobile Documents/com~apple~CloudDocs/slock项目/news-reader
 python3 -m pip install -r requirements.txt
 python3 app.py
 ```
@@ -42,7 +43,7 @@ python3 app.py
 ## 测试
 
 ```bash
-cd /Users/x/news-reader
+cd /Users/x/Library/Mobile Documents/com~apple~CloudDocs/slock项目/news-reader
 python3 -m pytest -q
 ```
 
@@ -59,7 +60,8 @@ python3 -m pytest -q
 
 ### 2026-05-25（v1.1）
 - 新增已读/未读能力：`read_filter`、单条状态切换、跨页批量已读。
-- 新增自动曝光标已读：`visibleHeight >= min(rowHeight*0.75, viewportHeight*0.60)` 且持续 2 秒。
+- 新增自动已读：向下滚动且条目滑出屏幕顶部后标已读。
+- UI 调整：未读红点替代已读灰度，并加入底部阅读缓冲区。
 - 保持 `schema/scanner/parser` 边界不变，`reindex` 不触碰 `item_state`。
 
 ### 2026-05-25（v1.0）

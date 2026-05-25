@@ -18,12 +18,25 @@ const prevBtn = document.getElementById("prevBtn");
 const nextBtn = document.getElementById("nextBtn");
 
 let observer = null;
-const readPending = new Map();
-const readTouched = new Set();
+let lastScrollY = window.scrollY;
+const enteredViewport = new Set();
+const writeInFlight = new Set();
 
 function updateFilterButtons() {
   showAllBtn.disabled = state.readFilter === "all";
   showUnreadBtn.disabled = state.readFilter === "unread";
+}
+
+function isRead(li) {
+  return li.dataset.read === "1";
+}
+
+function applyReadUI(li, read) {
+  li.dataset.read = read ? "1" : "0";
+  const dot = li.querySelector(".unread-dot");
+  if (dot) dot.classList.toggle("hidden", read);
+  const toggle = li.querySelector(".read-toggle");
+  if (toggle) toggle.textContent = read ? "标为未读" : "标为已读";
 }
 
 async function patchRead(itemId, read) {
@@ -36,11 +49,18 @@ async function patchRead(itemId, read) {
   return res.json();
 }
 
-function clearObserve(itemId) {
-  const timer = readPending.get(itemId);
-  if (timer) {
-    clearTimeout(timer);
-    readPending.delete(itemId);
+async function markReadWithRollback(li, read) {
+  const itemId = li.dataset.id;
+  if (writeInFlight.has(itemId)) return;
+  writeInFlight.add(itemId);
+  const prevRead = isRead(li);
+  applyReadUI(li, read);
+  try {
+    await patchRead(itemId, read);
+  } catch {
+    applyReadUI(li, prevRead);
+  } finally {
+    writeInFlight.delete(itemId);
   }
 }
 
@@ -48,60 +68,51 @@ function setupObserver() {
   if (observer) observer.disconnect();
   observer = new IntersectionObserver(
     (entries) => {
-      if (document.hidden) {
-        for (const entry of entries) clearObserve(entry.target.dataset.id);
-        return;
-      }
+      if (document.hidden) return;
+      const scrollingDown = window.scrollY > lastScrollY;
+      lastScrollY = window.scrollY;
+
       for (const entry of entries) {
         const el = entry.target;
         const id = el.dataset.id;
-        const isRead = el.dataset.read === "1";
-        if (isRead || readTouched.has(id)) {
-          clearObserve(id);
+        if (entry.isIntersecting) {
+          enteredViewport.add(id);
           continue;
         }
-        const rowHeight = entry.boundingClientRect.height || el.offsetHeight || 0;
-        const visibleHeight = entry.intersectionRect.height || 0;
-        const viewportCap = window.innerHeight * 0.6;
-        const needVisible = Math.min(rowHeight * 0.75, viewportCap);
-        if (visibleHeight >= needVisible && !readPending.has(id)) {
-          const timer = setTimeout(async () => {
-            readPending.delete(id);
-            readTouched.add(id);
-            el.classList.add("is-read");
-            el.dataset.read = "1";
-            try {
-              await patchRead(id, true);
-            } catch (e) {
-              el.classList.remove("is-read");
-              el.dataset.read = "0";
-              readTouched.delete(id);
-            }
-          }, 2000);
-          readPending.set(id, timer);
-        } else if (visibleHeight < needVisible) {
-          clearObserve(id);
+        if (!scrollingDown) continue;
+        if (!enteredViewport.has(id)) continue;
+        if (isRead(el)) continue;
+
+        // "滚过即读": only when row bottom slides past viewport top.
+        if (entry.boundingClientRect.bottom < 0) {
+          markReadWithRollback(el, true);
         }
       }
     },
-    { threshold: [0, 0.25, 0.5, 0.75, 1.0] }
+    { threshold: [0] }
   );
-
   document.querySelectorAll(".news-item").forEach((el) => observer.observe(el));
 }
 
 function renderItems(items) {
   newsList.innerHTML = "";
+  enteredViewport.clear();
+
   for (const item of items) {
     const li = document.createElement("li");
     li.className = "news-item";
     li.dataset.id = item.id;
     li.dataset.read = item.read_at ? "1" : "0";
-    if (item.read_at) li.classList.add("is-read");
 
     const line1 = document.createElement("div");
     line1.className = "line1";
-    line1.textContent = `${item.published_at} · ${item.source || "未知来源"}`;
+    const dot = document.createElement("span");
+    dot.className = "unread-dot";
+    if (item.read_at) dot.classList.add("hidden");
+    const metaText = document.createElement("span");
+    metaText.textContent = `${item.published_at} · ${item.source || "未知来源"}`;
+    line1.appendChild(dot);
+    line1.appendChild(metaText);
 
     const titleRow = document.createElement("div");
     titleRow.className = "title-row";
@@ -116,43 +127,20 @@ function renderItems(items) {
       title.style.pointerEvents = "none";
       title.style.opacity = "0.6";
     }
-
     title.addEventListener("click", async () => {
-      if (li.dataset.read === "1") return;
-      li.classList.add("is-read");
-      li.dataset.read = "1";
-      try {
-        await patchRead(item.id, true);
-      } catch (e) {
-        li.classList.remove("is-read");
-        li.dataset.read = "0";
-      }
+      if (isRead(li)) return;
+      await markReadWithRollback(li, true);
     });
 
     const toggle = document.createElement("button");
     toggle.className = "read-toggle";
-    const setToggleText = () => {
-      toggle.textContent = li.dataset.read === "1" ? "标为未读" : "标为已读";
-    };
-    setToggleText();
+    toggle.textContent = item.read_at ? "标为未读" : "标为已读";
     toggle.addEventListener("click", async () => {
-      const nextRead = li.dataset.read !== "1";
-      const prevRead = li.dataset.read;
-      li.dataset.read = nextRead ? "1" : "0";
-      li.classList.toggle("is-read", nextRead);
-      setToggleText();
-      try {
-        await patchRead(item.id, nextRead);
-      } catch (e) {
-        li.dataset.read = prevRead;
-        li.classList.toggle("is-read", prevRead === "1");
-        setToggleText();
-      }
+      await markReadWithRollback(li, !isRead(li));
     });
 
     titleRow.appendChild(title);
     titleRow.appendChild(toggle);
-
     li.appendChild(line1);
     li.appendChild(titleRow);
     if (item.summary) {
@@ -256,7 +244,8 @@ nextBtn.addEventListener("click", async () => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
-    for (const id of readPending.keys()) clearObserve(id);
+    // Reset scroll direction baseline when coming back.
+    lastScrollY = window.scrollY;
   }
 });
 
