@@ -36,6 +36,8 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     assert data["items"][0]["url"] == "https://example.com/api"
     item_id = data["items"][0]["id"]
     assert data["items"][0]["read_at"] is None
+    assert data["items"][0]["important_at"] is None
+    assert data["items"][0]["read_later_at"] is None
 
     r3 = client.patch(f"/api/news/{item_id}/state", json={"read": True})
     assert r3.status_code == 200
@@ -49,10 +51,32 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     r5 = client.patch(f"/api/news/{item_id}/state", json={"read": False})
     assert r5.status_code == 200
     assert r5.get_json()["read_at"] is None
+    assert r5.get_json()["important_at"] is None
 
     r6 = client.get("/api/news?read_filter=unread")
     assert r6.status_code == 200
     assert r6.get_json()["total"] == 1
+
+    # New flags should be independent and combinable.
+    r7 = client.patch(
+        f"/api/news/{item_id}/state",
+        json={"important": True, "read_later": True},
+    )
+    assert r7.status_code == 200
+    assert r7.get_json()["important_at"] is not None
+    assert r7.get_json()["read_later_at"] is not None
+
+    important = client.get("/api/news?collection=important")
+    assert important.status_code == 200
+    assert important.get_json()["total"] == 1
+
+    read_later = client.get("/api/news?collection=read_later")
+    assert read_later.status_code == 200
+    assert read_later.get_json()["total"] == 1
+
+    combo = client.get("/api/news?collection=important&read_filter=unread")
+    assert combo.status_code == 200
+    assert combo.get_json()["total"] == 1
 
 
 def test_mark_all_read_cross_page_with_filter(tmp_path: Path, monkeypatch):
@@ -100,3 +124,46 @@ def test_mark_all_read_cross_page_with_filter(tmp_path: Path, monkeypatch):
     unread_beta = client.get("/api/news?read_filter=unread&q=Beta")
     assert unread_beta.status_code == 200
     assert unread_beta.get_json()["total"] == 1
+
+
+def test_mark_all_read_respects_collection(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（2条）
+### [Item 1](https://example.com/i1)
+- 发布时间：2026-05-25 12:00:00
+### [Item 2](https://example.com/i2)
+- 发布时间：2026-05-25 11:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news").get_json()["items"]
+    item1 = items[0]["id"]
+    item2 = items[1]["id"]
+    assert client.patch(f"/api/news/{item1}/state", json={"important": True}).status_code == 200
+
+    mark = client.post(
+        "/api/news/mark-all-read",
+        json={"collection": "important", "read_filter": "all"},
+    )
+    assert mark.status_code == 200
+    assert mark.get_json()["marked"] == 1
+
+    important_read = client.get("/api/news?collection=important&read_filter=read")
+    assert important_read.get_json()["total"] == 1
+
+    feed_unread = client.get("/api/news?collection=feed&read_filter=unread")
+    ids = {it["id"] for it in feed_unread.get_json()["items"]}
+    assert item2 in ids

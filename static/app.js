@@ -3,10 +3,13 @@ let state = {
   pages: 1,
   q: "",
   per: 30,
-  readFilter: "all",
+  readFilter: "all", // all | unread
+  collection: "feed", // feed | important | read_later
   total: 0,
   loading: false,
   hasMore: true,
+  selectedId: null,
+  itemsById: new Map(),
 };
 
 const mediaIconMap = {
@@ -16,24 +19,73 @@ const mediaIconMap = {
   "Ars Technica": "/static/source-icons/arstechnica.ico",
 };
 
-const searchInput = document.getElementById("searchInput");
 const refreshBtn = document.getElementById("refreshBtn");
-const showAllBtn = document.getElementById("showAllBtn");
-const showUnreadBtn = document.getElementById("showUnreadBtn");
+const readFilterToggleBtn = document.getElementById("readFilterToggleBtn");
 const markAllReadBtn = document.getElementById("markAllReadBtn");
+
+const navFeedBtn = document.getElementById("navFeedBtn");
+const navImportantBtn = document.getElementById("navImportantBtn");
+const navReadLaterBtn = document.getElementById("navReadLaterBtn");
+
 const newsList = document.getElementById("newsList");
 const meta = document.getElementById("meta");
 const pageInfo = document.getElementById("pageInfo");
-const prevBtn = document.getElementById("prevBtn");
-const nextBtn = document.getElementById("nextBtn");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
+
+const detailPanel = document.getElementById("detailPanel");
+const detailEmpty = document.getElementById("detailEmpty");
+const detailBody = document.getElementById("detailBody");
+const detailCloseBtn = document.getElementById("detailCloseBtn");
 
 let readObserver = null;
 let loadObserver = null;
 let lastScrollY = window.scrollY;
 const enteredViewport = new Set();
 const writeInFlight = new Set();
+
+function setHint(text) {
+  listHint.textContent = text || "";
+}
+
+function iconSvg(name, filled = false) {
+  const common = 'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"';
+  if (name === "circle") {
+    if (filled) {
+      return `<svg ${common}><circle cx="12" cy="12" r="7.5" fill="currentColor" stroke="currentColor"/></svg>`;
+    }
+    return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
+  }
+  if (name === "check-circle") {
+    return `<svg ${common}><circle cx="12" cy="12" r="8"/><path d="m8.5 12 2.2 2.2 4.8-4.8"/></svg>`;
+  }
+  if (name === "refresh") {
+    return `<svg ${common}><path d="M8 4.5a7.5 7.5 0 0 1 9.6 2.1"/><path d="m17.2 4.8.5 3.3-3.3.5"/><path d="M16 19.5a7.5 7.5 0 0 1-9.6-2.1"/><path d="m6.8 19.2-.5-3.3 3.3-.5"/></svg>`;
+  }
+  if (name === "important") {
+    if (filled) {
+      return `<svg ${common}><circle cx="12" cy="12" r="8" fill="currentColor" stroke="currentColor"/><path d="M12 7.2v6" stroke="#fff"/><circle cx="12" cy="16.9" r="0.9" fill="#fff" stroke="none"/></svg>`;
+    }
+    return `<svg ${common}><circle cx="12" cy="12" r="8"/><path d="M12 7.2v6"/><circle cx="12" cy="16.9" r="0.9" fill="currentColor" stroke="none"/></svg>`;
+  }
+  if (name === "bookmark") {
+    if (filled) {
+      return `<svg ${common}><path d="M8 4.5h8a1 1 0 0 1 1 1V20l-5-3-5 3V5.5a1 1 0 0 1 1-1Z" fill="currentColor" stroke="currentColor"/></svg>`;
+    }
+    return `<svg ${common}><path d="M8 4.5h8a1 1 0 0 1 1 1V20l-5-3-5 3V5.5a1 1 0 0 1 1-1Z"/></svg>`;
+  }
+  return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
+}
+
+function applyIcon(btn, iconName, { filled = false, label = "", tone = "default" } = {}) {
+  btn.innerHTML = `<span class="glyph">${iconSvg(iconName, filled)}</span>`;
+  btn.classList.remove("tone-default", "tone-danger", "tone-warning", "tone-success");
+  btn.classList.add(`tone-${tone}`);
+  btn.dataset.icon = iconName;
+  btn.dataset.filled = filled ? "1" : "0";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+}
 
 function sourcePrefix(source) {
   if (!source) return "";
@@ -71,50 +123,173 @@ function createSourceIcon(item) {
   return wrap;
 }
 
-function updateFilterButtons() {
-  showAllBtn.disabled = state.readFilter === "all";
-  showUnreadBtn.disabled = state.readFilter === "unread";
-}
-
-function setHint(text) {
-  listHint.textContent = text || "";
-}
-
-function isRead(li) {
+function rowIsRead(li) {
   return li.dataset.read === "1";
 }
 
-function applyReadUI(li, read) {
-  li.dataset.read = read ? "1" : "0";
-  const dot = li.querySelector(".unread-dot");
-  if (dot) dot.classList.toggle("hidden", read);
-  const toggle = li.querySelector(".read-toggle");
-  if (toggle) toggle.textContent = read ? "标为未读" : "标为已读";
+function syncRowUI(li, item) {
+  li.dataset.read = item.read_at ? "1" : "0";
+  li.dataset.important = item.important_at ? "1" : "0";
+  li.dataset.readLater = item.read_later_at ? "1" : "0";
+
+  const unreadDot = li.querySelector(".unread-dot");
+  if (unreadDot) unreadDot.classList.toggle("hidden", !!item.read_at);
+
+  const importantBtn = li.querySelector(".btn-important");
+  if (importantBtn) {
+    applyIcon(importantBtn, "important", {
+      filled: !!item.important_at,
+      tone: item.important_at ? "danger" : "default",
+      label: item.important_at ? "取消重要" : "标为重要",
+    });
+  }
+
+  const readLaterBtn = li.querySelector(".btn-read-later");
+  if (readLaterBtn) {
+    applyIcon(readLaterBtn, "bookmark", {
+      filled: !!item.read_later_at,
+      tone: item.read_later_at ? "warning" : "default",
+      label: item.read_later_at ? "取消稍后再看" : "稍后再看",
+    });
+  }
+
+  li.classList.toggle("selected", state.selectedId === item.id);
 }
 
-async function patchRead(itemId, read) {
+function updateFilterButtons() {
+  const isAll = state.readFilter === "all";
+  applyIcon(readFilterToggleBtn, "circle", {
+    filled: isAll,
+    tone: isAll ? "default" : "muted",
+    label: isAll ? "全部显示" : "仅未读",
+  });
+}
+
+function updateCollectionButtons() {
+  navFeedBtn.classList.toggle("active", state.collection === "feed");
+  navImportantBtn.classList.toggle("active", state.collection === "important");
+  navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
+}
+
+function renderMeta() {
+  const names = {
+    feed: "新闻流",
+    important: "重要新闻",
+    read_later: "稍后再看",
+  };
+  const readNames = {
+    all: "全部",
+    unread: "仅未读",
+  };
+  meta.textContent = `${names[state.collection]} · ${readNames[state.readFilter]} · 共 ${state.total} 条`;
+  pageInfo.textContent = `${state.page} / ${state.pages}`;
+}
+
+async function patchState(itemId, payload) {
   const res = await fetch(`/api/news/${encodeURIComponent(itemId)}/state`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ read }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error("state_update_failed");
   return res.json();
 }
 
-async function markReadWithRollback(li, read) {
-  const itemId = li.dataset.id;
+function applyPatchToItem(item, patchResult) {
+  if ("read_at" in patchResult) item.read_at = patchResult.read_at;
+  if ("important_at" in patchResult) item.important_at = patchResult.important_at;
+  if ("read_later_at" in patchResult) item.read_later_at = patchResult.read_later_at;
+  state.itemsById.set(item.id, item);
+}
+
+function rerenderOne(itemId) {
+  const item = state.itemsById.get(itemId);
+  const row = newsList.querySelector(`.news-item[data-id=\"${itemId}\"]`);
+  if (item && row) syncRowUI(row, item);
+  if (item && state.selectedId === itemId) renderDetail(item);
+}
+
+async function patchStateWithRollback(itemId, payload) {
   if (writeInFlight.has(itemId)) return;
   writeInFlight.add(itemId);
-  const prevRead = isRead(li);
-  applyReadUI(li, read);
+  const item = state.itemsById.get(itemId);
+  if (!item) {
+    writeInFlight.delete(itemId);
+    return;
+  }
+  const backup = {
+    read_at: item.read_at,
+    important_at: item.important_at,
+    read_later_at: item.read_later_at,
+  };
+
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  if ("read" in payload) item.read_at = payload.read ? now : null;
+  if ("important" in payload) item.important_at = payload.important ? now : null;
+  if ("read_later" in payload) item.read_later_at = payload.read_later ? now : null;
+  rerenderOne(itemId);
+
   try {
-    await patchRead(itemId, read);
+    const result = await patchState(itemId, payload);
+    applyPatchToItem(item, result);
+    rerenderOne(itemId);
   } catch {
-    applyReadUI(li, prevRead);
+    item.read_at = backup.read_at;
+    item.important_at = backup.important_at;
+    item.read_later_at = backup.read_later_at;
+    rerenderOne(itemId);
   } finally {
     writeInFlight.delete(itemId);
   }
+}
+
+function openDetailOnMobile() {
+  if (window.matchMedia("(max-width: 980px)").matches) {
+    detailPanel.classList.add("open");
+  }
+}
+
+function closeDetailOnMobile() {
+  detailPanel.classList.remove("open");
+}
+
+function renderDetail(item) {
+  if (!item) {
+    detailBody.classList.add("hidden");
+    detailEmpty.classList.remove("hidden");
+    return;
+  }
+  detailEmpty.classList.add("hidden");
+  detailBody.classList.remove("hidden");
+
+  document.getElementById("detailTitle").textContent = item.title || "";
+  document.getElementById("detailMeta").textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
+  document.getElementById("detailSummary").textContent = item.summary || "暂无摘要";
+
+  const link = document.getElementById("detailLink");
+  if (item.url) {
+    link.href = item.url;
+    link.classList.remove("disabled");
+    link.textContent = "打开原文";
+  } else {
+    link.href = "#";
+    link.classList.add("disabled");
+    link.textContent = "无原文链接";
+  }
+
+  const importantBtn = document.getElementById("detailImportantBtn");
+  applyIcon(importantBtn, "important", {
+    filled: !!item.important_at,
+    tone: item.important_at ? "danger" : "default",
+    label: item.important_at ? "取消重要" : "标为重要",
+  });
+
+  const readLaterBtn = document.getElementById("detailReadLaterBtn");
+  applyIcon(readLaterBtn, "bookmark", {
+    filled: !!item.read_later_at,
+    tone: item.read_later_at ? "warning" : "default",
+    label: item.read_later_at ? "取消稍后再看" : "稍后再看",
+  });
 }
 
 function setupReadObserver() {
@@ -134,14 +309,15 @@ function setupReadObserver() {
         }
         if (!scrollingDown) continue;
         if (!enteredViewport.has(id)) continue;
-        if (isRead(el)) continue;
+        if (rowIsRead(el)) continue;
         if (entry.boundingClientRect.bottom < 0) {
-          markReadWithRollback(el, true);
+          patchStateWithRollback(id, { read: true });
         }
       }
     },
     { threshold: [0] }
   );
+
   document.querySelectorAll(".news-item").forEach((el) => readObserver.observe(el));
 }
 
@@ -164,55 +340,76 @@ function buildItemRow(item) {
   const li = document.createElement("li");
   li.className = "news-item";
   li.dataset.id = item.id;
-  li.dataset.read = item.read_at ? "1" : "0";
 
   const line1 = document.createElement("div");
   line1.className = "line1";
-  const dot = document.createElement("span");
-  dot.className = "unread-dot";
-  if (item.read_at) dot.classList.add("hidden");
+
+  const unreadDot = document.createElement("span");
+  unreadDot.className = "unread-dot";
+
   const icon = createSourceIcon(item);
-  const metaText = document.createElement("span");
-  metaText.textContent = `${item.source || "未知来源"} · ${item.published_at}`;
-  line1.appendChild(dot);
+
+  const text = document.createElement("span");
+  text.className = "line1-text";
+  text.textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
+
+  line1.appendChild(unreadDot);
   line1.appendChild(icon);
-  line1.appendChild(metaText);
+  line1.appendChild(text);
 
-  const titleRow = document.createElement("div");
-  titleRow.className = "title-row";
-
-  const title = document.createElement("a");
+  const title = document.createElement("div");
   title.className = "title";
-  title.href = item.url || "#";
-  title.target = "_blank";
-  title.rel = "noopener noreferrer";
-  title.textContent = item.title;
-  if (!item.url) {
-    title.style.pointerEvents = "none";
-    title.style.opacity = "0.6";
-  }
-  title.addEventListener("click", async () => {
-    if (isRead(li)) return;
-    await markReadWithRollback(li, true);
+  title.textContent = item.title || "";
+
+  const summary = document.createElement("p");
+  summary.className = "summary";
+  summary.textContent = item.summary || "";
+
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+  const btnImportant = document.createElement("button");
+  btnImportant.className = "btn-important icon-btn";
+  btnImportant.type = "button";
+  btnImportant.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const current = !!state.itemsById.get(item.id)?.important_at;
+    patchStateWithRollback(item.id, { important: !current });
   });
 
-  const toggle = document.createElement("button");
-  toggle.className = "read-toggle";
-  toggle.textContent = item.read_at ? "标为未读" : "标为已读";
-  toggle.addEventListener("click", async () => {
-    await markReadWithRollback(li, !isRead(li));
+  const btnReadLater = document.createElement("button");
+  btnReadLater.className = "btn-read-later icon-btn";
+  btnReadLater.type = "button";
+  btnReadLater.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const current = !!state.itemsById.get(item.id)?.read_later_at;
+    patchStateWithRollback(item.id, { read_later: !current });
   });
 
-  titleRow.appendChild(title);
-  titleRow.appendChild(toggle);
+  actions.appendChild(btnImportant);
+  actions.appendChild(btnReadLater);
+
   li.appendChild(line1);
-  li.appendChild(titleRow);
-  if (item.summary) {
-    const p = document.createElement("p");
-    p.className = "summary";
-    p.textContent = item.summary;
-    li.appendChild(p);
-  }
+  li.appendChild(title);
+  if (item.summary) li.appendChild(summary);
+  li.appendChild(actions);
+
+  li.addEventListener("click", () => {
+    if (state.selectedId === item.id) {
+      state.selectedId = null;
+      closeDetailOnMobile();
+      renderDetail(null);
+    } else {
+      state.selectedId = item.id;
+      renderDetail(state.itemsById.get(item.id));
+      openDetailOnMobile();
+    }
+    newsList.querySelectorAll(".news-item").forEach((row) => {
+      row.classList.toggle("selected", row.dataset.id === state.selectedId);
+    });
+  });
+
+  state.itemsById.set(item.id, item);
+  syncRowUI(li, item);
   return li;
 }
 
@@ -222,6 +419,7 @@ async function fetchNewsPage(page) {
     per: String(state.per),
     q: state.q,
     read_filter: state.readFilter,
+    collection: state.collection,
   });
   const res = await fetch(`/api/news?${params.toString()}`);
   if (!res.ok) throw new Error("news_fetch_failed");
@@ -231,15 +429,14 @@ async function fetchNewsPage(page) {
 function resetList() {
   newsList.innerHTML = "";
   enteredViewport.clear();
+  state.itemsById.clear();
   state.page = 1;
   state.pages = 1;
   state.total = 0;
   state.hasMore = true;
-}
-
-function renderMeta() {
-  meta.textContent = `共 ${state.total} 条`;
-  pageInfo.textContent = `${state.page} / ${state.pages}`;
+  state.selectedId = null;
+  closeDetailOnMobile();
+  renderDetail(null);
 }
 
 async function loadFirstPage() {
@@ -251,8 +448,10 @@ async function loadFirstPage() {
     state.pages = data.pages;
     state.page = 1;
     state.hasMore = state.page < state.pages;
+
     data.items.forEach((item) => newsList.appendChild(buildItemRow(item)));
     renderMeta();
+
     if (state.total === 0) {
       setHint("暂无数据");
     } else if (state.hasMore) {
@@ -260,10 +459,12 @@ async function loadFirstPage() {
     } else {
       setHint("已加载全部新闻");
     }
+
     setupReadObserver();
   } finally {
     state.loading = false;
     updateFilterButtons();
+    updateCollectionButtons();
   }
 }
 
@@ -295,29 +496,29 @@ async function autoReindexAndLoad() {
     const r = await fetch("/api/reindex", { method: "POST" });
     if (!r.ok) throw new Error("reindex_failed");
     await loadFirstPage();
-    setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
   } catch {
     setHint("自动同步失败，已展示本地索引，可点“刷新索引”重试。");
     await loadFirstPage();
   }
 }
 
-let searchTimer = null;
-searchInput.addEventListener("input", () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(async () => {
-    state.q = searchInput.value.trim();
-    await loadFirstPage();
-  }, 300);
-});
-
-showAllBtn.addEventListener("click", async () => {
-  state.readFilter = "all";
+readFilterToggleBtn.addEventListener("click", async () => {
+  state.readFilter = state.readFilter === "all" ? "unread" : "all";
   await loadFirstPage();
 });
 
-showUnreadBtn.addEventListener("click", async () => {
-  state.readFilter = "unread";
+navFeedBtn.addEventListener("click", async () => {
+  state.collection = "feed";
+  await loadFirstPage();
+});
+
+navImportantBtn.addEventListener("click", async () => {
+  state.collection = "important";
+  await loadFirstPage();
+});
+
+navReadLaterBtn.addEventListener("click", async () => {
+  state.collection = "read_later";
   await loadFirstPage();
 });
 
@@ -332,6 +533,7 @@ markAllReadBtn.addEventListener("click", async () => {
       body: JSON.stringify({
         q: state.q,
         read_filter: state.readFilter,
+        collection: state.collection,
       }),
     });
     if (!res.ok) throw new Error("mark_all_failed");
@@ -343,7 +545,8 @@ markAllReadBtn.addEventListener("click", async () => {
 
 refreshBtn.addEventListener("click", async () => {
   refreshBtn.disabled = true;
-  refreshBtn.textContent = "刷新中...";
+  refreshBtn.classList.add("loading");
+  applyIcon(refreshBtn, "refresh", { label: "刷新中..." });
   try {
     const r = await fetch("/api/reindex", { method: "POST" });
     if (!r.ok) throw new Error("reindex_failed");
@@ -352,13 +555,40 @@ refreshBtn.addEventListener("click", async () => {
     setHint("同步失败，可稍后重试。");
   } finally {
     refreshBtn.disabled = false;
-    refreshBtn.textContent = "刷新索引";
+    refreshBtn.classList.remove("loading");
+    applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
   }
 });
 
-// Pager hidden in v1.1.2 (kept for compatibility).
-prevBtn.addEventListener("click", () => {});
-nextBtn.addEventListener("click", () => {});
+detailCloseBtn.addEventListener("click", closeDetailOnMobile);
+
+const detailImportantBtn = document.getElementById("detailImportantBtn");
+const detailReadLaterBtn = document.getElementById("detailReadLaterBtn");
+const detailLink = document.getElementById("detailLink");
+
+detailImportantBtn.addEventListener("click", async () => {
+  if (!state.selectedId) return;
+  const current = !!state.itemsById.get(state.selectedId)?.important_at;
+  await patchStateWithRollback(state.selectedId, { important: !current });
+});
+
+detailReadLaterBtn.addEventListener("click", async () => {
+  if (!state.selectedId) return;
+  const current = !!state.itemsById.get(state.selectedId)?.read_later_at;
+  await patchStateWithRollback(state.selectedId, { read_later: !current });
+});
+
+detailLink.addEventListener("click", async (e) => {
+  if (!state.selectedId) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item || !item.url) {
+    e.preventDefault();
+    return;
+  }
+  if (!item.read_at) {
+    await patchStateWithRollback(state.selectedId, { read: true });
+  }
+});
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
@@ -367,4 +597,8 @@ document.addEventListener("visibilitychange", () => {
 });
 
 setupLoadObserver();
+renderDetail(null);
+applyIcon(markAllReadBtn, "check-circle", { label: "当前结果全部标为已读" });
+applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
+updateFilterButtons();
 autoReindexAndLoad();

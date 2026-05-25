@@ -3,36 +3,56 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v1.0</title>
+    <title>News Reader v1.2</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
     <header class="topbar">
       <h1>News Reader</h1>
-      <div class="controls">
-        <input id="searchInput" type="search" placeholder="搜索标题/摘要/来源" />
-        <button id="showAllBtn">全部显示</button>
-        <button id="showUnreadBtn">仅未读</button>
-        <button id="markAllReadBtn">当前结果全部标为已读</button>
-        <button id="refreshBtn">刷新索引</button>
-      </div>
     </header>
 
-    <main>
-      <div id="meta" class="meta"></div>
-      <ul id="newsList" class="news-list"></ul>
-      <div class="pager hidden">
-        <button id="prevBtn">上一页</button>
-        <span id="pageInfo">1 / 1</span>
-        <button id="nextBtn">下一页</button>
-      </div>
-      <div id="listHint" class="list-hint"></div>
-      <div id="loadMoreSentinel" class="load-sentinel" aria-hidden="true"></div>
-      <div class="end-buffer" aria-hidden="true">
-        <span>已到列表末尾</span>
-      </div>
+    <main class="workspace">
+      <aside class="left-nav">
+        <h2>集合入口</h2>
+        <button id="navFeedBtn" class="nav-btn active">新闻流</button>
+        <button id="navImportantBtn" class="nav-btn">重要新闻</button>
+        <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
+      </aside>
+
+      <section class="feed-column">
+        <div class="controls feed-controls">
+          <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
+          <button id="markAllReadBtn" class="icon-btn" type="button"></button>
+          <button id="refreshBtn" class="icon-btn" type="button"></button>
+        </div>
+        <div id="meta" class="meta"></div>
+        <ul id="newsList" class="news-list"></ul>
+        <div class="pager hidden" aria-hidden="true">
+          <span id="pageInfo">1 / 1</span>
+        </div>
+        <div id="listHint" class="list-hint"></div>
+        <div id="loadMoreSentinel" class="load-sentinel" aria-hidden="true"></div>
+        <div class="end-buffer" aria-hidden="true">
+          <span>已到列表末尾</span>
+        </div>
+      </section>
+
+      <aside id="detailPanel" class="detail-panel" aria-live="polite">
+        <button id="detailCloseBtn" class="detail-close" type="button">关闭</button>
+        <div id="detailEmpty" class="detail-empty">选择一条新闻查看摘要与标记操作</div>
+        <div id="detailBody" class="detail-body hidden">
+          <h3 id="detailTitle" class="detail-title"></h3>
+          <div id="detailMeta" class="detail-meta"></div>
+          <div id="detailSummary" class="detail-summary"></div>
+          <div class="detail-actions">
+            <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
+            <button id="detailImportantBtn" class="icon-btn" type="button"></button>
+            <button id="detailReadLaterBtn" class="icon-btn" type="button"></button>
+          </div>
+        </div>
+      </aside>
     </main>
 
     <script src="/static/app.js"></script>
   </body>
-  </html>
+</html>

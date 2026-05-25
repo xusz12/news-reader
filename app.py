@@ -43,6 +43,7 @@ def index():
 def api_news():
     q = (request.args.get("q") or "").strip()
     read_filter = (request.args.get("read_filter") or "all").strip().lower()
+    collection = (request.args.get("collection") or "feed").strip().lower()
     page = max(1, int(request.args.get("page", "1")))
     per = min(100, max(10, int(request.args.get("per", "30"))))
     where = []
@@ -56,6 +57,10 @@ def api_news():
         where.append("st.read_at IS NULL")
     elif read_filter == "read":
         where.append("st.read_at IS NOT NULL")
+    if collection == "important":
+        where.append("st.important_at IS NOT NULL")
+    elif collection == "read_later":
+        where.append("st.read_later_at IS NOT NULL")
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()
@@ -69,7 +74,8 @@ def api_news():
         rows = conn.execute(
             f"""
             SELECT id, source_file, item_order, published_at, date, time, source,
-                   source_type, source_name, title, summary, url, st.read_at
+                   source_type, source_name, title, summary, url,
+                   st.read_at, st.important_at, st.read_later_at
             FROM items
             {join_sql}
             {where_sql}
@@ -115,31 +121,57 @@ def api_reindex():
 @app.patch("/api/news/<item_id>/state")
 def api_update_item_state(item_id: str):
     body = request.get_json(silent=True) or {}
-    if "read" not in body or not isinstance(body["read"], bool):
-        return jsonify({"ok": False, "error": "invalid_read_flag"}), 400
-    read = body["read"]
+    allowed = ("read", "important", "read_later")
+    provided = [k for k in allowed if k in body]
+    if not provided:
+        return jsonify({"ok": False, "error": "missing_state_flags"}), 400
+    for k in provided:
+        if not isinstance(body[k], bool):
+            return jsonify({"ok": False, "error": f"invalid_{k}_flag"}), 400
 
     conn = db_conn()
     try:
         row = conn.execute("SELECT id FROM items WHERE id=?", (item_id,)).fetchone()
         if not row:
             return jsonify({"ok": False, "error": "item_not_found"}), 404
+        old_state = conn.execute(
+            "SELECT read_at, important_at, read_later_at FROM item_state WHERE item_id=?",
+            (item_id,),
+        ).fetchone()
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        read_at = ts if read else None
+        read_at = old_state["read_at"] if old_state else None
+        important_at = old_state["important_at"] if old_state else None
+        read_later_at = old_state["read_later_at"] if old_state else None
+        if "read" in body:
+            read_at = ts if body["read"] else None
+        if "important" in body:
+            important_at = ts if body["important"] else None
+        if "read_later" in body:
+            read_later_at = ts if body["read_later"] else None
         with conn:
             conn.execute(
                 """
-                INSERT INTO item_state(item_id, read_at, updated_at)
-                VALUES (?, ?, ?)
+                INSERT INTO item_state(item_id, read_at, important_at, read_later_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(item_id) DO UPDATE SET
                   read_at=excluded.read_at,
+                  important_at=excluded.important_at,
+                  read_later_at=excluded.read_later_at,
                   updated_at=excluded.updated_at
                 """,
-                (item_id, read_at, ts),
+                (item_id, read_at, important_at, read_later_at, ts),
             )
     finally:
         conn.close()
-    return jsonify({"ok": True, "item_id": item_id, "read_at": read_at})
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "read_at": read_at,
+            "important_at": important_at,
+            "read_later_at": read_later_at,
+        }
+    )
 
 
 @app.post("/api/news/mark-all-read")
@@ -147,6 +179,7 @@ def api_mark_all_read():
     body = request.get_json(silent=True) or {}
     q = (body.get("q") or "").strip()
     read_filter = (body.get("read_filter") or "all").strip().lower()
+    collection = (body.get("collection") or "feed").strip().lower()
 
     where = []
     args: list = []
@@ -159,6 +192,10 @@ def api_mark_all_read():
         where.append("st.read_at IS NULL")
     elif read_filter == "read":
         where.append("st.read_at IS NOT NULL")
+    if collection == "important":
+        where.append("st.important_at IS NOT NULL")
+    elif collection == "read_later":
+        where.append("st.read_later_at IS NOT NULL")
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()

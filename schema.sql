@@ -34,5 +34,7 @@ CREATE TABLE IF NOT EXISTS item_state (
   bookmarked INTEGER DEFAULT 0,
   skipped INTEGER DEFAULT 0,
   read_at TEXT,
+  important_at TEXT,
+  read_later_at TEXT,
   updated_at TEXT NOT NULL
 );

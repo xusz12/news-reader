@@ -28,6 +28,14 @@ def make_item_id(date: str, source: str, title: str, url: str) -> str:
 
 def apply_schema(conn: sqlite3.Connection, schema_path: Path) -> None:
     conn.executescript(schema_path.read_text(encoding="utf-8"))
+    cols = {
+        r[1]
+        for r in conn.execute("PRAGMA table_info(item_state)").fetchall()
+    }
+    if "important_at" not in cols:
+        conn.execute("ALTER TABLE item_state ADD COLUMN important_at TEXT")
+    if "read_later_at" not in cols:
+        conn.execute("ALTER TABLE item_state ADD COLUMN read_later_at TEXT")
     conn.commit()
 
 
