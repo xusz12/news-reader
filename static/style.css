@@ -98,6 +98,26 @@ main {
   visibility: hidden;
 }
 
+.source-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.source-icon-img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+
+.source-icon.fallback {
+  font-size: 14px;
+}
+
 .title {
   display: block;
   color: #0f172a;
@@ -136,6 +156,21 @@ main {
   justify-content: center;
   align-items: center;
   gap: 10px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.list-hint {
+  text-align: center;
+  color: #64748b;
+  font-size: 12px;
+  padding: 10px 0;
+}
+
+.load-sentinel {
+  height: 1px;
 }
 
 .end-buffer {

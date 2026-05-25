@@ -4,6 +4,16 @@ let state = {
   q: "",
   per: 30,
   readFilter: "all",
+  total: 0,
+  loading: false,
+  hasMore: true,
+};
+
+const mediaIconMap = {
+  Reuters: "/static/source-icons/reuters.ico",
+  Bloomberg: "/static/source-icons/bloomberg.png",
+  TechCrunch: "/static/source-icons/techcrunch.png",
+  "Ars Technica": "/static/source-icons/arstechnica.ico",
 };
 
 const searchInput = document.getElementById("searchInput");
@@ -16,15 +26,58 @@ const meta = document.getElementById("meta");
 const pageInfo = document.getElementById("pageInfo");
 const prevBtn = document.getElementById("prevBtn");
 const nextBtn = document.getElementById("nextBtn");
+const listHint = document.getElementById("listHint");
+const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 
-let observer = null;
+let readObserver = null;
+let loadObserver = null;
 let lastScrollY = window.scrollY;
 const enteredViewport = new Set();
 const writeInFlight = new Set();
 
+function sourcePrefix(source) {
+  if (!source) return "";
+  return source.split("·")[0].trim();
+}
+
+function createSourceIcon(item) {
+  const wrap = document.createElement("span");
+  wrap.className = "source-icon";
+
+  let iconSrc = "";
+  if (item.source_type === "twitter") {
+    iconSrc = "/static/source-icons/x.svg";
+  } else {
+    iconSrc = mediaIconMap[sourcePrefix(item.source)] || "";
+  }
+
+  if (iconSrc) {
+    const img = document.createElement("img");
+    img.className = "source-icon-img";
+    img.src = iconSrc;
+    img.alt = sourcePrefix(item.source) || "来源图标";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.addEventListener("error", () => {
+      wrap.textContent = "🗞️";
+      wrap.classList.add("fallback");
+    });
+    wrap.appendChild(img);
+    return wrap;
+  }
+
+  wrap.textContent = "🗞️";
+  wrap.classList.add("fallback");
+  return wrap;
+}
+
 function updateFilterButtons() {
   showAllBtn.disabled = state.readFilter === "all";
   showUnreadBtn.disabled = state.readFilter === "unread";
+}
+
+function setHint(text) {
+  listHint.textContent = text || "";
 }
 
 function isRead(li) {
@@ -64,9 +117,9 @@ async function markReadWithRollback(li, read) {
   }
 }
 
-function setupObserver() {
-  if (observer) observer.disconnect();
-  observer = new IntersectionObserver(
+function setupReadObserver() {
+  if (readObserver) readObserver.disconnect();
+  readObserver = new IntersectionObserver(
     (entries) => {
       if (document.hidden) return;
       const scrollingDown = window.scrollY > lastScrollY;
@@ -82,8 +135,6 @@ function setupObserver() {
         if (!scrollingDown) continue;
         if (!enteredViewport.has(id)) continue;
         if (isRead(el)) continue;
-
-        // "滚过即读": only when row bottom slides past viewport top.
         if (entry.boundingClientRect.bottom < 0) {
           markReadWithRollback(el, true);
         }
@@ -91,107 +142,183 @@ function setupObserver() {
     },
     { threshold: [0] }
   );
-  document.querySelectorAll(".news-item").forEach((el) => observer.observe(el));
+  document.querySelectorAll(".news-item").forEach((el) => readObserver.observe(el));
 }
 
-function renderItems(items) {
-  newsList.innerHTML = "";
-  enteredViewport.clear();
+function setupLoadObserver() {
+  if (loadObserver) loadObserver.disconnect();
+  loadObserver = new IntersectionObserver(
+    async (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        if (state.loading || !state.hasMore) continue;
+        await loadNextPage();
+      }
+    },
+    { threshold: [0.1] }
+  );
+  loadObserver.observe(loadMoreSentinel);
+}
 
-  for (const item of items) {
-    const li = document.createElement("li");
-    li.className = "news-item";
-    li.dataset.id = item.id;
-    li.dataset.read = item.read_at ? "1" : "0";
+function buildItemRow(item) {
+  const li = document.createElement("li");
+  li.className = "news-item";
+  li.dataset.id = item.id;
+  li.dataset.read = item.read_at ? "1" : "0";
 
-    const line1 = document.createElement("div");
-    line1.className = "line1";
-    const dot = document.createElement("span");
-    dot.className = "unread-dot";
-    if (item.read_at) dot.classList.add("hidden");
-    const metaText = document.createElement("span");
-    metaText.textContent = `${item.published_at} · ${item.source || "未知来源"}`;
-    line1.appendChild(dot);
-    line1.appendChild(metaText);
+  const line1 = document.createElement("div");
+  line1.className = "line1";
+  const dot = document.createElement("span");
+  dot.className = "unread-dot";
+  if (item.read_at) dot.classList.add("hidden");
+  const icon = createSourceIcon(item);
+  const metaText = document.createElement("span");
+  metaText.textContent = `${item.source || "未知来源"} · ${item.published_at}`;
+  line1.appendChild(dot);
+  line1.appendChild(icon);
+  line1.appendChild(metaText);
 
-    const titleRow = document.createElement("div");
-    titleRow.className = "title-row";
+  const titleRow = document.createElement("div");
+  titleRow.className = "title-row";
 
-    const title = document.createElement("a");
-    title.className = "title";
-    title.href = item.url || "#";
-    title.target = "_blank";
-    title.rel = "noopener noreferrer";
-    title.textContent = item.title;
-    if (!item.url) {
-      title.style.pointerEvents = "none";
-      title.style.opacity = "0.6";
-    }
-    title.addEventListener("click", async () => {
-      if (isRead(li)) return;
-      await markReadWithRollback(li, true);
-    });
-
-    const toggle = document.createElement("button");
-    toggle.className = "read-toggle";
-    toggle.textContent = item.read_at ? "标为未读" : "标为已读";
-    toggle.addEventListener("click", async () => {
-      await markReadWithRollback(li, !isRead(li));
-    });
-
-    titleRow.appendChild(title);
-    titleRow.appendChild(toggle);
-    li.appendChild(line1);
-    li.appendChild(titleRow);
-    if (item.summary) {
-      const p = document.createElement("p");
-      p.className = "summary";
-      p.textContent = item.summary;
-      li.appendChild(p);
-    }
-    newsList.appendChild(li);
+  const title = document.createElement("a");
+  title.className = "title";
+  title.href = item.url || "#";
+  title.target = "_blank";
+  title.rel = "noopener noreferrer";
+  title.textContent = item.title;
+  if (!item.url) {
+    title.style.pointerEvents = "none";
+    title.style.opacity = "0.6";
   }
-  setupObserver();
+  title.addEventListener("click", async () => {
+    if (isRead(li)) return;
+    await markReadWithRollback(li, true);
+  });
+
+  const toggle = document.createElement("button");
+  toggle.className = "read-toggle";
+  toggle.textContent = item.read_at ? "标为未读" : "标为已读";
+  toggle.addEventListener("click", async () => {
+    await markReadWithRollback(li, !isRead(li));
+  });
+
+  titleRow.appendChild(title);
+  titleRow.appendChild(toggle);
+  li.appendChild(line1);
+  li.appendChild(titleRow);
+  if (item.summary) {
+    const p = document.createElement("p");
+    p.className = "summary";
+    p.textContent = item.summary;
+    li.appendChild(p);
+  }
+  return li;
 }
 
-async function loadNews() {
+async function fetchNewsPage(page) {
   const params = new URLSearchParams({
-    page: String(state.page),
+    page: String(page),
     per: String(state.per),
     q: state.q,
     read_filter: state.readFilter,
   });
   const res = await fetch(`/api/news?${params.toString()}`);
-  const data = await res.json();
-  state.pages = data.pages;
-  renderItems(data.items);
-  meta.textContent = `共 ${data.total} 条`;
+  if (!res.ok) throw new Error("news_fetch_failed");
+  return res.json();
+}
+
+function resetList() {
+  newsList.innerHTML = "";
+  enteredViewport.clear();
+  state.page = 1;
+  state.pages = 1;
+  state.total = 0;
+  state.hasMore = true;
+}
+
+function renderMeta() {
+  meta.textContent = `共 ${state.total} 条`;
   pageInfo.textContent = `${state.page} / ${state.pages}`;
-  prevBtn.disabled = state.page <= 1;
-  nextBtn.disabled = state.page >= state.pages;
-  updateFilterButtons();
+}
+
+async function loadFirstPage() {
+  state.loading = true;
+  try {
+    const data = await fetchNewsPage(1);
+    resetList();
+    state.total = data.total;
+    state.pages = data.pages;
+    state.page = 1;
+    state.hasMore = state.page < state.pages;
+    data.items.forEach((item) => newsList.appendChild(buildItemRow(item)));
+    renderMeta();
+    if (state.total === 0) {
+      setHint("暂无数据");
+    } else if (state.hasMore) {
+      setHint("继续下滑加载更多");
+    } else {
+      setHint("已加载全部新闻");
+    }
+    setupReadObserver();
+  } finally {
+    state.loading = false;
+    updateFilterButtons();
+  }
+}
+
+async function loadNextPage() {
+  if (!state.hasMore) return;
+  const next = state.page + 1;
+  state.loading = true;
+  try {
+    const data = await fetchNewsPage(next);
+    data.items.forEach((item) => {
+      const row = buildItemRow(item);
+      newsList.appendChild(row);
+      if (readObserver) readObserver.observe(row);
+    });
+    state.page = next;
+    state.pages = data.pages;
+    state.total = data.total;
+    state.hasMore = state.page < state.pages;
+    renderMeta();
+    setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function autoReindexAndLoad() {
+  setHint("正在同步最新新闻...");
+  try {
+    const r = await fetch("/api/reindex", { method: "POST" });
+    if (!r.ok) throw new Error("reindex_failed");
+    await loadFirstPage();
+    setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
+  } catch {
+    setHint("自动同步失败，已展示本地索引，可点“刷新索引”重试。");
+    await loadFirstPage();
+  }
 }
 
 let searchTimer = null;
 searchInput.addEventListener("input", () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
+  searchTimer = setTimeout(async () => {
     state.q = searchInput.value.trim();
-    state.page = 1;
-    loadNews();
+    await loadFirstPage();
   }, 300);
 });
 
 showAllBtn.addEventListener("click", async () => {
   state.readFilter = "all";
-  state.page = 1;
-  await loadNews();
+  await loadFirstPage();
 });
 
 showUnreadBtn.addEventListener("click", async () => {
   state.readFilter = "unread";
-  state.page = 1;
-  await loadNews();
+  await loadFirstPage();
 });
 
 markAllReadBtn.addEventListener("click", async () => {
@@ -208,8 +335,7 @@ markAllReadBtn.addEventListener("click", async () => {
       }),
     });
     if (!res.ok) throw new Error("mark_all_failed");
-    state.page = 1;
-    await loadNews();
+    await loadFirstPage();
   } finally {
     markAllReadBtn.disabled = false;
   }
@@ -219,34 +345,26 @@ refreshBtn.addEventListener("click", async () => {
   refreshBtn.disabled = true;
   refreshBtn.textContent = "刷新中...";
   try {
-    await fetch("/api/reindex", { method: "POST" });
-    state.page = 1;
-    await loadNews();
+    const r = await fetch("/api/reindex", { method: "POST" });
+    if (!r.ok) throw new Error("reindex_failed");
+    await loadFirstPage();
+  } catch {
+    setHint("同步失败，可稍后重试。");
   } finally {
     refreshBtn.disabled = false;
     refreshBtn.textContent = "刷新索引";
   }
 });
 
-prevBtn.addEventListener("click", async () => {
-  if (state.page > 1) {
-    state.page -= 1;
-    await loadNews();
-  }
-});
-
-nextBtn.addEventListener("click", async () => {
-  if (state.page < state.pages) {
-    state.page += 1;
-    await loadNews();
-  }
-});
+// Pager hidden in v1.1.2 (kept for compatibility).
+prevBtn.addEventListener("click", () => {});
+nextBtn.addEventListener("click", () => {});
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
-    // Reset scroll direction baseline when coming back.
     lastScrollY = window.scrollY;
   }
 });
 
-loadNews();
+setupLoadObserver();
+autoReindexAndLoad();

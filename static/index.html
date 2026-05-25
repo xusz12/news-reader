@@ -21,11 +21,13 @@
     <main>
       <div id="meta" class="meta"></div>
       <ul id="newsList" class="news-list"></ul>
-      <div class="pager">
+      <div class="pager hidden">
         <button id="prevBtn">上一页</button>
         <span id="pageInfo">1 / 1</span>
         <button id="nextBtn">下一页</button>
       </div>
+      <div id="listHint" class="list-hint"></div>
+      <div id="loadMoreSentinel" class="load-sentinel" aria-hidden="true"></div>
       <div class="end-buffer" aria-hidden="true">
         <span>已到列表末尾</span>
       </div>
