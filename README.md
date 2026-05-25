@@ -62,21 +62,52 @@ python3 -m pytest -q
 
 ## What's Changed
 
-### 2026-05-25（v1.2）
-- 后端新增状态字段与迁移兼容：`important_at`、`read_later_at`（保留既有 `read_at`）。
-- `GET /api/news` 支持 `collection` 与 `read_filter` 组合查询并返回三种状态时间字段。
-- `PATCH /api/news/:id/state` 扩展为独立设置/撤销 `read`、`important`、`read_later`。
-- `POST /api/news/mark-all-read` 新增 `collection` 约束，确保跨页批量仅作用于当前集合。
-- 前端升级三栏布局与右栏摘要工作区，支持在列表与详情中双入口操作 `重要/稍后再看`。
-- 交互控件改为统一内置 SVG 图标：中栏顶部保留 3 个符号按钮（显示状态切换、全部标读、刷新）；移除搜索框与单行读/未读按钮。
-- 状态图标规则：重要为灰色空心/红色填充感叹号，稍后为灰色空心/黄色填充书签；本版暂不实现绿色“详情就绪”态。
-- 保持不做：正文抓取、翻译总结、归档与自动推荐。
+### 2026-05-26 — feat: 完成 news-reader v1.2 三栏工作台与重要稍后标记
+- **文件**
+  - *app.py（+46 −9）*
+    - `GET /api/news` 新增 `collection` 与 `read_filter` 组合查询，返回三种状态时间字段
+    - `PATCH /api/news/:id/state` 扩展为独立设置/撤销 `read`、`important`、`read_later`
+    - `POST /api/news/mark-all-read` 新增 `collection` 约束
+  - *README.md（+17 −0）*
+    - 补充 v1.2 能力说明与 What's Changed 记录
+  - *scanner.py（+8 −0）*
+    - 扫描逻辑适配新字段
+  - *schema.sql（+2 −0）*
+    - 新增 `important_at`、`read_later_at` 字段
+  - *static/app.js（+322 −88）*
+    - 三栏布局交互：集合切换、组合筛选、右栏摘要与双入口标记操作
+    - 统一内置 SVG 图标替代文本按钮
+  - *static/index.html（+42 −22）*
+    - 三栏工作台布局：左栏集合入口、中栏信息流、右栏摘要
+  - *static/style.css（+279 −47）*
+    - 三栏布局样式、窄屏抽屉降级、SVG 图标状态色（重要/稍后）
+  - *tests/test_api.py（+67 −0）*
+    - 新增 `collection` + `read_filter` 组合查询与状态切换测试
+- **影响**：新增重要/稍后再看双标记，三栏工作台替代原单栏布局
 
-### 2026-05-25（v1.1.2）
-- 页面初始化自动执行增量索引刷新（失败时回退展示本地索引并提示可重试）。
-- 列表改为连续下滑追加加载（隐藏分页按钮，保留原 `page/per` API）。
-- 信息行重排为 `[图标] source · published_at`，媒体来源优先使用本地缓存 favicon，推文统一使用本地 X 图标，未知来源使用统一兜底图标。
-- 保持 schema/parser/scanner 不变，已读交互能力不回归。
+### 2026-05-25 — feat: 完成 news-reader v1.1.2 自动刷新下滑加载与本地图标
+- **文件**
+  - *README.md（+6 −0）*
+    - 补充 v1.1.2 能力说明
+  - *static/app.js（+215 −97）*
+    - 页面初始化自动增量索引刷新，失败回退本地索引
+    - 列表改为连续下滑追加加载，隐藏分页按钮
+    - 信息行重排为 `[图标] source · published_at`
+  - *static/index.html（+3 −1）*
+    - 列表容器适配下滑加载
+  - *static/source-icons/arstechnica.ico（新增）*
+    - arstechnica 本地 favicon
+  - *static/source-icons/bloomberg.png（新增）*
+    - bloomberg 本地 favicon
+  - *static/source-icons/reuters.ico（新增）*
+    - reuters 本地 favicon
+  - *static/source-icons/techcrunch.png（新增）*
+    - techcrunch 本地 favicon
+  - *static/source-icons/x.svg（+4 −0）*
+    - 推文统一本地 X 图标
+  - *static/style.css（+35 −0）*
+    - 信息行图标与来源排版样式
+- **影响**：自动刷新索引 + 下滑加载替代手动刷新与分页按钮；媒体来源使用本地图标
 
 ### 2026-05-25
 - 新增 README，补充能力说明与变更记录入口。
