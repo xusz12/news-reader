@@ -167,3 +167,53 @@ def test_mark_all_read_respects_collection(tmp_path: Path, monkeypatch):
     feed_unread = client.get("/api/news?collection=feed&read_filter=unread")
     ids = {it["id"] for it in feed_unread.get_json()["items"]}
     assert item2 in ids
+
+
+def test_read_later_enqueues_detail_job_and_retry(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（1条）
+### [Item 1](https://www.reuters.com/world/example)
+- 发布时间：2026-05-25 12:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news").get_json()["items"][0]
+    item_id = item["id"]
+    assert item["detail_ready"] == 0
+
+    patch = client.patch(f"/api/news/{item_id}/state", json={"read_later": True})
+    assert patch.status_code == 200
+    assert patch.get_json()["read_later_at"] is not None
+
+    detail = client.get(f"/api/news/{item_id}/detail")
+    assert detail.status_code == 200
+    payload = detail.get_json()
+    assert payload["ok"] is True
+    assert payload["detail_status"] in {"pending", "running", "failed", "success"}
+
+    # Plan B: cancel read_later should cancel pending job, but keep detail table untouched.
+    cancel = client.patch(f"/api/news/{item_id}/state", json={"read_later": False})
+    assert cancel.status_code == 200
+    assert cancel.get_json()["read_later_at"] is None
+
+    detail_after_cancel = client.get(f"/api/news/{item_id}/detail")
+    assert detail_after_cancel.status_code == 200
+    after_payload = detail_after_cancel.get_json()
+    assert after_payload["detail_status"] in {"canceled", "success", "failed", "running"}
+
+    retry = client.post(f"/api/news/{item_id}/detail/retry")
+    assert retry.status_code == 200
+    assert retry.get_json()["ok"] is True

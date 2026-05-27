@@ -62,6 +62,33 @@ python3 -m pytest -q
 
 ## What's Changed
 
+### 2026-05-27 — feat: 新增稍后再看详情抓取系统
+- **文件**
+  - *app.py（+344 −7）*
+    - 新增 `detail_jobs` 队列 + `article_details` 存储 + 后台 worker 线程，按 URL 幂等排重
+    - 集成 opencli 子进程抓取 4 个域名正文（reuters、bloomberg、techcrunch、arstechnica），X/Twitter 跳过
+    - `PATCH /api/news/:id/state` 标记稍后再看时自动入队详情任务，取消时仅取消 pending 不杀 running
+    - 新增 `GET /api/news/:id/detail` 查询详情状态与正文
+    - 新增 `POST /api/news/:id/detail/retry` 手动重试失败任务
+    - 应用启动时自动启动 detail worker
+  - *schema.sql（+28 −0）*
+    - 新增 `detail_jobs` 表（url 主键、状态、重试计数、时间戳）及状态索引
+    - 新增 `article_details` 表（url 主键、正文、元信息、原始 JSON）
+  - *static/app.js（+149 −4）*
+    - 右栏详情区展示抓取状态（排队中/正在抓取/已完成/失败/已跳过）、正文内容、重试按钮
+    - 标记稍后再看时自动拉取详情，2 秒轮询直到完成/失败/跳过
+    - 标记稍后再看按钮状态色联动：黄色=等待中、绿色=详情就绪、红色=失败
+    - 取消稍后再看/切换条目/重置列表时停止轮询、清空缓存
+    - 新增 `detailCacheByUrl` 缓存避免重复请求
+  - *static/index.html（+3 −0）*
+    - 详情区新增状态行、正文区、重试按钮三个 DOM 节点
+  - *static/style.css（+47 −2）*
+    - 新增详情状态色（muted/pending/ready/failed）、正文滚动区、重试按钮样式
+    - 详情面板改为 flex column 布局
+  - *tests/test_api.py（+50 −0）*
+    - 新增测试：标记稍后再看触发入队、取消后状态变更、retry 端点可用
+- **影响**：标记稍后再看时自动异步抓取原文正文，右栏详情区可查看抓取进度与完整内容
+
 ### 2026-05-26 — feat: 完成 news-reader v1.2 三栏工作台与重要稍后标记
 - **文件**
   - *app.py（+46 −9）*

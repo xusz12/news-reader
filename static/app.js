@@ -10,6 +10,7 @@ let state = {
   hasMore: true,
   selectedId: null,
   itemsById: new Map(),
+  detailCacheByUrl: new Map(),
 };
 
 const mediaIconMap = {
@@ -40,12 +41,20 @@ const detailCloseBtn = document.getElementById("detailCloseBtn");
 
 let readObserver = null;
 let loadObserver = null;
+let detailPollTimer = null;
 let lastScrollY = window.scrollY;
 const enteredViewport = new Set();
 const writeInFlight = new Set();
 
 function setHint(text) {
   listHint.textContent = text || "";
+}
+
+function stopDetailPolling() {
+  if (detailPollTimer) {
+    window.clearInterval(detailPollTimer);
+    detailPollTimer = null;
+  }
 }
 
 function iconSvg(name, filled = false) {
@@ -146,10 +155,14 @@ function syncRowUI(li, item) {
 
   const readLaterBtn = li.querySelector(".btn-read-later");
   if (readLaterBtn) {
+    const detailReady = Number(item.detail_ready || 0) === 1;
+    const detailFailed = item.detail_status === "failed";
     applyIcon(readLaterBtn, "bookmark", {
       filled: !!item.read_later_at,
-      tone: item.read_later_at ? "warning" : "default",
-      label: item.read_later_at ? "取消稍后再看" : "稍后再看",
+      tone: item.read_later_at ? (detailReady ? "success" : "warning") : "default",
+      label: item.read_later_at
+        ? (detailReady ? "取消稍后再看（详情已就绪）" : (detailFailed ? "取消稍后再看（详情失败）" : "取消稍后再看（详情抓取中）"))
+        : "稍后再看",
     });
   }
 
@@ -226,7 +239,16 @@ async function patchStateWithRollback(itemId, payload) {
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   if ("read" in payload) item.read_at = payload.read ? now : null;
   if ("important" in payload) item.important_at = payload.important ? now : null;
-  if ("read_later" in payload) item.read_later_at = payload.read_later ? now : null;
+  if ("read_later" in payload) {
+    item.read_later_at = payload.read_later ? now : null;
+    if (payload.read_later) {
+      item.detail_status = "pending";
+      if (!Number(item.detail_ready || 0)) item.detail_ready = 0;
+    } else {
+      item.detail_status = "canceled";
+      stopDetailPolling();
+    }
+  }
   rerenderOne(itemId);
 
   try {
@@ -255,6 +277,7 @@ function closeDetailOnMobile() {
 
 function renderDetail(item) {
   if (!item) {
+    stopDetailPolling();
     detailBody.classList.add("hidden");
     detailEmpty.classList.remove("hidden");
     return;
@@ -267,6 +290,10 @@ function renderDetail(item) {
   document.getElementById("detailSummary").textContent = item.summary || "暂无摘要";
 
   const link = document.getElementById("detailLink");
+  const statusEl = document.getElementById("detailStatus");
+  const contentEl = document.getElementById("detailContent");
+  const retryBtn = document.getElementById("detailRetryBtn");
+
   if (item.url) {
     link.href = item.url;
     link.classList.remove("disabled");
@@ -277,6 +304,48 @@ function renderDetail(item) {
     link.textContent = "无原文链接";
   }
 
+  const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
+  const detail = cached?.detail || null;
+  const status = cached?.detail_status || item.detail_status || "none";
+
+  if (detail && detail.content) {
+    statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
+    statusEl.className = "detail-status ready";
+    contentEl.textContent = detail.content;
+    contentEl.classList.remove("hidden");
+    retryBtn.classList.add("hidden");
+    stopDetailPolling();
+  } else if (!item.read_later_at) {
+    statusEl.textContent = "未加入稍后再看";
+    statusEl.className = "detail-status muted";
+    contentEl.classList.add("hidden");
+    retryBtn.classList.add("hidden");
+    stopDetailPolling();
+  } else if (status === "pending" || status === "running") {
+    statusEl.textContent = status === "pending" ? "排队中" : "正在抓取";
+    statusEl.className = "detail-status pending";
+    contentEl.classList.add("hidden");
+    retryBtn.classList.add("hidden");
+  } else if (status === "failed") {
+    const err = cached?.job?.last_error || item.detail_error || "详情获取失败";
+    statusEl.textContent = `获取失败，可重试：${err}`;
+    statusEl.className = "detail-status failed";
+    contentEl.classList.add("hidden");
+    retryBtn.classList.remove("hidden");
+    stopDetailPolling();
+  } else if (status === "skipped") {
+    statusEl.textContent = "已跳过（该来源暂不抓正文）";
+    statusEl.className = "detail-status muted";
+    contentEl.classList.add("hidden");
+    retryBtn.classList.add("hidden");
+    stopDetailPolling();
+  } else {
+    statusEl.textContent = "稍后再看已标记，等待详情任务";
+    statusEl.className = "detail-status pending";
+    contentEl.classList.add("hidden");
+    retryBtn.classList.remove("hidden");
+  }
+
   const importantBtn = document.getElementById("detailImportantBtn");
   applyIcon(importantBtn, "important", {
     filled: !!item.important_at,
@@ -285,11 +354,56 @@ function renderDetail(item) {
   });
 
   const readLaterBtn = document.getElementById("detailReadLaterBtn");
+  const detailReady = Number(item.detail_ready || 0) === 1;
   applyIcon(readLaterBtn, "bookmark", {
     filled: !!item.read_later_at,
-    tone: item.read_later_at ? "warning" : "default",
+    tone: item.read_later_at ? (detailReady ? "success" : "warning") : "default",
     label: item.read_later_at ? "取消稍后再看" : "稍后再看",
   });
+}
+
+async function fetchDetail(itemId) {
+  const res = await fetch(`/api/news/${encodeURIComponent(itemId)}/detail`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function loadDetail(itemId) {
+  const item = state.itemsById.get(itemId);
+  if (!item || !item.url) return;
+  const payload = await fetchDetail(itemId);
+  if (!payload || !payload.ok) return;
+
+  state.detailCacheByUrl.set(item.url, payload);
+  item.detail_status = payload.detail_status;
+  item.detail_ready = payload.detail ? 1 : 0;
+  if (payload.job && payload.job.last_error) item.detail_error = payload.job.last_error;
+  state.itemsById.set(item.id, item);
+  rerenderOne(item.id);
+}
+
+function startDetailPolling(itemId) {
+  stopDetailPolling();
+  const current = state.itemsById.get(itemId);
+  if (!current || !current.read_later_at) return;
+  if (Number(current.detail_ready || 0) === 1) return;
+
+  detailPollTimer = window.setInterval(async () => {
+    if (!state.selectedId || state.selectedId !== itemId) {
+      stopDetailPolling();
+      return;
+    }
+    await loadDetail(itemId);
+    const refreshed = state.itemsById.get(itemId);
+    if (!refreshed) {
+      stopDetailPolling();
+      return;
+    }
+    const status = refreshed.detail_status || "none";
+    if (Number(refreshed.detail_ready || 0) === 1 || status === "failed" || status === "skipped") {
+      stopDetailPolling();
+    }
+  }, 2000);
 }
 
 function setupReadObserver() {
@@ -396,11 +510,14 @@ function buildItemRow(item) {
   li.addEventListener("click", () => {
     if (state.selectedId === item.id) {
       state.selectedId = null;
+      stopDetailPolling();
       closeDetailOnMobile();
       renderDetail(null);
     } else {
       state.selectedId = item.id;
       renderDetail(state.itemsById.get(item.id));
+      loadDetail(item.id);
+      startDetailPolling(item.id);
       openDetailOnMobile();
     }
     newsList.querySelectorAll(".news-item").forEach((row) => {
@@ -430,11 +547,13 @@ function resetList() {
   newsList.innerHTML = "";
   enteredViewport.clear();
   state.itemsById.clear();
+  state.detailCacheByUrl.clear();
   state.page = 1;
   state.pages = 1;
   state.total = 0;
   state.hasMore = true;
   state.selectedId = null;
+  stopDetailPolling();
   closeDetailOnMobile();
   renderDetail(null);
 }
@@ -561,6 +680,7 @@ refreshBtn.addEventListener("click", async () => {
 });
 
 detailCloseBtn.addEventListener("click", closeDetailOnMobile);
+detailCloseBtn.addEventListener("click", stopDetailPolling);
 
 const detailImportantBtn = document.getElementById("detailImportantBtn");
 const detailReadLaterBtn = document.getElementById("detailReadLaterBtn");
@@ -576,6 +696,31 @@ detailReadLaterBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;
   const current = !!state.itemsById.get(state.selectedId)?.read_later_at;
   await patchStateWithRollback(state.selectedId, { read_later: !current });
+  if (!current) {
+    await loadDetail(state.selectedId);
+  }
+});
+
+const detailRetryBtn = document.getElementById("detailRetryBtn");
+detailRetryBtn.addEventListener("click", async () => {
+  if (!state.selectedId) return;
+  detailRetryBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/news/${encodeURIComponent(state.selectedId)}/detail/retry`, {
+      method: "POST",
+    });
+    if (!res.ok) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (item) {
+      item.detail_status = "pending";
+      state.itemsById.set(item.id, item);
+      rerenderOne(item.id);
+    }
+    await loadDetail(state.selectedId);
+    startDetailPolling(state.selectedId);
+  } finally {
+    detailRetryBtn.disabled = false;
+  }
 });
 
 detailLink.addEventListener("click", async (e) => {

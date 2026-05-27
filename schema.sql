@@ -38,3 +38,31 @@ CREATE TABLE IF NOT EXISTS item_state (
   read_later_at TEXT,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS detail_jobs (
+  url TEXT PRIMARY KEY,
+  item_id TEXT,
+  source TEXT,
+  status TEXT NOT NULL,
+  attempts INTEGER DEFAULT 0,
+  last_error TEXT,
+  queued_at TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_detail_jobs_status ON detail_jobs(status);
+
+CREATE TABLE IF NOT EXISTS article_details (
+  url TEXT PRIMARY KEY,
+  source TEXT,
+  title TEXT,
+  author TEXT,
+  published_at TEXT,
+  content TEXT,
+  content_length INTEGER,
+  raw_json TEXT,
+  fetched_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
