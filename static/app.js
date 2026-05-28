@@ -495,6 +495,7 @@ function setupReadObserver() {
       const currentTop = newsList.scrollTop;
       const scrollingDown = currentTop > lastListScrollTop;
       lastListScrollTop = currentTop;
+      const listTop = newsList.getBoundingClientRect().top;
 
       for (const entry of entries) {
         const el = entry.target;
@@ -506,7 +507,7 @@ function setupReadObserver() {
         if (!scrollingDown) continue;
         if (!enteredViewport.has(id)) continue;
         if (rowIsRead(el)) continue;
-        if (entry.boundingClientRect.bottom < 0) {
+        if (entry.boundingClientRect.bottom < listTop) {
           patchStateWithRollback(id, { read: true });
         }
       }
