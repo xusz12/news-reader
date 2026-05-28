@@ -329,9 +329,6 @@ button.active {
   font-size: 14px;
   line-height: 1.5;
   white-space: pre-wrap;
-  max-height: 14vh;
-  overflow-y: auto;
-  padding-right: 4px;
 }
 
 .detail-ai-box {
@@ -391,10 +388,6 @@ button.active {
   font-size: 14px;
   line-height: 1.55;
   white-space: pre-wrap;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 4px;
 }
 
 .detail-body {
@@ -438,7 +431,12 @@ button.active {
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
-  max-height: 22vh;
+}
+
+.detail-scroll-area {
+  margin-top: 6px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
 }
