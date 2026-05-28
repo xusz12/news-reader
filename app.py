@@ -755,6 +755,63 @@ def api_mark_all_read():
     return jsonify({"ok": True, "marked": len(item_ids)})
 
 
+@app.post("/api/news/clear-read-later")
+def api_clear_read_later():
+    body = request.get_json(silent=True) or {}
+    q = (body.get("q") or "").strip()
+    collection = (body.get("collection") or "read_later").strip().lower()
+
+    where = []
+    args: list = []
+    if q:
+        where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")
+        like = f"%{q}%"
+        args.extend([like, like, like])
+    join_sql = "LEFT JOIN item_state st ON st.item_id = items.id"
+
+    # 默认仅清理 read_later 集合；即使传入其它 collection，也不允许扩大到全量。
+    if collection == "important":
+        where.append("st.important_at IS NOT NULL")
+    where.append("st.read_later_at IS NOT NULL")
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+    conn = db_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT items.id, items.url FROM items {join_sql} {where_sql}",
+            args,
+        ).fetchall()
+        if not rows:
+            return jsonify({"ok": True, "cleared": 0})
+        item_ids = [r["id"] for r in rows]
+        urls = [r["url"] for r in rows if r["url"]]
+        ts = now_ts()
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO item_state(item_id, read_later_at, updated_at)
+                VALUES (?, NULL, ?)
+                ON CONFLICT(item_id) DO UPDATE SET
+                  read_later_at=NULL,
+                  updated_at=excluded.updated_at
+                """,
+                [(item_id, ts) for item_id in item_ids],
+            )
+            if urls:
+                placeholders = ",".join("?" for _ in urls)
+                conn.execute(
+                    f"UPDATE detail_jobs SET status='canceled', updated_at=? WHERE status='pending' AND url IN ({placeholders})",
+                    [ts, *urls],
+                )
+                conn.execute(
+                    f"UPDATE ai_jobs SET status='canceled', updated_at=? WHERE status='pending' AND url IN ({placeholders})",
+                    [ts, *urls],
+                )
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cleared": len(item_ids)})
+
+
 def main() -> None:
     ensure_db()
     start_detail_worker()

@@ -168,12 +168,15 @@ function syncRowUI(li, item) {
   if (readLaterBtn) {
     const detailReady = Number(item.detail_ready || 0) === 1;
     const detailFailed = item.detail_status === "failed";
+    const tone = item.read_later_at
+      ? (detailReady ? "success" : "warning")
+      : (detailReady ? "success" : "default");
     applyIcon(readLaterBtn, "bookmark", {
       filled: !!item.read_later_at,
-      tone: item.read_later_at ? (detailReady ? "success" : "warning") : "default",
+      tone,
       label: item.read_later_at
         ? (detailReady ? "取消稍后再看（详情已就绪）" : (detailFailed ? "取消稍后再看（详情失败）" : "取消稍后再看（详情抓取中）"))
-        : "稍后再看",
+        : (detailReady ? "详情已缓存，加入稍后再看" : "稍后再看"),
     });
   }
 
@@ -181,12 +184,29 @@ function syncRowUI(li, item) {
 }
 
 function updateFilterButtons() {
+  const showReadFilter = state.collection === "feed";
+  readFilterToggleBtn.classList.toggle("hidden", !showReadFilter);
+  if (!showReadFilter) return;
   const isAll = state.readFilter === "all";
   applyIcon(readFilterToggleBtn, "circle", {
     filled: isAll,
     tone: isAll ? "default" : "muted",
     label: isAll ? "全部显示" : "仅未读",
   });
+}
+
+function updateBatchActionButton() {
+  if (state.collection === "important") {
+    markAllReadBtn.classList.add("hidden");
+    markAllReadBtn.disabled = false;
+    return;
+  }
+  markAllReadBtn.classList.remove("hidden");
+  if (state.collection === "read_later") {
+    applyIcon(markAllReadBtn, "bookmark", { label: "全部看完（取消所有稍后阅读）" });
+  } else {
+    applyIcon(markAllReadBtn, "check-circle", { label: "当前结果全部标为已读" });
+  }
 }
 
 function updateCollectionButtons() {
@@ -205,7 +225,8 @@ function renderMeta() {
     all: "全部",
     unread: "仅未读",
   };
-  meta.textContent = `${names[state.collection]} · ${readNames[state.readFilter]} · 共 ${state.total} 条`;
+  const readFilterName = state.collection === "feed" ? readNames[state.readFilter] : readNames.all;
+  meta.textContent = `${names[state.collection]} · ${readFilterName} · 共 ${state.total} 条`;
   pageInfo.textContent = `${state.page} / ${state.pages}`;
 }
 
@@ -422,10 +443,13 @@ function renderDetail(item) {
 
   const readLaterBtn = document.getElementById("detailReadLaterBtn");
   const detailReady = Number(item.detail_ready || 0) === 1;
+  const readLaterTone = item.read_later_at
+    ? (detailReady ? "success" : "warning")
+    : (detailReady ? "success" : "default");
   applyIcon(readLaterBtn, "bookmark", {
     filled: !!item.read_later_at,
-    tone: item.read_later_at ? (detailReady ? "success" : "warning") : "default",
-    label: item.read_later_at ? "取消稍后再看" : "稍后再看",
+    tone: readLaterTone,
+    label: item.read_later_at ? "取消稍后再看" : (detailReady ? "详情已缓存，加入稍后再看" : "稍后再看"),
   });
 }
 
@@ -450,6 +474,17 @@ async function loadDetail(itemId) {
   if (payload.ai_job && payload.ai_job.last_error) item.ai_error = payload.ai_job.last_error;
   state.itemsById.set(item.id, item);
   rerenderOne(item.id);
+
+  // 在“稍后再看”集合中，用户打开且详情已可读后自动取消稍后标记。
+  // 仅清 read_later，不影响已抓取详情/AI缓存与其它状态。
+  if (
+    state.collection === "read_later" &&
+    state.selectedId === itemId &&
+    item.read_later_at &&
+    (Number(item.detail_ready || 0) === 1 || item.ai_status === "success")
+  ) {
+    await patchStateWithRollback(itemId, { read_later: false });
+  }
 }
 
 function startDetailPolling(itemId) {
@@ -652,6 +687,9 @@ function appendNewsRow(row) {
 }
 
 async function loadFirstPage() {
+  if (state.collection !== "feed" && state.readFilter !== "all") {
+    state.readFilter = "all";
+  }
   state.loading = true;
   try {
     const data = await fetchNewsPage(1);
@@ -677,6 +715,7 @@ async function loadFirstPage() {
   } finally {
     state.loading = false;
     updateFilterButtons();
+    updateBatchActionButton();
     updateCollectionButtons();
   }
 }
@@ -737,18 +776,27 @@ navReadLaterBtn.addEventListener("click", async () => {
 });
 
 markAllReadBtn.addEventListener("click", async () => {
-  const ok = window.confirm("将当前筛选结果（跨页）全部标为已读？");
+  if (state.collection === "important") return;
+
+  const readLaterMode = state.collection === "read_later";
+  const ok = window.confirm(
+    readLaterMode
+      ? "将当前稍后阅读结果（跨页）全部取消标记？"
+      : "将当前筛选结果（跨页）全部标为已读？"
+  );
   if (!ok) return;
   markAllReadBtn.disabled = true;
   try {
-    const res = await fetch("/api/news/mark-all-read", {
+    const endpoint = readLaterMode ? "/api/news/clear-read-later" : "/api/news/mark-all-read";
+    const body = {
+      q: state.q,
+      collection: state.collection,
+    };
+    if (!readLaterMode) body.read_filter = state.readFilter;
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        q: state.q,
-        read_filter: state.readFilter,
-        collection: state.collection,
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error("mark_all_failed");
     await loadFirstPage();
@@ -842,8 +890,8 @@ document.addEventListener("visibilitychange", () => {
 
 setupLoadObserver();
 renderDetail(null);
-applyIcon(markAllReadBtn, "check-circle", { label: "当前结果全部标为已读" });
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
 updateFilterButtons();
+updateBatchActionButton();
 updateEndBufferVisibility();
 autoReindexAndLoad();
