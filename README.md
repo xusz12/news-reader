@@ -91,6 +91,74 @@ python3 -m pytest -q
 
 ## What's Changed
 
+### 2026-05-29 — feat: 按集合切换批量按钮语义并支持清空稍后阅读
+- **文件**
+  - *app.py（+57 −0）*
+    - 新增 `POST /api/news/clear-read-later` 端点，按集合批量取消稍后标记，同步取消 pending 的 detail/ai jobs
+  - *static/app.js（+61 −13）*
+    - 批量按钮语义随集合切换：feed「全部标已读」、read_later「全部看完」、important 隐藏
+    - 稍后再看集合中详情/AI 就绪后自动取消稍后标记
+    - 非 feed 集合自动切换 all 过滤，隐藏仅未读按钮
+- **影响**：稍后再看集合中阅读完自动清标，一键清空所有稍后阅读
+
+### 2026-05-28 — fix: 调整右栏操作按钮至摘要上方
+- **文件**
+  - *static/index.html（+6 −6）*
+    - 操作按钮（打开原文/重试/重要/稍后再看）移至摘要上方
+  - *static/style.css（+2 −1）*
+    - 按钮区与滚动区间距调整
+- **影响**：操作按钮更靠近标题，无需滚动即可操作
+
+### 2026-05-28 — chore: 增加Keychain读取并优化Tailscale启动脚本
+- **文件**
+  - *README.md（+11 −0）*
+    - 补充首次配置 Keychain 命令
+  - *scripts/start-tailscale.sh（+16 −0）*
+    - 优先复用终端 `DEEPSEEK_API_KEY`，不存在时从 macOS Keychain 读取
+- **影响**：Keychain 持久化 API Key，不再依赖终端环境变量
+
+### 2026-05-28 — fix: 稳定DeepSeek模型默认值并新增Tailscale启动脚本
+- **文件**
+  - *app.py（+8 −1）*
+    - 启动监听地址/端口改为 `NEWS_READER_HOST` / `NEWS_READER_PORT` 环境变量
+  - *llm_client.py（+8 −2）*
+    - 模型名改为 `_configured_model()`，优先读 `NEWS_READER_LLM_MODEL`，默认 `deepseek-chat`
+  - *README.md（+19 −0）*
+    - 新增 Tailscale 启动、Keychain 配置、可选参数说明
+  - *scripts/start-tailscale.sh（+23 −0）（新文件）*
+    - 自动获取本机 Tailscale IPv4 并绑定启动，未连接时报错退出
+  - *tests/test_llm_client.py（+41 −0）*
+    - 新增模型配置读取与默认值回归测试
+- **影响**：支持 Tailscale 局域网访问，LLM 模型可通过环境变量切换
+
+### 2026-05-28 — fix: 修正内部滚动下自动已读顶部参照
+- **文件**
+  - *static/app.js（+2 −1）*
+    - 自动已读判定从 `window.scrollY` 修正为 `newsList.scrollTop` + 列表 `getBoundingClientRect().top`
+- **影响**：内部滚动模式下自动已读触发更准确
+
+### 2026-05-28 — fix: 固定中栏顶部并修正底部提示显示
+- **文件**
+  - *static/app.js（+27 −7）*
+    - 控件区不再 sticky，随内容自然滚动
+    - hint/sentinel 移入新闻列表内部，新增 `appendNewsRow()` 确保插入位正确
+    - `resetList()` 改为精确移除 `.news-item` 而非清空整个列表
+  - *static/index.html（+5 −4）*
+    - hint/sentinel 从独立位置移入 `<ul>` 列表内
+  - *static/style.css（+17 −9）*
+    - feed-column 改为 flex column + overflow hidden，控件区 flex 0 0 auto
+    - end-buffer 改为 flex 0 0 auto + min-height: 0
+- **影响**：中栏内部独立滚动，控件不再遮挡列表
+
+### 2026-05-28 — fix: 统一右栏摘要要点正文滚动区域
+- **文件**
+  - *static/index.html（+14 −12）*
+    - 新增 `detail-scroll-area` 容器包裹摘要/AI/状态/正文/原文折叠区
+  - *static/style.css（+6 −8）*
+    - 移除 detail-summary、detail-content、detail-ai-box 各自独立的 max-height/overflow
+    - 统一由 `detail-scroll-area` flex:1 + overflow-y:auto 接管
+- **影响**：右栏滚动行为统一，避免多段各自滚动导致跳位
+
 ### 2026-05-28 — feat: 完成v1.4正文翻译总结与右栏中文展示
 - **文件**
   - *app.py（+205 −14）*
