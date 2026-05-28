@@ -26,13 +26,14 @@
           <button id="refreshBtn" class="icon-btn" type="button"></button>
         </div>
         <div id="meta" class="meta"></div>
-        <ul id="newsList" class="news-list"></ul>
+        <ul id="newsList" class="news-list">
+          <li id="listHint" class="list-hint"></li>
+          <li id="loadMoreSentinel" class="load-sentinel" aria-hidden="true"></li>
+        </ul>
         <div class="pager hidden" aria-hidden="true">
           <span id="pageInfo">1 / 1</span>
         </div>
-        <div id="listHint" class="list-hint"></div>
-        <div id="loadMoreSentinel" class="load-sentinel" aria-hidden="true"></div>
-        <div class="end-buffer" aria-hidden="true">
+        <div id="endBuffer" class="end-buffer hidden" aria-hidden="true">
           <span>已到列表末尾</span>
         </div>
       </section>

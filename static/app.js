@@ -33,6 +33,7 @@ const meta = document.getElementById("meta");
 const pageInfo = document.getElementById("pageInfo");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
+const endBuffer = document.getElementById("endBuffer");
 
 const detailPanel = document.getElementById("detailPanel");
 const detailEmpty = document.getElementById("detailEmpty");
@@ -47,12 +48,17 @@ const detailOriginalContent = document.getElementById("detailOriginalContent");
 let readObserver = null;
 let loadObserver = null;
 let detailPollTimer = null;
-let lastScrollY = window.scrollY;
+let lastListScrollTop = 0;
 const enteredViewport = new Set();
 const writeInFlight = new Set();
 
 function setHint(text) {
   listHint.textContent = text || "";
+}
+
+function updateEndBufferVisibility() {
+  if (!endBuffer) return;
+  endBuffer.classList.toggle("hidden", state.hasMore || state.total === 0);
 }
 
 function stopDetailPolling() {
@@ -486,8 +492,9 @@ function setupReadObserver() {
   readObserver = new IntersectionObserver(
     (entries) => {
       if (document.hidden) return;
-      const scrollingDown = window.scrollY > lastScrollY;
-      lastScrollY = window.scrollY;
+      const currentTop = newsList.scrollTop;
+      const scrollingDown = currentTop > lastListScrollTop;
+      lastListScrollTop = currentTop;
 
       for (const entry of entries) {
         const el = entry.target;
@@ -619,7 +626,7 @@ async function fetchNewsPage(page) {
 }
 
 function resetList() {
-  newsList.innerHTML = "";
+  newsList.querySelectorAll(".news-item").forEach((node) => node.remove());
   enteredViewport.clear();
   state.itemsById.clear();
   state.detailCacheByUrl.clear();
@@ -627,10 +634,20 @@ function resetList() {
   state.pages = 1;
   state.total = 0;
   state.hasMore = true;
+  lastListScrollTop = 0;
   state.selectedId = null;
   stopDetailPolling();
   closeDetailOnMobile();
   renderDetail(null);
+  updateEndBufferVisibility();
+}
+
+function appendNewsRow(row) {
+  if (listHint && listHint.parentElement === newsList) {
+    newsList.insertBefore(row, listHint);
+    return;
+  }
+  newsList.appendChild(row);
 }
 
 async function loadFirstPage() {
@@ -643,7 +660,7 @@ async function loadFirstPage() {
     state.page = 1;
     state.hasMore = state.page < state.pages;
 
-    data.items.forEach((item) => newsList.appendChild(buildItemRow(item)));
+    data.items.forEach((item) => appendNewsRow(buildItemRow(item)));
     renderMeta();
 
     if (state.total === 0) {
@@ -653,6 +670,7 @@ async function loadFirstPage() {
     } else {
       setHint("已加载全部新闻");
     }
+    updateEndBufferVisibility();
 
     setupReadObserver();
   } finally {
@@ -670,7 +688,7 @@ async function loadNextPage() {
     const data = await fetchNewsPage(next);
     data.items.forEach((item) => {
       const row = buildItemRow(item);
-      newsList.appendChild(row);
+      appendNewsRow(row);
       if (readObserver) readObserver.observe(row);
     });
     state.page = next;
@@ -679,6 +697,7 @@ async function loadNextPage() {
     state.hasMore = state.page < state.pages;
     renderMeta();
     setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
+    updateEndBufferVisibility();
   } finally {
     state.loading = false;
   }
@@ -816,7 +835,7 @@ detailLink.addEventListener("click", async (e) => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
-    lastScrollY = window.scrollY;
+    lastListScrollTop = newsList.scrollTop;
   }
 });
 
@@ -825,4 +844,5 @@ renderDetail(null);
 applyIcon(markAllReadBtn, "check-circle", { label: "当前结果全部标为已读" });
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
 updateFilterButtons();
+updateEndBufferVisibility();
 autoReindexAndLoad();
