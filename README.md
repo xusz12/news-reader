@@ -47,6 +47,24 @@ python3 app.py
 
 浏览器访问：<http://127.0.0.1:8080>
 
+可选启动参数（默认仍仅本机访问）：
+
+```bash
+# 默认：127.0.0.1:8080
+NEWS_READER_HOST=127.0.0.1 NEWS_READER_PORT=8080 python3 app.py
+
+# Tailscale/局域网访问时显式开放监听
+NEWS_READER_HOST=0.0.0.0 NEWS_READER_PORT=8080 python3 app.py
+```
+
+手机 Tailscale 访问（推荐）：
+
+```bash
+./scripts/start-tailscale.sh
+```
+
+脚本会自动读取当前 Mac 的 Tailscale IPv4 并绑定该地址启动服务；若未连接 Tailscale，会直接报错退出。
+
 ## 测试
 
 ```bash
@@ -75,6 +93,7 @@ python3 -m pytest -q
     - 取消稍后再看同步取消 pending 状态的 AI 任务
   - *llm_client.py（+114 −0）（新文件）*
     - 基于 OpenAI SDK 调用 DeepSeek API，使用 structured tool calling
+    - strict function-calling 默认模型为 `deepseek-chat`（映射 v4-flash 非思考模式），可通过 `NEWS_READER_LLM_MODEL` 切换
     - `generate_article_ai()` 输出 3-5 条中文要点、一句话结论、完整中文翻译
     - 严格校验返回值（字段类型、列表长度、正文长度 >= 200 字符）
   - *requirements.txt（+1 −0）*

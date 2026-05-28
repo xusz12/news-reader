@@ -9,6 +9,11 @@ class LLMClientError(RuntimeError):
     pass
 
 
+def _configured_model() -> str:
+    value = (os.getenv("NEWS_READER_LLM_MODEL") or "").strip()
+    return value or "deepseek-chat"
+
+
 def _build_messages(*, title: str, source: str, content: str) -> list[dict[str, str]]:
     system = (
         "你是专业新闻编辑与翻译。"
@@ -41,6 +46,7 @@ def generate_article_ai(*, title: str, source: str, content: str) -> dict[str, A
         raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
 
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
+    model_name = _configured_model()
     tools = [
         {
             "type": "function",
@@ -69,7 +75,7 @@ def generate_article_ai(*, title: str, source: str, content: str) -> dict[str, A
 
     try:
         resp = client.chat.completions.create(
-            model="deepseek-chat",
+            model=model_name,
             messages=_build_messages(title=title, source=source, content=content),
             tools=tools,
             tool_choice={"type": "function", "function": {"name": "save_article_translation"}},
@@ -106,7 +112,7 @@ def generate_article_ai(*, title: str, source: str, content: str) -> dict[str, A
         raise LLMClientError("INVALID_BODY_ZH")
 
     return {
-        "model": getattr(resp, "model", "deepseek-chat"),
+        "model": getattr(resp, "model", None) or model_name,
         "key_points_zh": [x.strip() for x in key_points],
         "conclusion_zh": conclusion.strip(),
         "body_zh": body_zh.strip(),

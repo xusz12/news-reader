@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import json
+import os
 import sqlite3
 import subprocess
 import threading
@@ -757,7 +758,13 @@ def api_mark_all_read():
 def main() -> None:
     ensure_db()
     start_detail_worker()
-    app.run(host="127.0.0.1", port=8080, debug=False)
+    host = (os.getenv("NEWS_READER_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port_raw = (os.getenv("NEWS_READER_PORT") or "8080").strip()
+    try:
+        port = int(port_raw)
+    except ValueError:
+        port = 8080
+    app.run(host=host, port=port, debug=False)
 
 
 if __name__ == "__main__":
