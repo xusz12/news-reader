@@ -64,6 +64,17 @@ NEWS_READER_HOST=0.0.0.0 NEWS_READER_PORT=8080 python3 app.py
 ```
 
 脚本会自动读取当前 Mac 的 Tailscale IPv4 并绑定该地址启动服务；若未连接 Tailscale，会直接报错退出。
+脚本会优先使用当前终端已有的 `DEEPSEEK_API_KEY`，若不存在则自动尝试从 macOS Keychain 读取：
+
+```bash
+security find-generic-password -a news-reader -s DEEPSEEK_API_KEY -w
+```
+
+首次配置 Keychain（一次即可）：
+
+```bash
+security add-generic-password -a news-reader -s DEEPSEEK_API_KEY -w '你的key' -U
+```
 
 ## 测试
 
