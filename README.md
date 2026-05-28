@@ -62,6 +62,42 @@ python3 -m pytest -q
 
 ## What's Changed
 
+### 2026-05-28 — feat: 完成v1.4正文翻译总结与右栏中文展示
+- **文件**
+  - *app.py（+205 −14）*
+    - `DETAIL_COMMAND_ROUTES` 重构为 dict，支持每域名独立 timeout；新增 Bloomberg 视频跳过
+    - 详情抓取成功后自动入队 AI 翻译任务（`enqueue_ai_job`）
+    - 新增 `process_pending_ai_once`，worker 线程顺序处理 AI 翻译队列
+    - `detail_worker_loop` 扩展为抓取+AI 双队列串行处理
+    - `GET /api/news` 联表 `ai_jobs` + `article_ai`，返回 `ai_status`/`ai_error`/`ai_ready`
+    - `GET /api/news/:id/detail` 新增 AI 任务状态与翻译结果字段
+    - `POST /api/news/:id/detail/retry` 已有正文时优先重试 AI，否则从抓取重新开始
+    - 取消稍后再看同步取消 pending 状态的 AI 任务
+  - *llm_client.py（+114 −0）（新文件）*
+    - 基于 OpenAI SDK 调用 DeepSeek API，使用 structured tool calling
+    - `generate_article_ai()` 输出 3-5 条中文要点、一句话结论、完整中文翻译
+    - 严格校验返回值（字段类型、列表长度、正文长度 >= 200 字符）
+  - *requirements.txt（+1 −0）*
+    - 新增 `openai==1.82.0`
+  - *schema.sql（+24 −0）*
+    - 新增 `ai_jobs` 表（url 主键、状态、重试计数、时间戳）及状态索引
+    - 新增 `article_ai` 表（url 主键、model、要点 JSON、结论、中文正文、原始 JSON）
+  - *static/app.js（+87 −8）*
+    - 详情区新增中文要点列表、结论、完整中文翻译展示
+    - AI 状态行显示（排队中/正在翻译/已完成/失败/已跳过）
+    - 详情数据缓存扩展至 AI 字段，AI 轮询联动现有 detail 轮询
+    - 新增 `<details>` 折叠组件切换英文原文/中文翻译
+    - 恢复 read_later / 重试 / 选中切换时联动 AI 状态刷新
+  - *static/index.html（+10 −1）*
+    - 详情面板新增 AI 区块（要点列表、结论、中文正文）及英文原文折叠区
+  - *static/style.css（+57 −3）*
+    - 新增 AI 区块样式：要点列表、结论高亮、原文折叠区、翻译正文区
+  - *tests/test_api.py（+61 −0）*
+    - 新增 AI 联表字段回归测试、详情重试分支（有正文/无正文）测试
+  - *tests/test_llm_client.py（+78 −0）（新文件）*
+    - 新增 `generate_article_ai` 参数校验、返回值结构、错误码测试
+- **影响**：原文抓取成功后自动翻译为中文，右栏展示要点、结论与完整中文翻译，支持切换查看英文原文
+
 ### 2026-05-27 — feat: 新增稍后再看详情抓取系统
 - **文件**
   - *app.py（+344 −7）*
