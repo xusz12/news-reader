@@ -66,3 +66,27 @@ CREATE TABLE IF NOT EXISTS article_details (
   fetched_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ai_jobs (
+  url TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  attempts INTEGER DEFAULT 0,
+  last_error TEXT,
+  queued_at TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_status ON ai_jobs(status);
+
+CREATE TABLE IF NOT EXISTS article_ai (
+  url TEXT PRIMARY KEY,
+  model TEXT,
+  key_points_zh TEXT,
+  conclusion_zh TEXT,
+  body_zh TEXT,
+  raw_json TEXT,
+  generated_at TEXT,
+  updated_at TEXT NOT NULL
+);

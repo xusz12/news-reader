@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from llm_client import LLMClientError, generate_article_ai
 from scanner import apply_schema, reindex
 from settings import resolve_daily_news_dir, resolve_db_path
 
@@ -29,10 +30,10 @@ WORKER_THREAD: threading.Thread | None = None
 WORKER_STOP = threading.Event()
 
 DETAIL_COMMAND_ROUTES = {
-    "reuters.com": ("Reuters", ["opencli", "reuters", "article-detail"]),
-    "bloomberg.com": ("Bloomberg", ["opencli", "bloomberg", "news"]),
-    "techcrunch.com": ("TechCrunch", ["opencli", "TechcrunchPublic", "article"]),
-    "arstechnica.com": ("Ars Technica", ["opencli", "ArsPublic", "article"]),
+    "reuters.com": {"source": "Reuters", "command": ["opencli", "reuters", "article-detail"], "timeout": 45},
+    "bloomberg.com": {"source": "Bloomberg", "command": ["opencli", "bloomberg", "news"], "timeout": 90},
+    "techcrunch.com": {"source": "TechCrunch", "command": ["opencli", "TechcrunchPublic", "article"], "timeout": 45},
+    "arstechnica.com": {"source": "Ars Technica", "command": ["opencli", "ArsPublic", "article"], "timeout": 45},
 }
 
 
@@ -54,19 +55,19 @@ def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def resolve_detail_route(url: str) -> tuple[str, list[str]] | None:
+def resolve_detail_route(url: str) -> dict | None:
     host = (urlparse(url).hostname or "").lower()
     if host.startswith("www."):
         host = host[4:]
     if host in ("x.com", "twitter.com"):
-        return ("Twitter/X", [])
+        return {"source": "Twitter/X", "command": [], "timeout": 0}
     return DETAIL_COMMAND_ROUTES.get(host)
 
 
 def enqueue_detail_job(conn: sqlite3.Connection, item_id: str, url: str, source: str) -> bool:
     route = resolve_detail_route(url)
     ts = now_ts()
-    if route and route[0] == "Twitter/X":
+    if route and route["source"] == "Twitter/X":
         conn.execute(
             """
             INSERT INTO detail_jobs(url, item_id, source, status, attempts, queued_at, updated_at)
@@ -130,13 +131,19 @@ def run_opencli_detail(url: str) -> tuple[bool, dict, str]:
     route = resolve_detail_route(url)
     if not route:
         return False, {}, "UNSUPPORTED_URL"
-    source, command = route
+    source = route["source"]
+    command = route["command"]
+    timeout = int(route.get("timeout", 30))
     if source == "Twitter/X":
         return False, {}, "SKIPPED_SOURCE"
 
+    parsed_url = urlparse(url)
+    if source == "Bloomberg" and "/news/videos/" in parsed_url.path:
+        return False, {}, "SKIPPED_SOURCE: BLOOMBERG_VIDEO"
+
     cmd = [*command, url, "-f", "json"]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         return False, {}, "TIMEOUT"
     except Exception as exc:
@@ -244,6 +251,7 @@ def process_pending_jobs_once() -> bool:
                     """,
                     (finished, finished, job["url"]),
                 )
+                enqueue_ai_job(conn, job["url"])
             else:
                 attempts = int(job["attempts"] or 0) + 1
                 conn.execute(
@@ -263,6 +271,147 @@ def process_pending_jobs_once() -> bool:
         conn.close()
 
 
+def enqueue_ai_job(conn: sqlite3.Connection, url: str) -> bool:
+    ts = now_ts()
+    existing_ai = conn.execute("SELECT url FROM article_ai WHERE url=?", (url,)).fetchone()
+    if existing_ai:
+        conn.execute(
+            """
+            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
+            VALUES (?, 'success', 0, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+              status='success',
+              last_error=NULL,
+              updated_at=excluded.updated_at
+            """,
+            (url, ts, ts),
+        )
+        return False
+
+    row = conn.execute("SELECT status FROM ai_jobs WHERE url=?", (url,)).fetchone()
+    if row and row["status"] in ("pending", "running", "success"):
+        conn.execute("UPDATE ai_jobs SET updated_at=? WHERE url=?", (ts, url))
+        return False
+
+    conn.execute(
+        """
+        INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
+        VALUES (?, 'pending', 0, ?, ?)
+        ON CONFLICT(url) DO UPDATE SET
+          status='pending',
+          queued_at=excluded.queued_at,
+          updated_at=excluded.updated_at
+        """,
+        (url, ts, ts),
+    )
+    return True
+
+
+def process_pending_ai_once() -> bool:
+    conn = db_conn()
+    try:
+        job = conn.execute(
+            """
+            SELECT url, attempts
+            FROM ai_jobs
+            WHERE status='pending'
+            ORDER BY queued_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not job:
+            return False
+
+        detail = conn.execute(
+            "SELECT title, source, content FROM article_details WHERE url=?",
+            (job["url"],),
+        ).fetchone()
+        if not detail or not (detail["content"] or "").strip():
+            failed = now_ts()
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE ai_jobs
+                    SET status='failed', attempts=?, last_error=?, finished_at=?, updated_at=?
+                    WHERE url=?
+                    """,
+                    (int(job["attempts"] or 0) + 1, "MISSING_ARTICLE_DETAILS", failed, failed, job["url"]),
+                )
+            return True
+
+        started = now_ts()
+        with conn:
+            conn.execute(
+                "UPDATE ai_jobs SET status='running', started_at=?, updated_at=? WHERE url=?",
+                (started, started, job["url"]),
+            )
+
+        ok = False
+        payload: dict = {}
+        error = ""
+        try:
+            payload = generate_article_ai(
+                title=(detail["title"] or "").strip(),
+                source=(detail["source"] or "").strip(),
+                content=(detail["content"] or "").strip(),
+            )
+            ok = True
+        except LLMClientError as exc:
+            error = str(exc)
+        except Exception as exc:
+            error = f"AI_UNKNOWN_ERROR: {exc}"
+
+        finished = now_ts()
+        with conn:
+            if ok:
+                conn.execute(
+                    """
+                    INSERT INTO article_ai(
+                      url, model, key_points_zh, conclusion_zh, body_zh, raw_json, generated_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(url) DO UPDATE SET
+                      model=excluded.model,
+                      key_points_zh=excluded.key_points_zh,
+                      conclusion_zh=excluded.conclusion_zh,
+                      body_zh=excluded.body_zh,
+                      raw_json=excluded.raw_json,
+                      generated_at=excluded.generated_at,
+                      updated_at=excluded.updated_at
+                    """,
+                    (
+                        job["url"],
+                        payload.get("model", "deepseek-chat"),
+                        json.dumps(payload.get("key_points_zh", []), ensure_ascii=False),
+                        payload.get("conclusion_zh", ""),
+                        payload.get("body_zh", ""),
+                        payload.get("raw_json", "{}"),
+                        finished,
+                        finished,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE ai_jobs
+                    SET status='success', last_error=NULL, finished_at=?, updated_at=?
+                    WHERE url=?
+                    """,
+                    (finished, finished, job["url"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE ai_jobs
+                    SET status='failed', attempts=?, last_error=?, finished_at=?, updated_at=?
+                    WHERE url=?
+                    """,
+                    (int(job["attempts"] or 0) + 1, error[:500], finished, finished, job["url"]),
+                )
+        return True
+    finally:
+        conn.close()
+
+
 def detail_worker_loop() -> None:
     while not WORKER_STOP.is_set():
         processed = False
@@ -270,6 +419,11 @@ def detail_worker_loop() -> None:
             processed = process_pending_jobs_once()
         except Exception:
             pass
+        if not processed:
+            try:
+                processed = process_pending_ai_once()
+            except Exception:
+                pass
         if processed:
             time.sleep(2)
         else:
@@ -335,9 +489,14 @@ def api_news():
                    st.read_at, st.important_at, st.read_later_at,
                    dj.status AS detail_status,
                    dj.last_error AS detail_error,
-                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready
+                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+                   aj.status AS ai_status,
+                   aj.last_error AS ai_error,
+                   CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready
             FROM items
             {join_sql}
+            LEFT JOIN ai_jobs aj ON aj.url = items.url
+            LEFT JOIN article_ai aa ON aa.url = items.url
             {where_sql}
             ORDER BY items.published_at DESC, items.source_file DESC, items.item_order ASC
             LIMIT ? OFFSET ?
@@ -439,6 +598,14 @@ def api_update_item_state(item_id: str):
                             """,
                             (ts, item_row["url"]),
                         )
+                        conn.execute(
+                            """
+                            UPDATE ai_jobs
+                            SET status='canceled', updated_at=?
+                            WHERE url=? AND status='pending'
+                            """,
+                            (ts, item_row["url"]),
+                        )
     finally:
         conn.close()
     return jsonify(
@@ -470,8 +637,16 @@ def api_news_detail(item_id: str):
                 "SELECT status, attempts, last_error, queued_at, started_at, finished_at FROM detail_jobs WHERE url=?",
                 (url,),
             ).fetchone()
+            ai_job = conn.execute(
+                "SELECT status, attempts, last_error, queued_at, started_at, finished_at FROM ai_jobs WHERE url=?",
+                (url,),
+            ).fetchone()
             detail = conn.execute(
                 "SELECT title, author, published_at, content, content_length, fetched_at FROM article_details WHERE url=?",
+                (url,),
+            ).fetchone()
+            ai = conn.execute(
+                "SELECT model, key_points_zh, conclusion_zh, body_zh, generated_at FROM article_ai WHERE url=?",
                 (url,),
             ).fetchone()
     finally:
@@ -485,6 +660,9 @@ def api_news_detail(item_id: str):
             "detail_status": (job["status"] if job else "none"),
             "job": dict(job) if job else None,
             "detail": dict(detail) if detail else None,
+            "ai_status": (ai_job["status"] if ai_job else "none"),
+            "ai_job": dict(ai_job) if ai_job else None,
+            "ai": dict(ai) if ai else None,
         }
     )
 
@@ -498,13 +676,26 @@ def api_news_detail_retry(item_id: str):
             return jsonify({"ok": False, "error": "item_not_found"}), 404
         if not row["url"]:
             return jsonify({"ok": False, "error": "missing_url"}), 400
+        has_detail = conn.execute("SELECT 1 FROM article_details WHERE url=?", (row["url"],)).fetchone()
         with conn:
-            created = enqueue_detail_job(conn, row["id"], row["url"], row["source"] or "")
-            if not created:
+            ts = now_ts()
+            if has_detail:
+                enqueue_ai_job(conn, row["url"])
                 conn.execute(
-                    "UPDATE detail_jobs SET status='pending', last_error=NULL, queued_at=?, updated_at=? WHERE url=?",
-                    (now_ts(), now_ts(), row["url"]),
+                    """
+                    UPDATE ai_jobs
+                    SET status='pending', last_error=NULL, queued_at=?, updated_at=?
+                    WHERE url=?
+                    """,
+                    (ts, ts, row["url"]),
                 )
+            else:
+                created = enqueue_detail_job(conn, row["id"], row["url"], row["source"] or "")
+                if not created:
+                    conn.execute(
+                        "UPDATE detail_jobs SET status='pending', last_error=NULL, queued_at=?, updated_at=? WHERE url=?",
+                        (ts, ts, row["url"]),
+                    )
     finally:
         conn.close()
     return jsonify({"ok": True})

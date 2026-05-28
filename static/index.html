@@ -39,13 +39,22 @@
 
       <aside id="detailPanel" class="detail-panel" aria-live="polite">
         <button id="detailCloseBtn" class="detail-close" type="button">关闭</button>
-        <div id="detailEmpty" class="detail-empty">选择一条新闻查看摘要与标记操作</div>
+        <div id="detailEmpty" class="detail-empty">选择一条新闻查看摘要与正文</div>
         <div id="detailBody" class="detail-body hidden">
           <h3 id="detailTitle" class="detail-title"></h3>
           <div id="detailMeta" class="detail-meta"></div>
           <div id="detailSummary" class="detail-summary"></div>
+          <section id="detailAiBox" class="detail-ai-box hidden">
+            <h4>中文要点</h4>
+            <ul id="detailAiPoints" class="detail-ai-points"></ul>
+            <p id="detailAiConclusion" class="detail-ai-conclusion"></p>
+          </section>
           <div id="detailStatus" class="detail-status"></div>
           <div id="detailContent" class="detail-content hidden"></div>
+          <details id="detailOriginalWrap" class="detail-original hidden">
+            <summary>查看英文原文</summary>
+            <div id="detailOriginalContent" class="detail-original-content"></div>
+          </details>
           <div class="detail-actions">
             <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
             <button id="detailRetryBtn" class="detail-retry-btn hidden" type="button">重试详情抓取</button>

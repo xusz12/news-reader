@@ -38,6 +38,11 @@ const detailPanel = document.getElementById("detailPanel");
 const detailEmpty = document.getElementById("detailEmpty");
 const detailBody = document.getElementById("detailBody");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
+const detailAiBox = document.getElementById("detailAiBox");
+const detailAiPoints = document.getElementById("detailAiPoints");
+const detailAiConclusion = document.getElementById("detailAiConclusion");
+const detailOriginalWrap = document.getElementById("detailOriginalWrap");
+const detailOriginalContent = document.getElementById("detailOriginalContent");
 
 let readObserver = null;
 let loadObserver = null;
@@ -244,8 +249,11 @@ async function patchStateWithRollback(itemId, payload) {
     if (payload.read_later) {
       item.detail_status = "pending";
       if (!Number(item.detail_ready || 0)) item.detail_ready = 0;
+      item.ai_status = "none";
+      item.ai_ready = 0;
     } else {
       item.detail_status = "canceled";
+      item.ai_status = "canceled";
       stopDetailPolling();
     }
   }
@@ -307,14 +315,67 @@ function renderDetail(item) {
   const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
   const detail = cached?.detail || null;
   const status = cached?.detail_status || item.detail_status || "none";
+  const ai = cached?.ai || null;
+  const aiStatus = cached?.ai_status || item.ai_status || "none";
+
+  detailAiBox.classList.add("hidden");
+  detailAiPoints.innerHTML = "";
+  detailAiConclusion.textContent = "";
+  detailOriginalWrap.classList.add("hidden");
+  detailOriginalContent.textContent = "";
+  retryBtn.textContent = "重试详情抓取";
 
   if (detail && detail.content) {
-    statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
-    statusEl.className = "detail-status ready";
-    contentEl.textContent = detail.content;
-    contentEl.classList.remove("hidden");
-    retryBtn.classList.add("hidden");
-    stopDetailPolling();
+    const original = detail.content;
+    detailOriginalContent.textContent = original;
+    detailOriginalWrap.classList.remove("hidden");
+
+    if (ai && ai.body_zh) {
+      let keyPoints = [];
+      try {
+        keyPoints = JSON.parse(ai.key_points_zh || "[]");
+      } catch {
+        keyPoints = [];
+      }
+      if (Array.isArray(keyPoints) && keyPoints.length) {
+        keyPoints.forEach((point) => {
+          const li = document.createElement("li");
+          li.textContent = point;
+          detailAiPoints.appendChild(li);
+        });
+      }
+      detailAiConclusion.textContent = ai.conclusion_zh || "";
+      detailAiBox.classList.remove("hidden");
+
+      statusEl.textContent = "中文摘要与翻译已生成";
+      statusEl.className = "detail-status ready";
+      contentEl.textContent = ai.body_zh;
+      contentEl.classList.remove("hidden");
+      retryBtn.classList.add("hidden");
+      stopDetailPolling();
+    } else if (aiStatus === "pending" || aiStatus === "running" || aiStatus === "none") {
+      statusEl.textContent = aiStatus === "pending" ? "排队生成中文内容" : "正在生成中文内容";
+      statusEl.className = "detail-status pending";
+      contentEl.textContent = original;
+      contentEl.classList.remove("hidden");
+      retryBtn.classList.add("hidden");
+    } else if (aiStatus === "failed") {
+      const err = cached?.ai_job?.last_error || item.ai_error || "中文生成失败";
+      statusEl.textContent = `中文生成失败，可重试：${err}`;
+      statusEl.className = "detail-status failed";
+      contentEl.textContent = original;
+      contentEl.classList.remove("hidden");
+      retryBtn.textContent = "重试中文生成";
+      retryBtn.classList.remove("hidden");
+      stopDetailPolling();
+    } else {
+      statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
+      statusEl.className = "detail-status ready";
+      contentEl.textContent = original;
+      contentEl.classList.remove("hidden");
+      retryBtn.classList.add("hidden");
+      stopDetailPolling();
+    }
   } else if (!item.read_later_at) {
     statusEl.textContent = "未加入稍后再看";
     statusEl.className = "detail-status muted";
@@ -377,7 +438,10 @@ async function loadDetail(itemId) {
   state.detailCacheByUrl.set(item.url, payload);
   item.detail_status = payload.detail_status;
   item.detail_ready = payload.detail ? 1 : 0;
+  item.ai_status = payload.ai_status || "none";
+  item.ai_ready = payload.ai ? 1 : 0;
   if (payload.job && payload.job.last_error) item.detail_error = payload.job.last_error;
+  if (payload.ai_job && payload.ai_job.last_error) item.ai_error = payload.ai_job.last_error;
   state.itemsById.set(item.id, item);
   rerenderOne(item.id);
 }
@@ -400,7 +464,18 @@ function startDetailPolling(itemId) {
       return;
     }
     const status = refreshed.detail_status || "none";
-    if (Number(refreshed.detail_ready || 0) === 1 || status === "failed" || status === "skipped") {
+    const aiStatus = refreshed.ai_status || "none";
+    if (!refreshed.read_later_at) {
+      stopDetailPolling();
+      return;
+    }
+    if (Number(refreshed.detail_ready || 0) !== 1) {
+      if (status === "failed" || status === "skipped" || status === "canceled") {
+        stopDetailPolling();
+      }
+      return;
+    }
+    if (aiStatus === "success" || aiStatus === "failed" || aiStatus === "canceled") {
       stopDetailPolling();
     }
   }, 2000);
@@ -712,7 +787,11 @@ detailRetryBtn.addEventListener("click", async () => {
     if (!res.ok) return;
     const item = state.itemsById.get(state.selectedId);
     if (item) {
-      item.detail_status = "pending";
+      if (Number(item.detail_ready || 0) === 1) {
+        item.ai_status = "pending";
+      } else {
+        item.detail_status = "pending";
+      }
       state.itemsById.set(item.id, item);
       rerenderOne(item.id);
     }
