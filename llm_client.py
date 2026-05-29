@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 
 class LLMClientError(RuntimeError):
     pass
+
+
+_CJK_RE = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF]")
 
 
 def _configured_model() -> str:
@@ -108,13 +112,16 @@ def generate_article_ai(*, title: str, source: str, content: str) -> dict[str, A
         raise LLMClientError("INVALID_KEY_POINT_ITEM")
     if not isinstance(conclusion, str) or not conclusion.strip():
         raise LLMClientError("INVALID_CONCLUSION")
-    if not isinstance(body_zh, str) or len(body_zh.strip()) < 200:
+    if not isinstance(body_zh, str):
+        raise LLMClientError("INVALID_BODY_ZH")
+    body_text = body_zh.strip()
+    if not body_text or not _CJK_RE.search(body_text):
         raise LLMClientError("INVALID_BODY_ZH")
 
     return {
         "model": getattr(resp, "model", None) or model_name,
         "key_points_zh": [x.strip() for x in key_points],
         "conclusion_zh": conclusion.strip(),
-        "body_zh": body_zh.strip(),
+        "body_zh": body_text,
         "raw_json": json.dumps(parsed, ensure_ascii=False),
     }

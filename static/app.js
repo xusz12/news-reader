@@ -112,6 +112,16 @@ function sourcePrefix(source) {
   return source.split("·")[0].trim();
 }
 
+function isBloombergVideoUrl(url) {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return /(?:^|\.)bloomberg\.com$/i.test(parsed.hostname) && parsed.pathname.startsWith("/news/videos/");
+  } catch {
+    return false;
+  }
+}
+
 function createSourceIcon(item) {
   const wrap = document.createElement("span");
   wrap.className = "source-icon";
@@ -343,6 +353,7 @@ function renderDetail(item) {
   const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
   const detail = cached?.detail || null;
   const status = cached?.detail_status || item.detail_status || "none";
+  const detailErr = cached?.job?.last_error || item.detail_error || "";
   const ai = cached?.ai || null;
   const aiStatus = cached?.ai_status || item.ai_status || "none";
 
@@ -425,7 +436,13 @@ function renderDetail(item) {
     retryBtn.classList.remove("hidden");
     stopDetailPolling();
   } else if (status === "skipped") {
-    statusEl.textContent = "已跳过（该来源暂不抓正文）";
+    if (item.source_type === "twitter") {
+      statusEl.textContent = "这是推文，当前不提供正文抓取";
+    } else if (detailErr.includes("BLOOMBERG_VIDEO") || isBloombergVideoUrl(item.url)) {
+      statusEl.textContent = "这是视频新闻，当前不提供正文抓取";
+    } else {
+      statusEl.textContent = "已跳过（该来源暂不抓正文）";
+    }
     statusEl.className = "detail-status muted";
     contentEl.classList.add("hidden");
     retryBtn.classList.add("hidden");
@@ -580,6 +597,12 @@ function buildItemRow(item) {
   line1.appendChild(unreadDot);
   line1.appendChild(icon);
   line1.appendChild(text);
+  if (isBloombergVideoUrl(item.url)) {
+    const videoBadge = document.createElement("span");
+    videoBadge.className = "video-badge";
+    videoBadge.textContent = "VIDEO";
+    line1.appendChild(videoBadge);
+  }
 
   const title = document.createElement("div");
   title.className = "title";
@@ -610,7 +633,9 @@ function buildItemRow(item) {
   });
 
   actions.appendChild(btnImportant);
-  actions.appendChild(btnReadLater);
+  if (!isBloombergVideoUrl(item.url) && item.source_type !== "twitter") {
+    actions.appendChild(btnReadLater);
+  }
 
   li.appendChild(line1);
   li.appendChild(title);
