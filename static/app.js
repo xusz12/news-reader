@@ -328,6 +328,7 @@ function renderDetail(item) {
   const statusEl = document.getElementById("detailStatus");
   const contentEl = document.getElementById("detailContent");
   const retryBtn = document.getElementById("detailRetryBtn");
+  const retranslateBtn = document.getElementById("detailRetranslateBtn");
 
   if (item.url) {
     link.href = item.url;
@@ -351,13 +352,25 @@ function renderDetail(item) {
   detailOriginalWrap.classList.add("hidden");
   detailOriginalContent.textContent = "";
   retryBtn.textContent = "重试详情抓取";
+  retryBtn.classList.add("hidden");
+  retranslateBtn.textContent = "重新翻译";
+  retranslateBtn.disabled = false;
+  retranslateBtn.classList.add("hidden");
 
   if (detail && detail.content) {
     const original = detail.content;
     detailOriginalContent.textContent = original;
     detailOriginalWrap.classList.remove("hidden");
+    retranslateBtn.classList.remove("hidden");
 
-    if (ai && ai.body_zh) {
+    if (aiStatus === "pending" || aiStatus === "running" || aiStatus === "none") {
+      statusEl.textContent = aiStatus === "pending" ? "排队生成中文内容" : "正在生成中文内容";
+      statusEl.className = "detail-status pending";
+      contentEl.textContent = ai && ai.body_zh ? ai.body_zh : original;
+      contentEl.classList.remove("hidden");
+      retranslateBtn.textContent = "正在重新翻译...";
+      retranslateBtn.disabled = true;
+    } else if (ai && ai.body_zh) {
       let keyPoints = [];
       try {
         keyPoints = JSON.parse(ai.key_points_zh || "[]");
@@ -378,29 +391,19 @@ function renderDetail(item) {
       statusEl.className = "detail-status ready";
       contentEl.textContent = ai.body_zh;
       contentEl.classList.remove("hidden");
-      retryBtn.classList.add("hidden");
       stopDetailPolling();
-    } else if (aiStatus === "pending" || aiStatus === "running" || aiStatus === "none") {
-      statusEl.textContent = aiStatus === "pending" ? "排队生成中文内容" : "正在生成中文内容";
-      statusEl.className = "detail-status pending";
-      contentEl.textContent = original;
-      contentEl.classList.remove("hidden");
-      retryBtn.classList.add("hidden");
     } else if (aiStatus === "failed") {
       const err = cached?.ai_job?.last_error || item.ai_error || "中文生成失败";
       statusEl.textContent = `中文生成失败，可重试：${err}`;
       statusEl.className = "detail-status failed";
       contentEl.textContent = original;
       contentEl.classList.remove("hidden");
-      retryBtn.textContent = "重试中文生成";
-      retryBtn.classList.remove("hidden");
       stopDetailPolling();
     } else {
       statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
       statusEl.className = "detail-status ready";
       contentEl.textContent = original;
       contentEl.classList.remove("hidden");
-      retryBtn.classList.add("hidden");
       stopDetailPolling();
     }
   } else if (!item.read_later_at) {
@@ -439,17 +442,6 @@ function renderDetail(item) {
     filled: !!item.important_at,
     tone: item.important_at ? "danger" : "default",
     label: item.important_at ? "取消重要" : "标为重要",
-  });
-
-  const readLaterBtn = document.getElementById("detailReadLaterBtn");
-  const detailReady = Number(item.detail_ready || 0) === 1;
-  const readLaterTone = item.read_later_at
-    ? (detailReady ? "success" : "warning")
-    : (detailReady ? "success" : "default");
-  applyIcon(readLaterBtn, "bookmark", {
-    filled: !!item.read_later_at,
-    tone: readLaterTone,
-    label: item.read_later_at ? "取消稍后再看" : (detailReady ? "详情已缓存，加入稍后再看" : "稍后再看"),
   });
 }
 
@@ -490,8 +482,12 @@ async function loadDetail(itemId) {
 function startDetailPolling(itemId) {
   stopDetailPolling();
   const current = state.itemsById.get(itemId);
-  if (!current || !current.read_later_at) return;
-  if (Number(current.detail_ready || 0) === 1) return;
+  if (!current) return;
+  const detailReady = Number(current.detail_ready || 0) === 1;
+  const aiStatus = current.ai_status || "none";
+  const shouldPollDetail = !!current.read_later_at && !detailReady;
+  const shouldPollAi = detailReady && (aiStatus === "pending" || aiStatus === "running" || aiStatus === "none");
+  if (!shouldPollDetail && !shouldPollAi) return;
 
   detailPollTimer = window.setInterval(async () => {
     if (!state.selectedId || state.selectedId !== itemId) {
@@ -506,12 +502,8 @@ function startDetailPolling(itemId) {
     }
     const status = refreshed.detail_status || "none";
     const aiStatus = refreshed.ai_status || "none";
-    if (!refreshed.read_later_at) {
-      stopDetailPolling();
-      return;
-    }
     if (Number(refreshed.detail_ready || 0) !== 1) {
-      if (status === "failed" || status === "skipped" || status === "canceled") {
+      if (!refreshed.read_later_at || status === "failed" || status === "skipped" || status === "canceled") {
         stopDetailPolling();
       }
       return;
@@ -826,7 +818,6 @@ detailCloseBtn.addEventListener("click", closeDetailOnMobile);
 detailCloseBtn.addEventListener("click", stopDetailPolling);
 
 const detailImportantBtn = document.getElementById("detailImportantBtn");
-const detailReadLaterBtn = document.getElementById("detailReadLaterBtn");
 const detailLink = document.getElementById("detailLink");
 
 detailImportantBtn.addEventListener("click", async () => {
@@ -835,16 +826,8 @@ detailImportantBtn.addEventListener("click", async () => {
   await patchStateWithRollback(state.selectedId, { important: !current });
 });
 
-detailReadLaterBtn.addEventListener("click", async () => {
-  if (!state.selectedId) return;
-  const current = !!state.itemsById.get(state.selectedId)?.read_later_at;
-  await patchStateWithRollback(state.selectedId, { read_later: !current });
-  if (!current) {
-    await loadDetail(state.selectedId);
-  }
-});
-
 const detailRetryBtn = document.getElementById("detailRetryBtn");
+const detailRetranslateBtn = document.getElementById("detailRetranslateBtn");
 detailRetryBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;
   detailRetryBtn.disabled = true;
@@ -867,6 +850,26 @@ detailRetryBtn.addEventListener("click", async () => {
     startDetailPolling(state.selectedId);
   } finally {
     detailRetryBtn.disabled = false;
+  }
+});
+
+detailRetranslateBtn.addEventListener("click", async () => {
+  if (!state.selectedId) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item || Number(item.detail_ready || 0) !== 1) return;
+  detailRetranslateBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/news/${encodeURIComponent(state.selectedId)}/detail/retry`, {
+      method: "POST",
+    });
+    if (!res.ok) return;
+    item.ai_status = "pending";
+    state.itemsById.set(item.id, item);
+    rerenderOne(item.id);
+    await loadDetail(state.selectedId);
+    startDetailPolling(state.selectedId);
+  } finally {
+    detailRetranslateBtn.disabled = false;
   }
 });
 
