@@ -607,7 +607,9 @@ def api_news():
             LEFT JOIN ai_jobs aj ON aj.url = items.url
             LEFT JOIN article_ai aa ON aa.url = items.url
             {where_sql}
-            ORDER BY items.published_at DESC, items.source_file DESC, items.item_order ASC
+            ORDER BY COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) DESC,
+                     items.published_at ASC,
+                     items.id ASC
             LIMIT ? OFFSET ?
             """,
             [*args, per, offset],
