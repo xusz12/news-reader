@@ -458,3 +458,41 @@ def test_reading_checkpoint_locate_not_found(tmp_path: Path, monkeypatch):
     assert payload["ok"] is True
     assert payload["found"] is False
     assert payload["reason"] == "not_in_current_scope"
+
+
+def test_news_status_batch_endpoint(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（2条）
+### [A](https://example.com/a)
+- 发布时间：2026-05-30 08:00:00
+### [B](https://example.com/b)
+- 发布时间：2026-05-30 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    ids = [x["id"] for x in items]
+    bad = client.get("/api/news/status")
+    assert bad.status_code == 400
+    assert bad.get_json()["error"] == "missing_ids"
+
+    ok = client.get(f"/api/news/status?ids={ids[0]},{ids[1]}")
+    assert ok.status_code == 200
+    payload = ok.get_json()
+    assert payload["ok"] is True
+    assert len(payload["items"]) == 2
+    returned_ids = {x["id"] for x in payload["items"]}
+    assert returned_ids == set(ids)

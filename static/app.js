@@ -53,6 +53,7 @@ const detailOriginalContent = document.getElementById("detailOriginalContent");
 let readObserver = null;
 let loadObserver = null;
 let detailPollTimer = null;
+let rowStatusPollTimer = null;
 let lastListScrollTop = 0;
 let lastRenderedDateKey = null;
 const enteredViewport = new Set();
@@ -72,6 +73,77 @@ function stopDetailPolling() {
     window.clearInterval(detailPollTimer);
     detailPollTimer = null;
   }
+}
+
+function stopRowStatusPolling() {
+  if (rowStatusPollTimer) {
+    window.clearInterval(rowStatusPollTimer);
+    rowStatusPollTimer = null;
+  }
+}
+
+function rowNeedsStatusPolling(item) {
+  if (!item || !item.read_later_at) return false;
+  const detailReady = Number(item.detail_ready || 0) === 1;
+  const detailStatus = item.detail_status || "none";
+  const aiStatus = item.ai_status || "none";
+  if (!detailReady) {
+    return detailStatus === "pending" || detailStatus === "running";
+  }
+  return aiStatus === "pending" || aiStatus === "running" || aiStatus === "none";
+}
+
+function collectPendingRowIds() {
+  if (document.hidden) return [];
+  const ids = [];
+  newsList.querySelectorAll(".news-item").forEach((row) => {
+    const id = row.dataset.id;
+    const item = state.itemsById.get(id);
+    if (rowNeedsStatusPolling(item)) ids.push(id);
+  });
+  return ids;
+}
+
+async function pollRowStatusesOnce() {
+  const ids = collectPendingRowIds();
+  if (!ids.length) {
+    stopRowStatusPolling();
+    return;
+  }
+  const params = new URLSearchParams({ ids: ids.join(",") });
+  const res = await fetch(`/api/news/status?${params.toString()}`);
+  if (!res.ok) return;
+  const data = await res.json();
+  if (!data.ok || !Array.isArray(data.items)) return;
+  data.items.forEach((st) => {
+    const item = state.itemsById.get(st.id);
+    if (!item) return;
+    item.read_later_at = st.read_later_at;
+    item.detail_status = st.detail_status;
+    item.detail_error = st.detail_error;
+    item.detail_ready = st.detail_ready;
+    item.ai_status = st.ai_status || "none";
+    state.itemsById.set(item.id, item);
+    rerenderOne(item.id);
+  });
+  if (!collectPendingRowIds().length) stopRowStatusPolling();
+}
+
+function ensureRowStatusPolling() {
+  const ids = collectPendingRowIds();
+  if (!ids.length) {
+    stopRowStatusPolling();
+    return;
+  }
+  if (rowStatusPollTimer) return;
+  rowStatusPollTimer = window.setInterval(() => {
+    pollRowStatusesOnce().catch(() => {});
+  }, 3000);
+}
+
+function kickRowStatusPolling() {
+  ensureRowStatusPolling();
+  pollRowStatusesOnce().catch(() => {});
 }
 
 function iconSvg(name, filled = false) {
@@ -419,6 +491,13 @@ async function patchStateWithRollback(itemId, payload) {
     const result = await patchState(itemId, payload);
     applyPatchToItem(item, result);
     rerenderOne(itemId);
+    if ("read_later" in payload) {
+      if (payload.read_later) {
+        kickRowStatusPolling();
+      } else {
+        ensureRowStatusPolling();
+      }
+    }
   } catch {
     item.read_at = backup.read_at;
     item.important_at = backup.important_at;
@@ -811,6 +890,7 @@ function resetList() {
   lastListScrollTop = 0;
   state.selectedId = null;
   stopDetailPolling();
+  stopRowStatusPolling();
   closeDetailOnMobile();
   renderDetail(null);
   lastRenderedDateKey = null;
@@ -880,6 +960,7 @@ async function loadFirstPage() {
     updateEndBufferVisibility();
 
     setupReadObserver();
+    ensureRowStatusPolling();
   } finally {
     state.loading = false;
     updateFilterButtons();
@@ -907,6 +988,7 @@ async function loadNextPage() {
     renderMeta();
     setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
     updateEndBufferVisibility();
+    ensureRowStatusPolling();
   } finally {
     state.loading = false;
   }
@@ -1101,6 +1183,9 @@ detailLink.addEventListener("click", async (e) => {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     lastListScrollTop = newsList.scrollTop;
+    stopRowStatusPolling();
+  } else {
+    kickRowStatusPolling();
   }
 });
 

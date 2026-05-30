@@ -648,6 +648,42 @@ def api_news():
     )
 
 
+@app.get("/api/news/status")
+def api_news_status():
+    raw_ids = (request.args.get("ids") or "").strip()
+    if not raw_ids:
+        return jsonify({"ok": False, "error": "missing_ids"}), 400
+    ids = [x.strip() for x in raw_ids.split(",") if x.strip()]
+    if not ids:
+        return jsonify({"ok": False, "error": "invalid_ids"}), 400
+    if len(ids) > 50:
+        return jsonify({"ok": False, "error": "too_many_ids"}), 400
+
+    placeholders = ",".join(["?"] * len(ids))
+    conn = db_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT items.id,
+                   st.read_later_at,
+                   dj.status AS detail_status,
+                   dj.last_error AS detail_error,
+                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+                   aj.status AS ai_status
+            FROM items
+            LEFT JOIN item_state st ON st.item_id = items.id
+            LEFT JOIN detail_jobs dj ON dj.url = items.url
+            LEFT JOIN article_details ad ON ad.url = items.url
+            LEFT JOIN ai_jobs aj ON aj.url = items.url
+            WHERE items.id IN ({placeholders})
+            """,
+            ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "items": [dict(r) for r in rows]})
+
+
 @app.get("/api/sources")
 def api_sources():
     q = (request.args.get("q") or "").strip()

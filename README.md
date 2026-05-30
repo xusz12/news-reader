@@ -2,100 +2,6 @@
 
 本地新闻阅读器（Web 版），数据源来自 `DailyNews` 中的 `dailyFreshNews_*.md`。
 
-## 项目能力
-
-### v1.0（已完成）
-- 本地 Web 列表页（RSS-like）
-- 仅扫描 `DailyNews/**/dailyFreshNews_*.md`
-- 新闻按发布时间倒序展示
-- 点击标题新标签页打开原文链接
-- 关键词搜索（标题/摘要/来源）
-- 分页浏览
-- 手动刷新索引（增量扫描）
-
-### v1.1（已完成）
-- 已读/未读状态（`item_state.read_at`）
-- 未读红点提示（已读不再灰度）
-- `全部显示` / `仅未读` 过滤
-- 单条 `标为已读` / `标为未读`
-- `当前结果全部标为已读`（按当前筛选条件，跨分页生效）
-- 点击原文自动标已读
-- 自动已读（向下滚动后条目滑出屏幕顶部触发）
-- 列表底部阅读缓冲区（约 `100vh`）
-
-### v1.2（已完成）
-- 增加双状态标记：`重要`（`important_at`）与`稍后再看`（`read_later_at`），允许共存、独立撤销。
-- 三栏工作台：左栏集合入口（新闻流/重要/稍后），中栏连续信息流，右栏摘要与标记操作。
-- 中栏保留通用控制：`全部显示/仅未读`、搜索、跨页批量标已读、刷新索引。
-- 组合筛选支持：`collection=feed|important|read_later` 与 `read_filter=all|unread` 叠加。
-- 窄屏降级：详情区改为底部抽屉，保证移动端可用。
-
-### v1.6（已完成）
-- 右栏详情操作优化：移除右栏“稍后再看”，保留“打开原文 / 重要 / 重新翻译”。
-- AI 重译链路：可手动触发重新翻译，重译期间保留旧译文，完成后自动刷新。
-- `INVALID_BODY_ZH` 修复：移除固定 200 字硬阈值，改为“非空 + 含中文”校验，短新闻可翻译。
-- 非文章内容识别增强：Bloomberg `VIDEO` 标识与明确 skip 文案；X/Twitter skip 文案清晰化。
-- 交互降噪：Bloomberg video 与 X/Twitter 中栏隐藏“稍后阅读”按钮，避免误操作。
-
-## 技术结构
-
-- 后端：Flask + SQLite
-- 前端：原生 HTML/CSS/JS
-- 解析器：项目内独立 `parser.py`（不依赖 `news-briefing` 脚本）
-- 索引更新：`source_files(path+mtime+size)` 增量机制 + upsert + stale delete
-
-## 运行方式
-
-```bash
-cd /Users/x/Library/Mobile Documents/com~apple~CloudDocs/slock项目/news-reader
-python3 -m pip install -r requirements.txt
-python3 app.py
-```
-
-浏览器访问：<http://127.0.0.1:8080>
-
-可选启动参数（默认仍仅本机访问）：
-
-```bash
-# 默认：127.0.0.1:8080
-NEWS_READER_HOST=127.0.0.1 NEWS_READER_PORT=8080 python3 app.py
-
-# Tailscale/局域网访问时显式开放监听
-NEWS_READER_HOST=0.0.0.0 NEWS_READER_PORT=8080 python3 app.py
-```
-
-手机 Tailscale 访问（推荐）：
-
-```bash
-./scripts/start-tailscale.sh
-```
-
-脚本会自动读取当前 Mac 的 Tailscale IPv4 并绑定该地址启动服务；若未连接 Tailscale，会直接报错退出。
-脚本会优先使用当前终端已有的 `DEEPSEEK_API_KEY`，若不存在则自动尝试从 macOS Keychain 读取：
-
-```bash
-security find-generic-password -a news-reader -s DEEPSEEK_API_KEY -w
-```
-
-首次配置 Keychain（一次即可）：
-
-```bash
-security add-generic-password -a news-reader -s DEEPSEEK_API_KEY -w '你的key' -U
-```
-
-## 测试
-
-```bash
-cd /Users/x/Library/Mobile Documents/com~apple~CloudDocs/slock项目/news-reader
-python3 -m pytest -q
-```
-
-## 数据与 Git 边界
-
-- 代码入库：源码、schema、测试、文档
-- 运行数据不入库：`*.sqlite3`, `*.sqlite3-wal`, `*.sqlite3-shm`
-- 缓存不入库：`__pycache__/`, `.pytest_cache/`, `.DS_Store`
-
 ## What's Changed
 
 ### 2026-05-30 — fix: 优化回到阅读按钮位置图标与刷新行为
@@ -252,12 +158,12 @@ python3 -m pytest -q
 
 ### 2026-05-28 — feat: 完成v1.4正文翻译总结与右栏中文展示
 - **文件**
-  - *app.py（+205 −14）*
+- *app.py（+205 −14）*
     - `DETAIL_COMMAND_ROUTES` 重构为 dict，支持每域名独立 timeout；新增 Bloomberg 视频跳过
     - 详情抓取成功后自动入队 AI 翻译任务（`enqueue_ai_job`）
     - 新增 `process_pending_ai_once`，worker 线程顺序处理 AI 翻译队列
     - `detail_worker_loop` 扩展为抓取+AI 双队列串行处理
-    - `GET /api/news` 联表 `ai_jobs` + `article_ai`，返回 `ai_status`/`ai_error`/`ai_ready`
+- `GET /api/news` 联表 `ai_jobs` + `article_ai`，返回 `ai_status`/`ai_error`/`ai_ready`
     - `GET /api/news/:id/detail` 新增 AI 任务状态与翻译结果字段
     - `POST /api/news/:id/detail/retry` 已有正文时优先重试 AI，否则从抓取重新开始
     - 取消稍后再看同步取消 pending 状态的 AI 任务
@@ -372,6 +278,65 @@ python3 -m pytest -q
 
 ### 2026-05-25（v1.0）
 - 新建 news-reader 基线：dailyFreshNews 列表、倒序排序、原文跳转、增量索引、基础 API 与测试。
+
+## 技术结构
+
+- 后端：Flask + SQLite
+- 前端：原生 HTML/CSS/JS
+- 解析器：项目内独立 `parser.py`（不依赖 `news-briefing` 脚本）
+- 索引更新：`source_files(path+mtime+size)` 增量机制 + upsert + stale delete
+
+## 运行方式
+
+```bash
+cd /Users/x/Library/Mobile Documents/com~apple~CloudDocs/slock项目/news-reader
+python3 -m pip install -r requirements.txt
+python3 app.py
+```
+
+浏览器访问：<http://127.0.0.1:8080>
+
+可选启动参数（默认仍仅本机访问）：
+
+```bash
+# 默认：127.0.0.1:8080
+NEWS_READER_HOST=127.0.0.1 NEWS_READER_PORT=8080 python3 app.py
+
+# Tailscale/局域网访问时显式开放监听
+NEWS_READER_HOST=0.0.0.0 NEWS_READER_PORT=8080 python3 app.py
+```
+
+手机 Tailscale 访问（推荐）：
+
+```bash
+./scripts/start-tailscale.sh
+```
+
+脚本会自动读取当前 Mac 的 Tailscale IPv4 并绑定该地址启动服务；若未连接 Tailscale，会直接报错退出。
+脚本会优先使用当前终端已有的 `DEEPSEEK_API_KEY`，若不存在则自动尝试从 macOS Keychain 读取：
+
+```bash
+security find-generic-password -a news-reader -s DEEPSEEK_API_KEY -w
+```
+
+首次配置 Keychain（一次即可）：
+
+```bash
+security add-generic-password -a news-reader -s DEEPSEEK_API_KEY -w '你的key' -U
+```
+
+## 测试
+
+```bash
+cd /Users/x/Library/Mobile Documents/com~apple~CloudDocs/slock项目/news-reader
+python3 -m pytest -q
+```
+
+## 数据与 Git 边界
+
+- 代码入库：源码、schema、测试、文档
+- 运行数据不入库：`*.sqlite3`, `*.sqlite3-wal`, `*.sqlite3-shm`
+- 缓存不入库：`__pycache__/`, `.pytest_cache/`, `.DS_Store`
 
 ---
 
