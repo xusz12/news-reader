@@ -13,6 +13,7 @@ let state = {
   selectedId: null,
   itemsById: new Map(),
   detailCacheByUrl: new Map(),
+  readingCheckpoint: null,
 };
 
 const mediaIconMap = {
@@ -23,6 +24,7 @@ const mediaIconMap = {
 };
 
 const refreshBtn = document.getElementById("refreshBtn");
+const resumeAnchorBtn = document.getElementById("resumeAnchorBtn");
 const readFilterToggleBtn = document.getElementById("readFilterToggleBtn");
 const markAllReadBtn = document.getElementById("markAllReadBtn");
 
@@ -209,6 +211,18 @@ function updateFilterButtons() {
   });
 }
 
+function updateResumeButton() {
+  const visible = state.collection === "feed" && !!state.readingCheckpoint?.url;
+  resumeAnchorBtn.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  const title = state.readingCheckpoint?.title || "回到上次阅读";
+  applyIcon(resumeAnchorBtn, "bookmark", {
+    filled: false,
+    tone: "success",
+    label: `回到上次阅读：${title}`,
+  });
+}
+
 function updateBatchActionButton() {
   if (state.collection === "important") {
     markAllReadBtn.classList.add("hidden");
@@ -308,6 +322,44 @@ async function patchState(itemId, payload) {
   });
   if (!res.ok) throw new Error("state_update_failed");
   return res.json();
+}
+
+async function fetchReadingCheckpoint() {
+  const res = await fetch("/api/reading-checkpoint?scope=feed");
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!data.ok) return null;
+  return data.checkpoint || null;
+}
+
+async function saveReadingCheckpoint(item) {
+  if (!item || state.collection !== "feed" || !item.url) return;
+  state.readingCheckpoint = {
+    scope: "feed",
+    item_id: item.id,
+    url: item.url,
+    title: item.title || "",
+  };
+  updateResumeButton();
+  await fetch("/api/reading-checkpoint", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(state.readingCheckpoint),
+  });
+}
+
+async function locateReadingCheckpoint() {
+  const params = new URLSearchParams({
+    scope: "feed",
+    per: String(state.per),
+    q: "",
+    read_filter: "all",
+    source_filter: "all",
+  });
+  const res = await fetch(`/api/reading-checkpoint/locate?${params.toString()}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.ok ? data : null;
 }
 
 function applyPatchToItem(item, patchResult) {
@@ -713,6 +765,7 @@ function buildItemRow(item) {
       renderDetail(state.itemsById.get(item.id));
       loadDetail(item.id);
       startDetailPolling(item.id);
+      saveReadingCheckpoint(item).catch(() => {});
       openDetailOnMobile();
     }
     newsList.querySelectorAll(".news-item").forEach((row) => {
@@ -825,6 +878,7 @@ async function loadFirstPage() {
     updateFilterButtons();
     updateBatchActionButton();
     updateCollectionButtons();
+    updateResumeButton();
   }
 }
 
@@ -867,6 +921,39 @@ readFilterToggleBtn.addEventListener("click", async () => {
   state.readFilter = state.readFilter === "all" ? "unread" : "all";
   state.feedReadFilter = state.readFilter;
   await loadFirstPage();
+});
+
+resumeAnchorBtn.addEventListener("click", async () => {
+  resumeAnchorBtn.disabled = true;
+  try {
+    const located = await locateReadingCheckpoint();
+    if (!located || !located.found) {
+      setHint("未找到上次阅读锚点，可能已不在当前新闻流。");
+      return;
+    }
+
+    state.collection = "feed";
+    state.q = "";
+    state.readFilter = "all";
+    state.feedReadFilter = "all";
+    state.sourceFilter = "all";
+    await loadFirstPage();
+    while (state.page < located.page && state.hasMore) {
+      await loadNextPage();
+    }
+
+    const row = newsList.querySelector(`.news-item[data-id="${located.item_id}"]`);
+    if (!row) {
+      setHint("锚点定位成功，但当前页未找到目标条目。");
+      return;
+    }
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.add("anchor-flash");
+    window.setTimeout(() => row.classList.remove("anchor-flash"), 2000);
+    row.click();
+  } finally {
+    resumeAnchorBtn.disabled = false;
+  }
 });
 
 navFeedBtn.addEventListener("click", async () => {
@@ -1011,8 +1098,15 @@ document.addEventListener("visibilitychange", () => {
 
 setupLoadObserver();
 renderDetail(null);
+applyIcon(resumeAnchorBtn, "bookmark", { tone: "success", label: "回到上次阅读" });
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
 updateFilterButtons();
 updateBatchActionButton();
 updateEndBufferVisibility();
+fetchReadingCheckpoint()
+  .then((cp) => {
+    state.readingCheckpoint = cp;
+    updateResumeButton();
+  })
+  .catch(() => {});
 autoReindexAndLoad();

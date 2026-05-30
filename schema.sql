@@ -90,3 +90,11 @@ CREATE TABLE IF NOT EXISTS article_ai (
   generated_at TEXT,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS reading_checkpoints (
+  scope TEXT PRIMARY KEY,
+  item_id TEXT,
+  url TEXT,
+  title TEXT,
+  updated_at TEXT NOT NULL
+);

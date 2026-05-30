@@ -46,6 +46,12 @@ SOURCE_LABELS = {
     "x": "X",
 }
 
+NEWS_ORDER_BY_SQL = """
+COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) DESC,
+items.published_at ASC,
+items.id ASC
+"""
+
 
 def _source_prefix(source: str | None) -> str:
     if not source:
@@ -119,6 +125,34 @@ def build_source_filter_clause(source_filter: str) -> tuple[str, list[str]]:
         if host:
             return "(lower(items.url) LIKE ? OR lower(items.url) LIKE ?)", [f"https://{host}/%", f"https://www.{host}/%"]
     return "", []
+
+
+def _build_news_where_clause(
+    q: str,
+    read_filter: str,
+    collection: str,
+    source_filter: str,
+) -> tuple[str, list]:
+    where = []
+    args: list = []
+    if q:
+        where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")
+        like = f"%{q}%"
+        args.extend([like, like, like])
+    if read_filter == "unread":
+        where.append("st.read_at IS NULL")
+    elif read_filter == "read":
+        where.append("st.read_at IS NOT NULL")
+    if collection == "important":
+        where.append("st.important_at IS NOT NULL")
+    elif collection == "read_later":
+        where.append("st.read_later_at IS NOT NULL")
+    source_clause, source_args = build_source_filter_clause(source_filter)
+    if source_clause:
+        where.append(source_clause)
+        args.extend(source_args)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    return where_sql, args
 
 
 def db_conn() -> sqlite3.Connection:
@@ -557,30 +591,12 @@ def api_news():
     source_filter = (request.args.get("source_filter") or "all").strip().lower()
     page = max(1, int(request.args.get("page", "1")))
     per = min(100, max(10, int(request.args.get("per", "30"))))
-    where = []
-    args: list = []
     join_sql = """
     LEFT JOIN item_state st ON st.item_id = items.id
     LEFT JOIN detail_jobs dj ON dj.url = items.url
     LEFT JOIN article_details ad ON ad.url = items.url
     """
-    if q:
-        where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")
-        like = f"%{q}%"
-        args.extend([like, like, like])
-    if read_filter == "unread":
-        where.append("st.read_at IS NULL")
-    elif read_filter == "read":
-        where.append("st.read_at IS NOT NULL")
-    if collection == "important":
-        where.append("st.important_at IS NOT NULL")
-    elif collection == "read_later":
-        where.append("st.read_later_at IS NOT NULL")
-    source_clause, source_args = build_source_filter_clause(source_filter)
-    if source_clause:
-        where.append(source_clause)
-        args.extend(source_args)
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    where_sql, args = _build_news_where_clause(q, read_filter, collection, source_filter)
 
     conn = db_conn()
     try:
@@ -607,9 +623,7 @@ def api_news():
             LEFT JOIN ai_jobs aj ON aj.url = items.url
             LEFT JOIN article_ai aa ON aa.url = items.url
             {where_sql}
-            ORDER BY COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) DESC,
-                     items.published_at ASC,
-                     items.id ASC
+            ORDER BY {NEWS_ORDER_BY_SQL}
             LIMIT ? OFFSET ?
             """,
             [*args, per, offset],
@@ -685,6 +699,130 @@ def api_sources():
         ordered.append({"key": key, "label": labels.get(key, key), "count": counts[key]})
 
     return jsonify({"ok": True, "sources": ordered})
+
+
+@app.get("/api/reading-checkpoint")
+def api_get_reading_checkpoint():
+    scope = (request.args.get("scope") or "feed").strip().lower()
+    if scope != "feed":
+        return jsonify({"ok": False, "error": "unsupported_scope"}), 400
+
+    conn = db_conn()
+    try:
+        row = conn.execute(
+            "SELECT scope, item_id, url, title, updated_at FROM reading_checkpoints WHERE scope=?",
+            (scope,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return jsonify({"ok": True, "checkpoint": None})
+    return jsonify({"ok": True, "checkpoint": dict(row)})
+
+
+@app.put("/api/reading-checkpoint")
+def api_put_reading_checkpoint():
+    body = request.get_json(silent=True) or {}
+    scope = (body.get("scope") or "feed").strip().lower()
+    if scope != "feed":
+        return jsonify({"ok": False, "error": "unsupported_scope"}), 400
+
+    url = (body.get("url") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "missing_url"}), 400
+    item_id = (body.get("item_id") or "").strip() or None
+    title = (body.get("title") or "").strip() or None
+    ts = now_ts()
+
+    conn = db_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO reading_checkpoints(scope, item_id, url, title, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(scope) DO UPDATE SET
+              item_id=excluded.item_id,
+              url=excluded.url,
+              title=excluded.title,
+              updated_at=excluded.updated_at
+            """,
+            (scope, item_id, url, title, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/reading-checkpoint/locate")
+def api_locate_reading_checkpoint():
+    scope = (request.args.get("scope") or "feed").strip().lower()
+    if scope != "feed":
+        return jsonify({"ok": False, "error": "unsupported_scope"}), 400
+
+    q = (request.args.get("q") or "").strip()
+    read_filter = (request.args.get("read_filter") or "all").strip().lower()
+    source_filter = (request.args.get("source_filter") or "all").strip().lower()
+    per = min(100, max(10, int(request.args.get("per", "30"))))
+
+    conn = db_conn()
+    try:
+        cp = conn.execute(
+            "SELECT item_id, url, title, updated_at FROM reading_checkpoints WHERE scope=?",
+            (scope,),
+        ).fetchone()
+        if not cp or not cp["url"]:
+            return jsonify({"ok": True, "found": False, "reason": "no_checkpoint"})
+
+        where_sql, args = _build_news_where_clause(q, read_filter, "feed", source_filter)
+        sql = f"""
+        WITH filtered AS (
+          SELECT items.id, items.url,
+                 ROW_NUMBER() OVER (ORDER BY {NEWS_ORDER_BY_SQL}) AS rn,
+                 COUNT(*) OVER () AS total
+          FROM items
+          LEFT JOIN item_state st ON st.item_id = items.id
+          {where_sql}
+        )
+        SELECT id, url, rn, total
+        FROM filtered
+        WHERE url = ?
+        ORDER BY rn
+        LIMIT 1
+        """
+        hit = conn.execute(sql, [*args, cp["url"]]).fetchone()
+    finally:
+        conn.close()
+
+    if not hit:
+        return jsonify(
+            {
+                "ok": True,
+                "found": False,
+                "reason": "not_in_current_scope",
+                "checkpoint": dict(cp),
+            }
+        )
+
+    row_num = int(hit["rn"])
+    total = int(hit["total"])
+    page = ((row_num - 1) // per) + 1
+    offset = row_num - ((page - 1) * per) - 1
+    return jsonify(
+        {
+            "ok": True,
+            "found": True,
+            "item_id": hit["id"],
+            "url": hit["url"],
+            "row_num": row_num,
+            "total": total,
+            "page": page,
+            "offset": offset,
+            "per": per,
+            "checkpoint": dict(cp),
+        }
+    )
 
 
 @app.post("/api/reindex")

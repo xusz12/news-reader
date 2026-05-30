@@ -192,6 +192,15 @@ button.active {
   background: #eff6ff;
 }
 
+.news-item.anchor-flash {
+  animation: anchorFlash 2s ease;
+}
+
+@keyframes anchorFlash {
+  0% { background: #dcfce7; }
+  100% { background: #fff; }
+}
+
 .icon-btn {
   width: 32px;
   height: 32px;

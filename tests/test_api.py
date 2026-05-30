@@ -375,3 +375,86 @@ def test_news_section_order_date_desc_and_intra_date_asc(tmp_path: Path, monkeyp
     titles = [x["title"] for x in items]
     # section 间日期新->旧；同一日期内时间旧->新
     assert titles == ["D1-early", "D1-middle", "D2-early", "D2-later"]
+
+
+def test_reading_checkpoint_save_get_and_locate(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（4条）
+### [A](https://example.com/a)
+- 发布时间：2026-05-30 08:00:00
+### [B](https://example.com/b)
+- 发布时间：2026-05-30 12:00:00
+### [C](https://example.com/c)
+- 发布时间：2026-05-29 06:00:00
+### [D](https://example.com/d)
+- 发布时间：2026-05-29 18:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    put = client.put(
+        "/api/reading-checkpoint",
+        json={"scope": "feed", "url": "https://example.com/d", "item_id": "x", "title": "D"},
+    )
+    assert put.status_code == 200
+    assert put.get_json()["ok"] is True
+
+    got = client.get("/api/reading-checkpoint?scope=feed")
+    assert got.status_code == 200
+    cp = got.get_json()["checkpoint"]
+    assert cp["url"] == "https://example.com/d"
+
+    loc = client.get("/api/reading-checkpoint/locate?scope=feed&per=2")
+    assert loc.status_code == 200
+    payload = loc.get_json()
+    assert payload["ok"] is True
+    assert payload["found"] is True
+    assert payload["url"] == "https://example.com/d"
+    # 使用当前后端排序规则定位到目标并返回分页位置
+    assert payload["page"] == 1
+    assert payload["offset"] == 3
+
+
+def test_reading_checkpoint_locate_not_found(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（1条）
+### [A](https://example.com/a)
+- 发布时间：2026-05-30 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    assert client.put(
+        "/api/reading-checkpoint",
+        json={"scope": "feed", "url": "https://example.com/not-exist", "title": "X"},
+    ).status_code == 200
+
+    loc = client.get("/api/reading-checkpoint/locate?scope=feed&per=20")
+    assert loc.status_code == 200
+    payload = loc.get_json()
+    assert payload["ok"] is True
+    assert payload["found"] is False
+    assert payload["reason"] == "not_in_current_scope"
