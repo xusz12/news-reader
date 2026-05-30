@@ -98,6 +98,74 @@ python3 -m pytest -q
 
 ## What's Changed
 
+### 2026-05-30 — fix: 优化回到阅读按钮位置图标与刷新行为
+- **文件**
+  - *static/app.js（+11 −3）*
+    - 回到阅读按钮调整位置与图标，刷新行为优化
+  - *static/style.css（+4 −0）*
+    - 按钮样式适配新位置
+- **影响**：断点续连按钮更易发现与操作
+
+### 2026-05-30 — feat: 新增阅读锚点断点续连能力
+- **文件**
+  - *app.py（+160 −22）*
+    - 新增 `GET/PUT /api/reading-checkpoint` 端点，按 scope 读写阅读位置
+    - 新闻排序重构为 `NEWS_ORDER_BY_SQL` 宏
+  - *schema.sql（+8 −0）*
+    - 新增 `reading_checkpoints` 表
+  - *static/app.js（+94 −0）*
+    - 自动保存当前可视第一条新闻为阅读锚点
+    - 刷新 / 重新打开后检测锚点并显示「回到阅读位置」按钮
+  - *static/index.html（+1 −0）*
+    - 新增回到阅读位置按钮节点
+  - *static/style.css（+9 −0）*
+    - 回到阅读位置按钮样式
+  - *tests/test_api.py（+83 −0）*
+    - 新增 checkpoint 读写、scope 校验、PUT 字段验证测试
+- **影响**：刷新列表后可从上次阅读位置继续，不丢失阅读进度
+
+### 2026-05-30 — feat: 调整日期分段内新闻为旧到新排序
+- **文件**
+  - *app.py（+3 −1）*
+    - 排序改为日期降序、日期内 `published_at` 升序（旧先新后）
+  - *tests/test_api.py（+35 −0）*
+    - 新增同日期内旧到新排序验证测试
+- **影响**：每天新闻按时间正序排列，符合阅读习惯
+
+### 2026-05-30 — fix: 优化日期分段左对齐与吸附展示
+- **文件**
+  - *static/style.css（+8 −6）*
+    - 日期分段标题左对齐并优化 sticky 吸附效果
+- **影响**：日期标题更整齐美观
+
+### 2026-05-30 — feat: 新增中栏按日期 section 分段展示
+- **文件**
+  - *app.py（+23 −0）*
+    - 新增 `derive_date_meta()` 生成日期标签（今天/昨天/YYYY年M月D日），API 每项返回 `date_key`/`date_label`
+  - *static/app.js（+26 −4）*
+    - 前端按 `date_key` 分组渲染并插入 sticky section 标题
+  - *static/style.css（+19 −0）*
+    - 日期 section 标题样式与吸附定位
+  - *tests/test_api.py（+3 −0）*
+    - 验证 API 返回 date_key/date_label 字段
+- **影响**：新闻列表按自然日分段，定位更清晰
+
+### 2026-05-30 — feat: 完成 news-reader v1.7.1 动态订阅源筛选
+- **文件**
+  - *app.py（+153 −0）*
+    - 新增 `source_filter` 查询参数、`SOURCE_LABELS` 映射、`derive_source_key()` 域名/来源类型识别
+    - 新增 `GET /api/sources` 端点返回可用来源及计数
+    - where clause 构建提取为 `_build_news_where_clause()`
+  - *static/app.js（+73 −2）*
+    - 左栏新增来源筛选按钮列表，支持组合筛选（集合 + 来源 + 已读状态）
+  - *static/index.html（+3 −0）*
+    - 新增来源筛选按钮区域
+  - *static/style.css（+15 −0）*
+    - 来源筛选按钮样式
+  - *tests/test_api.py（+59 −0）*
+    - 新增 source_filter + sources 端点测试
+- **影响**：可按来源（Reuters/Bloomberg/TechCrunch/Ars/X）独立筛选新闻
+
 ### 2026-05-29 — feat: 完成 v1.6 收口（重译与非文章内容交互优化）
 - **文件**
   - *README.md（+）*
