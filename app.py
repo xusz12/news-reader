@@ -139,6 +139,26 @@ def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def derive_date_meta(published_at: str | None, raw_date: str | None) -> tuple[str, str]:
+    date_key = (raw_date or "").strip()
+    if not date_key and published_at:
+        date_key = str(published_at).strip()[:10]
+    if not date_key:
+        return ("unknown", "未知日期")
+
+    try:
+        day = datetime.strptime(date_key, "%Y-%m-%d").date()
+    except ValueError:
+        return (date_key, date_key)
+
+    today = datetime.now().date()
+    if day == today:
+        return (date_key, "今天")
+    if day == today.fromordinal(today.toordinal() - 1):
+        return (date_key, "昨天")
+    return (date_key, f"{day.year}年{day.month}月{day.day}日")
+
+
 def resolve_detail_route(url: str) -> dict | None:
     host = (urlparse(url).hostname or "").lower()
     if host.startswith("www."):
@@ -598,6 +618,9 @@ def api_news():
     items = [dict(r) for r in rows]
     for item in items:
         item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
+        date_key, date_label = derive_date_meta(item.get("published_at"), item.get("date"))
+        item["date_key"] = date_key
+        item["date_label"] = date_label
     pages = max(1, math.ceil(total / per)) if total else 1
     return jsonify(
         {

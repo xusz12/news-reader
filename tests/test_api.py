@@ -34,6 +34,9 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     data = r2.get_json()
     assert data["total"] == 1
     assert data["items"][0]["url"] == "https://example.com/api"
+    assert data["items"][0]["date_key"] == "2026-05-25"
+    assert isinstance(data["items"][0]["date_label"], str)
+    assert data["items"][0]["date_label"]
     item_id = data["items"][0]["id"]
     assert data["items"][0]["read_at"] is None
     assert data["items"][0]["important_at"] is None

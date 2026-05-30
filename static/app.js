@@ -52,6 +52,7 @@ let readObserver = null;
 let loadObserver = null;
 let detailPollTimer = null;
 let lastListScrollTop = 0;
+let lastRenderedDateKey = null;
 const enteredViewport = new Set();
 const writeInFlight = new Set();
 
@@ -739,7 +740,7 @@ async function fetchNewsPage(page) {
 }
 
 function resetList() {
-  newsList.querySelectorAll(".news-item").forEach((node) => node.remove());
+  newsList.querySelectorAll(".news-item, .date-section").forEach((node) => node.remove());
   enteredViewport.clear();
   state.itemsById.clear();
   state.detailCacheByUrl.clear();
@@ -752,10 +753,31 @@ function resetList() {
   stopDetailPolling();
   closeDetailOnMobile();
   renderDetail(null);
+  lastRenderedDateKey = null;
   updateEndBufferVisibility();
 }
 
-function appendNewsRow(row) {
+function buildDateSectionRow(item) {
+  const li = document.createElement("li");
+  li.className = "date-section";
+  const label = document.createElement("span");
+  label.className = "date-section-label";
+  label.textContent = item.date_label || item.date_key || "未知日期";
+  li.appendChild(label);
+  return li;
+}
+
+function appendNewsRow(item, row) {
+  const dateKey = item.date_key || "unknown";
+  if (dateKey !== lastRenderedDateKey) {
+    const section = buildDateSectionRow(item);
+    if (listHint && listHint.parentElement === newsList) {
+      newsList.insertBefore(section, listHint);
+    } else {
+      newsList.appendChild(section);
+    }
+    lastRenderedDateKey = dateKey;
+  }
   if (listHint && listHint.parentElement === newsList) {
     newsList.insertBefore(row, listHint);
     return;
@@ -785,7 +807,7 @@ async function loadFirstPage() {
     state.page = 1;
     state.hasMore = state.page < state.pages;
 
-    data.items.forEach((item) => appendNewsRow(buildItemRow(item)));
+    data.items.forEach((item) => appendNewsRow(item, buildItemRow(item)));
     renderMeta();
 
     if (state.total === 0) {
@@ -814,7 +836,7 @@ async function loadNextPage() {
     const data = await fetchNewsPage(next);
     data.items.forEach((item) => {
       const row = buildItemRow(item);
-      appendNewsRow(row);
+      appendNewsRow(item, row);
       if (readObserver) readObserver.observe(row);
     });
     state.page = next;
