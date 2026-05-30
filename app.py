@@ -37,6 +37,89 @@ DETAIL_COMMAND_ROUTES = {
     "arstechnica.com": {"source": "Ars Technica", "command": ["opencli", "ArsPublic", "article"], "timeout": 45},
 }
 
+SOURCE_LABELS = {
+    "all": "全部来源",
+    "reuters": "Reuters",
+    "bloomberg": "Bloomberg",
+    "techcrunch": "TechCrunch",
+    "ars": "Ars Technica",
+    "x": "X",
+}
+
+
+def _source_prefix(source: str | None) -> str:
+    if not source:
+        return ""
+    return source.split("·", 1)[0].strip()
+
+
+def derive_source_key(url: str | None, source_type: str | None, source: str | None) -> str:
+    st = (source_type or "").strip().lower()
+    if st == "twitter":
+        return "x"
+
+    host = (urlparse(url or "").hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host in ("x.com", "twitter.com"):
+        return "x"
+    if host.endswith("reuters.com"):
+        return "reuters"
+    if host.endswith("bloomberg.com"):
+        return "bloomberg"
+    if host.endswith("techcrunch.com"):
+        return "techcrunch"
+    if host.endswith("arstechnica.com"):
+        return "ars"
+    if host:
+        return f"host:{host}"
+
+    prefix = _source_prefix(source).lower()
+    if prefix == "reuters":
+        return "reuters"
+    if prefix == "bloomberg":
+        return "bloomberg"
+    if prefix == "techcrunch":
+        return "techcrunch"
+    if prefix in ("ars technica", "ars"):
+        return "ars"
+    if prefix in ("x", "twitter"):
+        return "x"
+    if prefix:
+        return f"name:{prefix}"
+    return "unknown"
+
+
+def source_label_for_key(key: str, source: str | None = None) -> str:
+    if key in SOURCE_LABELS:
+        return SOURCE_LABELS[key]
+    if key.startswith("host:"):
+        return key[5:]
+    if key.startswith("name:"):
+        return source or key[5:]
+    return source or key
+
+
+def build_source_filter_clause(source_filter: str) -> tuple[str, list[str]]:
+    sf = (source_filter or "all").strip().lower()
+    if sf in ("", "all"):
+        return "", []
+    if sf == "x":
+        return "(items.source_type='twitter' OR lower(items.url) LIKE 'https://x.com/%' OR lower(items.url) LIKE 'https://www.x.com/%' OR lower(items.url) LIKE 'https://twitter.com/%' OR lower(items.url) LIKE 'https://www.twitter.com/%')", []
+    if sf == "reuters":
+        return "(lower(items.url) LIKE 'https://reuters.com/%' OR lower(items.url) LIKE 'https://www.reuters.com/%')", []
+    if sf == "bloomberg":
+        return "(lower(items.url) LIKE 'https://bloomberg.com/%' OR lower(items.url) LIKE 'https://www.bloomberg.com/%')", []
+    if sf == "techcrunch":
+        return "(lower(items.url) LIKE 'https://techcrunch.com/%' OR lower(items.url) LIKE 'https://www.techcrunch.com/%')", []
+    if sf == "ars":
+        return "(lower(items.url) LIKE 'https://arstechnica.com/%' OR lower(items.url) LIKE 'https://www.arstechnica.com/%')", []
+    if sf.startswith("host:"):
+        host = sf[5:]
+        if host:
+            return "(lower(items.url) LIKE ? OR lower(items.url) LIKE ?)", [f"https://{host}/%", f"https://www.{host}/%"]
+    return "", []
+
 
 def db_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -451,6 +534,7 @@ def api_news():
     q = (request.args.get("q") or "").strip()
     read_filter = (request.args.get("read_filter") or "all").strip().lower()
     collection = (request.args.get("collection") or "feed").strip().lower()
+    source_filter = (request.args.get("source_filter") or "all").strip().lower()
     page = max(1, int(request.args.get("page", "1")))
     per = min(100, max(10, int(request.args.get("per", "30"))))
     where = []
@@ -472,6 +556,10 @@ def api_news():
         where.append("st.important_at IS NOT NULL")
     elif collection == "read_later":
         where.append("st.read_later_at IS NOT NULL")
+    source_clause, source_args = build_source_filter_clause(source_filter)
+    if source_clause:
+        where.append(source_clause)
+        args.extend(source_args)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()
@@ -508,6 +596,8 @@ def api_news():
         conn.close()
 
     items = [dict(r) for r in rows]
+    for item in items:
+        item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
     pages = max(1, math.ceil(total / per)) if total else 1
     return jsonify(
         {
@@ -517,6 +607,59 @@ def api_news():
             "pages": pages,
         }
     )
+
+
+@app.get("/api/sources")
+def api_sources():
+    q = (request.args.get("q") or "").strip()
+    read_filter = (request.args.get("read_filter") or "all").strip().lower()
+    collection = (request.args.get("collection") or "feed").strip().lower()
+
+    where = []
+    args: list = []
+    join_sql = "LEFT JOIN item_state st ON st.item_id = items.id"
+    if q:
+        where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")
+        like = f"%{q}%"
+        args.extend([like, like, like])
+    if read_filter == "unread":
+        where.append("st.read_at IS NULL")
+    elif read_filter == "read":
+        where.append("st.read_at IS NOT NULL")
+    if collection == "important":
+        where.append("st.important_at IS NOT NULL")
+    elif collection == "read_later":
+        where.append("st.read_later_at IS NOT NULL")
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+    conn = db_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT items.url, items.source_type, items.source FROM items {join_sql} {where_sql}",
+            args,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    counts: dict[str, int] = {}
+    labels: dict[str, str] = {}
+    for r in rows:
+        key = derive_source_key(r["url"], r["source_type"], r["source"])
+        counts[key] = counts.get(key, 0) + 1
+        labels.setdefault(key, source_label_for_key(key, r["source"]))
+
+    known_order = ["reuters", "bloomberg", "techcrunch", "ars", "x"]
+    ordered: list[dict] = []
+    for key in known_order:
+        if key in counts:
+            ordered.append({"key": key, "label": SOURCE_LABELS[key], "count": counts[key]})
+
+    unknown = [k for k in counts.keys() if k not in set(known_order)]
+    unknown.sort(key=lambda x: labels.get(x, x))
+    for key in unknown:
+        ordered.append({"key": key, "label": labels.get(key, key), "count": counts[key]})
+
+    return jsonify({"ok": True, "sources": ordered})
 
 
 @app.post("/api/reindex")
@@ -708,6 +851,7 @@ def api_mark_all_read():
     q = (body.get("q") or "").strip()
     read_filter = (body.get("read_filter") or "all").strip().lower()
     collection = (body.get("collection") or "feed").strip().lower()
+    source_filter = (body.get("source_filter") or "all").strip().lower()
 
     where = []
     args: list = []
@@ -724,6 +868,10 @@ def api_mark_all_read():
         where.append("st.important_at IS NOT NULL")
     elif collection == "read_later":
         where.append("st.read_later_at IS NOT NULL")
+    source_clause, source_args = build_source_filter_clause(source_filter)
+    if source_clause:
+        where.append(source_clause)
+        args.extend(source_args)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()
@@ -760,6 +908,7 @@ def api_clear_read_later():
     body = request.get_json(silent=True) or {}
     q = (body.get("q") or "").strip()
     collection = (body.get("collection") or "read_later").strip().lower()
+    source_filter = (body.get("source_filter") or "all").strip().lower()
 
     where = []
     args: list = []
@@ -773,6 +922,10 @@ def api_clear_read_later():
     if collection == "important":
         where.append("st.important_at IS NOT NULL")
     where.append("st.read_later_at IS NOT NULL")
+    source_clause, source_args = build_source_filter_clause(source_filter)
+    if source_clause:
+        where.append(source_clause)
+        args.extend(source_args)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()

@@ -278,3 +278,62 @@ def test_detail_api_includes_ai_fields(tmp_path: Path, monkeypatch):
     assert payload["ai_status"] == "success"
     assert payload["ai"] is not None
     assert payload["ai"]["conclusion_zh"] == "结论"
+
+
+def test_sources_and_source_filter(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（1条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-05-25 12:00:00
+## Bloomberg · Markets（1条）
+### [B1](https://www.bloomberg.com/news/articles/b1)
+- 发布时间：2026-05-25 11:00:00
+## Twitter · 外汇交易员（1条）
+### [X1](https://x.com/fxtrader/status/1)
+- 发布时间：2026-05-25 10:00:00
+## UnknownFeed（1条）
+### [U1](https://example.org/news/u1)
+- 发布时间：2026-05-25 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    src_resp = client.get("/api/sources?collection=feed&read_filter=all")
+    assert src_resp.status_code == 200
+    src_data = src_resp.get_json()
+    assert src_data["ok"] is True
+    keys = {x["key"] for x in src_data["sources"]}
+    assert "reuters" in keys
+    assert "bloomberg" in keys
+    assert "x" in keys
+    assert "host:example.org" in keys
+
+    reuters = client.get("/api/news?source_filter=reuters")
+    assert reuters.status_code == 200
+    r_items = reuters.get_json()["items"]
+    assert len(r_items) == 1
+    assert r_items[0]["source_key"] == "reuters"
+
+    xfeed = client.get("/api/news?source_filter=x")
+    assert xfeed.status_code == 200
+    x_items = xfeed.get_json()["items"]
+    assert len(x_items) == 1
+    assert x_items[0]["source_key"] == "x"
+
+    unknown = client.get("/api/news?source_filter=host:example.org")
+    assert unknown.status_code == 200
+    u_items = unknown.get_json()["items"]
+    assert len(u_items) == 1
+    assert u_items[0]["url"].startswith("https://example.org/")

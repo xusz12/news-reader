@@ -94,6 +94,21 @@ button.active {
   color: var(--muted);
 }
 
+.sources-title {
+  margin-top: 14px !important;
+}
+
+.source-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-btn {
+  width: 100%;
+  text-align: left;
+}
+
 .nav-btn {
   width: 100%;
   text-align: left;

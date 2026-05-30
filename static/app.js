@@ -4,6 +4,8 @@ let state = {
   q: "",
   per: 30,
   readFilter: "all", // all | unread
+  feedReadFilter: "all", // 仅新闻流记忆 all | unread
+  sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
   collection: "feed", // feed | important | read_later
   total: 0,
   loading: false,
@@ -27,6 +29,7 @@ const markAllReadBtn = document.getElementById("markAllReadBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
+const sourceFilters = document.getElementById("sourceFilters");
 
 const newsList = document.getElementById("newsList");
 const meta = document.getElementById("meta");
@@ -225,6 +228,61 @@ function updateCollectionButtons() {
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
 }
 
+function sourceLabel(key) {
+  const fixed = {
+    all: "全部来源",
+    reuters: "Reuters",
+    bloomberg: "Bloomberg",
+    techcrunch: "TechCrunch",
+    ars: "Ars Technica",
+    x: "X",
+  };
+  return fixed[key] || key;
+}
+
+function renderSourceFilters(options) {
+  sourceFilters.innerHTML = "";
+  const allBtn = document.createElement("button");
+  allBtn.type = "button";
+  allBtn.className = "nav-btn source-btn";
+  allBtn.textContent = "全部来源";
+  allBtn.classList.toggle("active", state.sourceFilter === "all");
+  allBtn.addEventListener("click", async () => {
+    if (state.sourceFilter === "all") return;
+    state.sourceFilter = "all";
+    await loadFirstPage();
+  });
+  sourceFilters.appendChild(allBtn);
+
+  for (const src of options) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "nav-btn source-btn";
+    btn.dataset.sourceKey = src.key;
+    btn.textContent = `${sourceLabel(src.key) || src.label} (${src.count})`;
+    btn.classList.toggle("active", state.sourceFilter === src.key);
+    btn.addEventListener("click", async () => {
+      if (state.sourceFilter === src.key) return;
+      state.sourceFilter = src.key;
+      await loadFirstPage();
+    });
+    sourceFilters.appendChild(btn);
+  }
+}
+
+async function fetchSources() {
+  const params = new URLSearchParams({
+    q: state.q,
+    collection: state.collection,
+    read_filter: state.collection === "feed" ? state.readFilter : "all",
+  });
+  const res = await fetch(`/api/sources?${params.toString()}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  if (!data.ok) return [];
+  return Array.isArray(data.sources) ? data.sources : [];
+}
+
 function renderMeta() {
   const names = {
     feed: "新闻流",
@@ -236,7 +294,8 @@ function renderMeta() {
     unread: "仅未读",
   };
   const readFilterName = state.collection === "feed" ? readNames[state.readFilter] : readNames.all;
-  meta.textContent = `${names[state.collection]} · ${readFilterName} · 共 ${state.total} 条`;
+  const sourceName = state.sourceFilter === "all" ? "全部来源" : sourceLabel(state.sourceFilter);
+  meta.textContent = `${names[state.collection]} · ${readFilterName} · ${sourceName} · 共 ${state.total} 条`;
   pageInfo.textContent = `${state.page} / ${state.pages}`;
 }
 
@@ -672,6 +731,7 @@ async function fetchNewsPage(page) {
     q: state.q,
     read_filter: state.readFilter,
     collection: state.collection,
+    source_filter: state.sourceFilter,
   });
   const res = await fetch(`/api/news?${params.toString()}`);
   if (!res.ok) throw new Error("news_fetch_failed");
@@ -704,11 +764,20 @@ function appendNewsRow(row) {
 }
 
 async function loadFirstPage() {
-  if (state.collection !== "feed" && state.readFilter !== "all") {
+  if (state.collection === "feed") {
+    state.readFilter = state.feedReadFilter;
+  } else if (state.readFilter !== "all") {
     state.readFilter = "all";
   }
   state.loading = true;
   try {
+    const sourceList = await fetchSources();
+    const available = new Set(sourceList.map((x) => x.key));
+    if (state.sourceFilter !== "all" && !available.has(state.sourceFilter)) {
+      state.sourceFilter = "all";
+    }
+    renderSourceFilters(sourceList);
+
     const data = await fetchNewsPage(1);
     resetList();
     state.total = data.total;
@@ -774,6 +843,7 @@ async function autoReindexAndLoad() {
 
 readFilterToggleBtn.addEventListener("click", async () => {
   state.readFilter = state.readFilter === "all" ? "unread" : "all";
+  state.feedReadFilter = state.readFilter;
   await loadFirstPage();
 });
 
@@ -808,6 +878,7 @@ markAllReadBtn.addEventListener("click", async () => {
     const body = {
       q: state.q,
       collection: state.collection,
+      source_filter: state.sourceFilter,
     };
     if (!readLaterMode) body.read_filter = state.readFilter;
     const res = await fetch(endpoint, {
