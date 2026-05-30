@@ -100,6 +100,9 @@ function iconSvg(name, filled = false) {
     }
     return `<svg ${common}><path d="M8 4.5h8a1 1 0 0 1 1 1V20l-5-3-5 3V5.5a1 1 0 0 1 1-1Z"/></svg>`;
   }
+  if (name === "crosshair") {
+    return `<svg ${common}><circle cx="12" cy="12" r="6.8"/><path d="M12 3.5v2.2"/><path d="M12 18.3v2.2"/><path d="M3.5 12h2.2"/><path d="M18.3 12h2.2"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg>`;
+  }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
 
@@ -216,10 +219,14 @@ function updateResumeButton() {
   resumeAnchorBtn.classList.toggle("hidden", !visible);
   if (!visible) return;
   const title = state.readingCheckpoint?.title || "回到上次阅读";
-  applyIcon(resumeAnchorBtn, "bookmark", {
+  applyResumeIcon(`回到上次阅读：${title}`);
+}
+
+function applyResumeIcon(label = "回到上次阅读") {
+  applyIcon(resumeAnchorBtn, "crosshair", {
     filled: false,
     tone: "success",
-    label: `回到上次阅读：${title}`,
+    label,
   });
 }
 
@@ -1010,6 +1017,7 @@ refreshBtn.addEventListener("click", async () => {
     const r = await fetch("/api/reindex", { method: "POST" });
     if (!r.ok) throw new Error("reindex_failed");
     await loadFirstPage();
+    newsList.scrollTo({ top: 0, behavior: "auto" });
   } catch {
     setHint("同步失败，可稍后重试。");
   } finally {
@@ -1098,7 +1106,7 @@ document.addEventListener("visibilitychange", () => {
 
 setupLoadObserver();
 renderDetail(null);
-applyIcon(resumeAnchorBtn, "bookmark", { tone: "success", label: "回到上次阅读" });
+applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
 updateFilterButtons();
 updateBatchActionButton();
