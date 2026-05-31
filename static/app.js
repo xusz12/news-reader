@@ -69,14 +69,28 @@ let rowStatusPollTimer = null;
 let lastListScrollTop = 0;
 let lastRenderedDateKey = null;
 let latestSourceOptions = [];
+const detailSwipeState = {
+  tracking: false,
+  startX: 0,
+  startY: 0,
+  deltaX: 0,
+  deltaY: 0,
+  axis: null,
+};
 const enteredViewport = new Set();
 const writeInFlight = new Set();
 
 const THEME_KEY = "news_reader_theme_mode";
 const DETAIL_FONT_KEY = "news_reader_detail_font";
+const MOBILE_BREAKPOINT_QUERY = "(max-width: 768px)";
+const DETAIL_SWIPE_CLOSE_PX = 72;
 
 function setHint(text) {
   listHint.textContent = text || "";
+}
+
+function isMobileLayout() {
+  return window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
 }
 
 function applyThemeMode(mode) {
@@ -621,12 +635,80 @@ async function patchStateWithRollback(itemId, payload) {
 
 function openDetailOnMobile() {
   if (window.matchMedia("(max-width: 980px)").matches) {
+    detailPanel.style.transition = "";
+    detailPanel.style.transform = "";
     detailPanel.classList.add("open");
   }
 }
 
 function closeDetailOnMobile() {
+  detailPanel.style.transition = "";
+  detailPanel.style.transform = "";
   detailPanel.classList.remove("open");
+}
+
+function resetDetailSwipeState() {
+  detailSwipeState.tracking = false;
+  detailSwipeState.startX = 0;
+  detailSwipeState.startY = 0;
+  detailSwipeState.deltaX = 0;
+  detailSwipeState.deltaY = 0;
+  detailSwipeState.axis = null;
+}
+
+function handleDetailTouchStart(e) {
+  if (!isMobileLayout()) return;
+  if (!detailPanel.classList.contains("open")) return;
+  if (!e.touches || e.touches.length !== 1) return;
+  const touch = e.touches[0];
+  detailSwipeState.tracking = true;
+  detailSwipeState.startX = touch.clientX;
+  detailSwipeState.startY = touch.clientY;
+  detailSwipeState.deltaX = 0;
+  detailSwipeState.deltaY = 0;
+  detailSwipeState.axis = null;
+}
+
+function handleDetailTouchMove(e) {
+  if (!detailSwipeState.tracking) return;
+  if (!isMobileLayout()) return;
+  if (!e.touches || e.touches.length !== 1) return;
+
+  const touch = e.touches[0];
+  const dx = touch.clientX - detailSwipeState.startX;
+  const dy = touch.clientY - detailSwipeState.startY;
+  detailSwipeState.deltaX = dx;
+  detailSwipeState.deltaY = dy;
+
+  if (!detailSwipeState.axis) {
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+    if (absX < 6 && absY < 6) return;
+    detailSwipeState.axis = absX > absY * 1.15 ? "x" : "y";
+  }
+
+  if (detailSwipeState.axis !== "x") return;
+  if (dx <= 0) return;
+
+  e.preventDefault();
+  const dragX = Math.min(dx, Math.floor(window.innerWidth * 0.9));
+  detailPanel.style.transition = "none";
+  detailPanel.style.transform = `translateX(${dragX}px)`;
+}
+
+function handleDetailTouchEnd() {
+  if (!detailSwipeState.tracking) return;
+  const shouldClose =
+    detailSwipeState.axis === "x" &&
+    detailSwipeState.deltaX > DETAIL_SWIPE_CLOSE_PX &&
+    detailSwipeState.deltaX > Math.abs(detailSwipeState.deltaY) * 1.15;
+  resetDetailSwipeState();
+  if (shouldClose) {
+    closeDetailOnMobile();
+    return;
+  }
+  detailPanel.style.transition = "";
+  detailPanel.style.transform = "";
 }
 
 function renderDetail(item) {
@@ -1274,6 +1356,10 @@ refreshBtn.addEventListener("click", async () => {
 
 detailCloseBtn.addEventListener("click", closeDetailOnMobile);
 detailCloseBtn.addEventListener("click", stopDetailPolling);
+detailPanel.addEventListener("touchstart", handleDetailTouchStart, { passive: true });
+detailPanel.addEventListener("touchmove", handleDetailTouchMove, { passive: false });
+detailPanel.addEventListener("touchend", handleDetailTouchEnd, { passive: true });
+detailPanel.addEventListener("touchcancel", handleDetailTouchEnd, { passive: true });
 
 const detailImportantBtn = document.getElementById("detailImportantBtn");
 const detailLink = document.getElementById("detailLink");
