@@ -647,17 +647,6 @@ html[data-detail-font="large"] {
   height: 1px;
 }
 
-.end-buffer {
-  flex: 0 0 auto;
-  min-height: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  color: var(--muted);
-  font-size: 12px;
-  padding: 16px 0 24px;
-}
-
 .hidden {
   display: none !important;
 }

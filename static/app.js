@@ -40,7 +40,6 @@ const meta = document.getElementById("meta");
 const pageInfo = document.getElementById("pageInfo");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
-const endBuffer = document.getElementById("endBuffer");
 
 const detailPanel = document.getElementById("detailPanel");
 const detailEmpty = document.getElementById("detailEmpty");
@@ -84,11 +83,6 @@ function applyDetailFontMode(mode) {
   try {
     localStorage.setItem(DETAIL_FONT_KEY, finalMode);
   } catch {}
-}
-
-function updateEndBufferVisibility() {
-  if (!endBuffer) return;
-  endBuffer.classList.toggle("hidden", state.hasMore || state.total === 0);
 }
 
 function stopDetailPolling() {
@@ -925,7 +919,6 @@ function resetList() {
   closeDetailOnMobile();
   renderDetail(null);
   lastRenderedDateKey = null;
-  updateEndBufferVisibility();
 }
 
 function buildDateSectionRow(item) {
@@ -988,7 +981,6 @@ async function loadFirstPage() {
     } else {
       setHint("已加载全部新闻");
     }
-    updateEndBufferVisibility();
 
     setupReadObserver();
     ensureRowStatusPolling();
@@ -1018,7 +1010,6 @@ async function loadNextPage() {
     state.hasMore = state.page < state.pages;
     renderMeta();
     setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
-    updateEndBufferVisibility();
     ensureRowStatusPolling();
   } finally {
     state.loading = false;
@@ -1248,7 +1239,6 @@ applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
 updateFilterButtons();
 updateBatchActionButton();
-updateEndBufferVisibility();
 fetchReadingCheckpoint()
   .then((cp) => {
     state.readingCheckpoint = cp;
