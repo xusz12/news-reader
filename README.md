@@ -4,6 +4,36 @@
 
 ## What's Changed
 
+### 2026-05-31 — chore: 移除列表底部到达提示
+- **文件**
+  - *static/app.js（+0 −10）*
+    - 移除 `endBuffer` 元素引用及 `updateEndBufferVisibility()` 函数
+  - *static/index.html（+0 −3）*
+    - 移除 `endBuffer` DOM 节点
+  - *static/style.css（+0 −11）*
+    - 移除 `.end-buffer` 样式
+- **影响**：列表底部不再显示"已到列表末尾"
+
+### 2026-05-31 — fix: 右栏无摘要时隐藏摘要区占位提示
+- **文件**
+  - *static/app.js（+9 −1）*
+    - 摘要为空时隐藏摘要区，不再显示"暂无摘要"占位文字
+- **影响**：无摘要条目右栏更简洁
+
+### 2026-05-31 — feat: 新增阅读偏好与主题显示优化
+- **文件**
+  - *static/app.js（+45 −0）*
+    - 新增主题模式切换（跟随系统/浅色/深色），`localStorage` 持久化
+    - 新增右栏字体大小切换（小/中/大），`localStorage` 持久化
+  - *static/index.html（+14 −0）*
+    - topbar 新增外观/右栏字体下拉选择器
+  - *static/style.css（+189 −46）*
+    - 全部硬编码颜色重构为 CSS 自定义属性（`--bg`/`--text`/`--border` 等）
+    - 新增 `[data-theme="dark"]` 暗色主题变量及 `@media (prefers-color-scheme: dark)` 系统跟随
+    - 新增 `[data-detail-font]` 字体缩放比例
+    - 移动端 topbar 自适应网格布局
+- **影响**：支持暗色模式与右栏字体调节
+
 ### 2026-05-30 — fix: 优化回到阅读按钮位置图标与刷新行为
 - **文件**
   - *static/app.js（+11 −3）*
