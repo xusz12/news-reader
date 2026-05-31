@@ -1110,7 +1110,9 @@ resumeAnchorBtn.addEventListener("click", async () => {
     row.scrollIntoView({ block: "center", behavior: "smooth" });
     row.classList.add("anchor-flash");
     window.setTimeout(() => row.classList.remove("anchor-flash"), 2000);
-    row.click();
+    if (!window.matchMedia("(max-width: 768px)").matches) {
+      row.click();
+    }
   } finally {
     resumeAnchorBtn.disabled = false;
   }
