@@ -553,7 +553,15 @@ function renderDetail(item) {
 
   document.getElementById("detailTitle").textContent = item.title || "";
   document.getElementById("detailMeta").textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
-  document.getElementById("detailSummary").textContent = item.summary || "暂无摘要";
+  const summaryEl = document.getElementById("detailSummary");
+  const hasSummary = typeof item.summary === "string" && item.summary.trim().length > 0;
+  if (hasSummary) {
+    summaryEl.textContent = item.summary.trim();
+    summaryEl.classList.remove("hidden");
+  } else {
+    summaryEl.textContent = "";
+    summaryEl.classList.add("hidden");
+  }
 
   const link = document.getElementById("detailLink");
   const statusEl = document.getElementById("detailStatus");
