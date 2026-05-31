@@ -39,6 +39,7 @@
       <section class="feed-column">
         <div class="controls feed-controls">
           <button id="resumeAnchorBtn" class="icon-btn hidden" type="button"></button>
+          <button id="mobileFilterBtn" class="icon-btn mobile-only" type="button"></button>
           <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
           <button id="markAllReadBtn" class="icon-btn" type="button"></button>
           <button id="refreshBtn" class="icon-btn" type="button"></button>
@@ -82,6 +83,25 @@
         </div>
       </aside>
     </main>
+
+    <div id="mobileFilterSheet" class="mobile-filter-sheet hidden" aria-hidden="true">
+      <button id="mobileFilterBackdrop" class="mobile-filter-backdrop" type="button" aria-label="关闭筛选面板"></button>
+      <section class="mobile-filter-panel" aria-label="筛选与来源">
+        <div class="mobile-filter-header">
+          <h3>筛选与来源</h3>
+          <button id="mobileFilterCloseBtn" class="mobile-filter-close" type="button">完成</button>
+        </div>
+        <div id="mobileFilterCollection" class="mobile-filter-collection"></div>
+        <div class="mobile-filter-block">
+          <h4>来源</h4>
+          <div id="mobileSourceFilters" class="mobile-source-filters"></div>
+        </div>
+        <div class="mobile-filter-block">
+          <h4>阅读状态（仅新闻流）</h4>
+          <button id="mobileReadFilterToggleBtn" class="mobile-read-filter-btn" type="button"></button>
+        </div>
+      </section>
+    </div>
 
     <nav class="mobile-collection-tabs" aria-label="集合切换">
       <button id="mobileNavFeedBtn" class="mobile-tab active" type="button">新闻流</button>

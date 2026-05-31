@@ -35,6 +35,13 @@ const mobileNavFeedBtn = document.getElementById("mobileNavFeedBtn");
 const mobileNavImportantBtn = document.getElementById("mobileNavImportantBtn");
 const mobileNavReadLaterBtn = document.getElementById("mobileNavReadLaterBtn");
 const sourceFilters = document.getElementById("sourceFilters");
+const mobileFilterBtn = document.getElementById("mobileFilterBtn");
+const mobileFilterSheet = document.getElementById("mobileFilterSheet");
+const mobileFilterBackdrop = document.getElementById("mobileFilterBackdrop");
+const mobileFilterCloseBtn = document.getElementById("mobileFilterCloseBtn");
+const mobileFilterCollection = document.getElementById("mobileFilterCollection");
+const mobileSourceFilters = document.getElementById("mobileSourceFilters");
+const mobileReadFilterToggleBtn = document.getElementById("mobileReadFilterToggleBtn");
 const themeModeSelect = document.getElementById("themeModeSelect");
 const detailFontSelect = document.getElementById("detailFontSelect");
 
@@ -60,6 +67,7 @@ let detailPollTimer = null;
 let rowStatusPollTimer = null;
 let lastListScrollTop = 0;
 let lastRenderedDateKey = null;
+let latestSourceOptions = [];
 const enteredViewport = new Set();
 const writeInFlight = new Set();
 
@@ -345,6 +353,41 @@ function updateCollectionButtons() {
   if (mobileNavReadLaterBtn) mobileNavReadLaterBtn.classList.toggle("active", state.collection === "read_later");
 }
 
+function updateMobileFilterCollectionText() {
+  if (!mobileFilterCollection) return;
+  const names = {
+    feed: "新闻流",
+    important: "重要新闻",
+    read_later: "稍后再看",
+  };
+  mobileFilterCollection.textContent = `当前集合：${names[state.collection] || "新闻流"}`;
+}
+
+function updateMobileReadFilterToggle() {
+  if (!mobileReadFilterToggleBtn) return;
+  const show = state.collection === "feed";
+  mobileReadFilterToggleBtn.classList.toggle("hidden", !show);
+  if (!show) return;
+  const isAll = state.readFilter === "all";
+  mobileReadFilterToggleBtn.textContent = isAll ? "全部显示" : "仅未读";
+  mobileReadFilterToggleBtn.classList.toggle("active", !isAll);
+}
+
+function closeMobileFilterSheet() {
+  if (!mobileFilterSheet) return;
+  mobileFilterSheet.classList.add("hidden");
+  mobileFilterSheet.setAttribute("aria-hidden", "true");
+}
+
+function openMobileFilterSheet() {
+  if (!mobileFilterSheet) return;
+  updateMobileFilterCollectionText();
+  updateMobileReadFilterToggle();
+  renderSourceFilters(latestSourceOptions);
+  mobileFilterSheet.classList.remove("hidden");
+  mobileFilterSheet.setAttribute("aria-hidden", "false");
+}
+
 function sourceLabel(key) {
   const fixed = {
     all: "全部来源",
@@ -358,33 +401,46 @@ function sourceLabel(key) {
 }
 
 function renderSourceFilters(options) {
-  sourceFilters.innerHTML = "";
-  const allBtn = document.createElement("button");
-  allBtn.type = "button";
-  allBtn.className = "nav-btn source-btn";
-  allBtn.textContent = "全部来源";
-  allBtn.classList.toggle("active", state.sourceFilter === "all");
-  allBtn.addEventListener("click", async () => {
-    if (state.sourceFilter === "all") return;
-    state.sourceFilter = "all";
-    await loadFirstPage();
-  });
-  sourceFilters.appendChild(allBtn);
+  latestSourceOptions = Array.isArray(options) ? options : [];
 
-  for (const src of options) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "nav-btn source-btn";
-    btn.dataset.sourceKey = src.key;
-    btn.textContent = `${sourceLabel(src.key) || src.label} (${src.count})`;
-    btn.classList.toggle("active", state.sourceFilter === src.key);
-    btn.addEventListener("click", async () => {
-      if (state.sourceFilter === src.key) return;
-      state.sourceFilter = src.key;
+  const fillContainer = (container, className) => {
+    if (!container) return;
+    container.innerHTML = "";
+
+    const allBtn = document.createElement("button");
+    allBtn.type = "button";
+    allBtn.className = className;
+    allBtn.textContent = "全部来源";
+    allBtn.classList.toggle("active", state.sourceFilter === "all");
+    allBtn.addEventListener("click", async () => {
+      if (state.sourceFilter === "all") return;
+      state.sourceFilter = "all";
       await loadFirstPage();
+      closeMobileFilterSheet();
     });
-    sourceFilters.appendChild(btn);
-  }
+    container.appendChild(allBtn);
+
+    for (const src of latestSourceOptions) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = className;
+      btn.dataset.sourceKey = src.key;
+      btn.textContent = `${sourceLabel(src.key) || src.label} (${src.count})`;
+      btn.classList.toggle("active", state.sourceFilter === src.key);
+      btn.addEventListener("click", async () => {
+        if (state.sourceFilter === src.key) return;
+        state.sourceFilter = src.key;
+        await loadFirstPage();
+        closeMobileFilterSheet();
+      });
+      container.appendChild(btn);
+    }
+  };
+
+  fillContainer(sourceFilters, "nav-btn source-btn");
+  fillContainer(mobileSourceFilters, "mobile-source-btn");
+  updateMobileReadFilterToggle();
+  updateMobileFilterCollectionText();
 }
 
 async function fetchSources() {
@@ -1076,6 +1132,7 @@ resumeAnchorBtn.addEventListener("click", async () => {
 async function switchCollection(collection) {
   if (state.collection === collection) return;
   state.collection = collection;
+  closeMobileFilterSheet();
   await loadFirstPage();
 }
 
@@ -1106,6 +1163,30 @@ if (mobileNavImportantBtn) {
 if (mobileNavReadLaterBtn) {
   mobileNavReadLaterBtn.addEventListener("click", async () => {
     await switchCollection("read_later");
+  });
+}
+
+if (mobileFilterBtn) {
+  mobileFilterBtn.addEventListener("click", () => {
+    openMobileFilterSheet();
+  });
+}
+
+if (mobileFilterBackdrop) {
+  mobileFilterBackdrop.addEventListener("click", closeMobileFilterSheet);
+}
+
+if (mobileFilterCloseBtn) {
+  mobileFilterCloseBtn.addEventListener("click", closeMobileFilterSheet);
+}
+
+if (mobileReadFilterToggleBtn) {
+  mobileReadFilterToggleBtn.addEventListener("click", async () => {
+    if (state.collection !== "feed") return;
+    state.readFilter = state.readFilter === "all" ? "unread" : "all";
+    state.feedReadFilter = state.readFilter;
+    await loadFirstPage();
+    closeMobileFilterSheet();
   });
 }
 
@@ -1264,6 +1345,7 @@ try {
 }
 applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
+if (mobileFilterBtn) applyIcon(mobileFilterBtn, "circle", { label: "筛选与来源" });
 updateFilterButtons();
 updateBatchActionButton();
 fetchReadingCheckpoint()
