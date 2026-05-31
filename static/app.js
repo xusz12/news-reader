@@ -31,6 +31,9 @@ const markAllReadBtn = document.getElementById("markAllReadBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
+const mobileNavFeedBtn = document.getElementById("mobileNavFeedBtn");
+const mobileNavImportantBtn = document.getElementById("mobileNavImportantBtn");
+const mobileNavReadLaterBtn = document.getElementById("mobileNavReadLaterBtn");
 const sourceFilters = document.getElementById("sourceFilters");
 const themeModeSelect = document.getElementById("themeModeSelect");
 const detailFontSelect = document.getElementById("detailFontSelect");
@@ -337,6 +340,9 @@ function updateCollectionButtons() {
   navFeedBtn.classList.toggle("active", state.collection === "feed");
   navImportantBtn.classList.toggle("active", state.collection === "important");
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
+  if (mobileNavFeedBtn) mobileNavFeedBtn.classList.toggle("active", state.collection === "feed");
+  if (mobileNavImportantBtn) mobileNavImportantBtn.classList.toggle("active", state.collection === "important");
+  if (mobileNavReadLaterBtn) mobileNavReadLaterBtn.classList.toggle("active", state.collection === "read_later");
 }
 
 function sourceLabel(key) {
@@ -1067,20 +1073,41 @@ resumeAnchorBtn.addEventListener("click", async () => {
   }
 });
 
-navFeedBtn.addEventListener("click", async () => {
-  state.collection = "feed";
+async function switchCollection(collection) {
+  if (state.collection === collection) return;
+  state.collection = collection;
   await loadFirstPage();
+}
+
+navFeedBtn.addEventListener("click", async () => {
+  await switchCollection("feed");
 });
 
 navImportantBtn.addEventListener("click", async () => {
-  state.collection = "important";
-  await loadFirstPage();
+  await switchCollection("important");
 });
 
 navReadLaterBtn.addEventListener("click", async () => {
-  state.collection = "read_later";
-  await loadFirstPage();
+  await switchCollection("read_later");
 });
+
+if (mobileNavFeedBtn) {
+  mobileNavFeedBtn.addEventListener("click", async () => {
+    await switchCollection("feed");
+  });
+}
+
+if (mobileNavImportantBtn) {
+  mobileNavImportantBtn.addEventListener("click", async () => {
+    await switchCollection("important");
+  });
+}
+
+if (mobileNavReadLaterBtn) {
+  mobileNavReadLaterBtn.addEventListener("click", async () => {
+    await switchCollection("read_later");
+  });
+}
 
 if (themeModeSelect) {
   themeModeSelect.addEventListener("change", () => {
