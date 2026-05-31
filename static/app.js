@@ -84,6 +84,8 @@ const THEME_KEY = "news_reader_theme_mode";
 const DETAIL_FONT_KEY = "news_reader_detail_font";
 const MOBILE_BREAKPOINT_QUERY = "(max-width: 768px)";
 const DETAIL_SWIPE_CLOSE_PX = 72;
+const DETAIL_SWIPE_EDGE_PX = 40;
+const DETAIL_SWIPE_AXIS_RATIO = 1.5;
 
 function setHint(text) {
   listHint.textContent = text || "";
@@ -661,6 +663,7 @@ function handleDetailTouchStart(e) {
   if (!detailPanel.classList.contains("open")) return;
   if (!e.touches || e.touches.length !== 1) return;
   const touch = e.touches[0];
+  if (touch.clientX > DETAIL_SWIPE_EDGE_PX) return;
   detailSwipeState.tracking = true;
   detailSwipeState.startX = touch.clientX;
   detailSwipeState.startY = touch.clientY;
@@ -684,7 +687,7 @@ function handleDetailTouchMove(e) {
     const absX = Math.abs(dx);
     const absY = Math.abs(dy);
     if (absX < 6 && absY < 6) return;
-    detailSwipeState.axis = absX > absY * 1.15 ? "x" : "y";
+    detailSwipeState.axis = absX > absY * DETAIL_SWIPE_AXIS_RATIO ? "x" : "y";
   }
 
   if (detailSwipeState.axis !== "x") return;
@@ -701,7 +704,7 @@ function handleDetailTouchEnd() {
   const shouldClose =
     detailSwipeState.axis === "x" &&
     detailSwipeState.deltaX > DETAIL_SWIPE_CLOSE_PX &&
-    detailSwipeState.deltaX > Math.abs(detailSwipeState.deltaY) * 1.15;
+    detailSwipeState.deltaX > Math.abs(detailSwipeState.deltaY) * DETAIL_SWIPE_AXIS_RATIO;
   resetDetailSwipeState();
   if (shouldClose) {
     closeDetailOnMobile();

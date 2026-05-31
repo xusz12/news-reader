@@ -768,14 +768,63 @@ html[data-detail-font="large"] {
   }
 
   .detail-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 10px;
+    display: none;
   }
 
   .detail-scroll-area {
-    padding-bottom: calc(8px + var(--mobile-safe-bottom));
+    margin-top: 10px;
+    padding-bottom: calc(14px + var(--mobile-safe-bottom));
+  }
+
+  .detail-title {
+    margin: 0 0 10px;
+    line-height: 1.35;
+  }
+
+  .detail-meta {
+    margin-bottom: 10px;
+  }
+
+  .detail-summary {
+    line-height: 1.68;
+  }
+
+  .detail-ai-box {
+    margin-top: 12px;
+    padding: 12px 14px;
+  }
+
+  .detail-ai-points {
+    line-height: 1.58;
+  }
+
+  .detail-ai-points li + li {
+    margin-top: 6px;
+  }
+
+  .detail-ai-conclusion {
+    margin-top: 10px;
+    line-height: 1.58;
+  }
+
+  .detail-status {
+    margin-top: 12px;
+    line-height: 1.5;
+  }
+
+  .detail-content {
+    margin-top: 12px;
+    line-height: 1.72;
+  }
+
+  .detail-original {
+    margin-top: 12px;
+    padding-top: 10px;
+  }
+
+  .detail-original-content {
+    margin-top: 10px;
+    line-height: 1.65;
   }
 
   .mobile-filter-sheet {
