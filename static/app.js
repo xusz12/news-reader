@@ -32,6 +32,8 @@ const navFeedBtn = document.getElementById("navFeedBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const sourceFilters = document.getElementById("sourceFilters");
+const themeModeSelect = document.getElementById("themeModeSelect");
+const detailFontSelect = document.getElementById("detailFontSelect");
 
 const newsList = document.getElementById("newsList");
 const meta = document.getElementById("meta");
@@ -59,8 +61,29 @@ let lastRenderedDateKey = null;
 const enteredViewport = new Set();
 const writeInFlight = new Set();
 
+const THEME_KEY = "news_reader_theme_mode";
+const DETAIL_FONT_KEY = "news_reader_detail_font";
+
 function setHint(text) {
   listHint.textContent = text || "";
+}
+
+function applyThemeMode(mode) {
+  const finalMode = ["system", "light", "dark"].includes(mode) ? mode : "system";
+  document.documentElement.setAttribute("data-theme", finalMode);
+  if (themeModeSelect) themeModeSelect.value = finalMode;
+  try {
+    localStorage.setItem(THEME_KEY, finalMode);
+  } catch {}
+}
+
+function applyDetailFontMode(mode) {
+  const finalMode = ["small", "medium", "large"].includes(mode) ? mode : "medium";
+  document.documentElement.setAttribute("data-detail-font", finalMode);
+  if (detailFontSelect) detailFontSelect.value = finalMode;
+  try {
+    localStorage.setItem(DETAIL_FONT_KEY, finalMode);
+  } catch {}
 }
 
 function updateEndBufferVisibility() {
@@ -1060,6 +1083,18 @@ navReadLaterBtn.addEventListener("click", async () => {
   await loadFirstPage();
 });
 
+if (themeModeSelect) {
+  themeModeSelect.addEventListener("change", () => {
+    applyThemeMode(themeModeSelect.value);
+  });
+}
+
+if (detailFontSelect) {
+  detailFontSelect.addEventListener("change", () => {
+    applyDetailFontMode(detailFontSelect.value);
+  });
+}
+
 markAllReadBtn.addEventListener("click", async () => {
   if (state.collection === "important") return;
 
@@ -1191,6 +1226,16 @@ document.addEventListener("visibilitychange", () => {
 
 setupLoadObserver();
 renderDetail(null);
+try {
+  applyThemeMode(localStorage.getItem(THEME_KEY) || "system");
+} catch {
+  applyThemeMode("system");
+}
+try {
+  applyDetailFontMode(localStorage.getItem(DETAIL_FONT_KEY) || "medium");
+} catch {
+  applyDetailFontMode("medium");
+}
 applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
 updateFilterButtons();
