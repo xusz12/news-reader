@@ -34,14 +34,13 @@ const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const mobileNavFeedBtn = document.getElementById("mobileNavFeedBtn");
 const mobileNavImportantBtn = document.getElementById("mobileNavImportantBtn");
 const mobileNavReadLaterBtn = document.getElementById("mobileNavReadLaterBtn");
+const mobileTabFilterBtn = document.getElementById("mobileTabFilterBtn");
 const sourceFilters = document.getElementById("sourceFilters");
-const mobileFilterBtn = document.getElementById("mobileFilterBtn");
 const mobileFilterSheet = document.getElementById("mobileFilterSheet");
 const mobileFilterBackdrop = document.getElementById("mobileFilterBackdrop");
 const mobileFilterCloseBtn = document.getElementById("mobileFilterCloseBtn");
 const mobileFilterCollection = document.getElementById("mobileFilterCollection");
 const mobileSourceFilters = document.getElementById("mobileSourceFilters");
-const mobileReadFilterToggleBtn = document.getElementById("mobileReadFilterToggleBtn");
 const themeModeSelect = document.getElementById("themeModeSelect");
 const detailFontSelect = document.getElementById("detailFontSelect");
 
@@ -363,16 +362,6 @@ function updateMobileFilterCollectionText() {
   mobileFilterCollection.textContent = `当前集合：${names[state.collection] || "新闻流"}`;
 }
 
-function updateMobileReadFilterToggle() {
-  if (!mobileReadFilterToggleBtn) return;
-  const show = state.collection === "feed";
-  mobileReadFilterToggleBtn.classList.toggle("hidden", !show);
-  if (!show) return;
-  const isAll = state.readFilter === "all";
-  mobileReadFilterToggleBtn.textContent = isAll ? "全部显示" : "仅未读";
-  mobileReadFilterToggleBtn.classList.toggle("active", !isAll);
-}
-
 function closeMobileFilterSheet() {
   if (!mobileFilterSheet) return;
   mobileFilterSheet.classList.add("hidden");
@@ -382,7 +371,6 @@ function closeMobileFilterSheet() {
 function openMobileFilterSheet() {
   if (!mobileFilterSheet) return;
   updateMobileFilterCollectionText();
-  updateMobileReadFilterToggle();
   renderSourceFilters(latestSourceOptions);
   mobileFilterSheet.classList.remove("hidden");
   mobileFilterSheet.setAttribute("aria-hidden", "false");
@@ -439,7 +427,6 @@ function renderSourceFilters(options) {
 
   fillContainer(sourceFilters, "nav-btn source-btn");
   fillContainer(mobileSourceFilters, "mobile-source-btn");
-  updateMobileReadFilterToggle();
   updateMobileFilterCollectionText();
 }
 
@@ -1166,8 +1153,8 @@ if (mobileNavReadLaterBtn) {
   });
 }
 
-if (mobileFilterBtn) {
-  mobileFilterBtn.addEventListener("click", () => {
+if (mobileTabFilterBtn) {
+  mobileTabFilterBtn.addEventListener("click", () => {
     openMobileFilterSheet();
   });
 }
@@ -1178,16 +1165,6 @@ if (mobileFilterBackdrop) {
 
 if (mobileFilterCloseBtn) {
   mobileFilterCloseBtn.addEventListener("click", closeMobileFilterSheet);
-}
-
-if (mobileReadFilterToggleBtn) {
-  mobileReadFilterToggleBtn.addEventListener("click", async () => {
-    if (state.collection !== "feed") return;
-    state.readFilter = state.readFilter === "all" ? "unread" : "all";
-    state.feedReadFilter = state.readFilter;
-    await loadFirstPage();
-    closeMobileFilterSheet();
-  });
 }
 
 if (themeModeSelect) {
@@ -1345,7 +1322,7 @@ try {
 }
 applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
-if (mobileFilterBtn) applyIcon(mobileFilterBtn, "circle", { label: "筛选与来源" });
+if (mobileTabFilterBtn) applyIcon(mobileTabFilterBtn, "circle", { label: "筛选与来源" });
 updateFilterButtons();
 updateBatchActionButton();
 fetchReadingCheckpoint()
