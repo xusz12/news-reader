@@ -875,7 +875,7 @@ html[data-detail-font="large"] {
     bottom: 0;
     z-index: 45;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 6px;
     padding: 8px 10px calc(8px + var(--mobile-safe-bottom));
     border-top: 1px solid var(--border);

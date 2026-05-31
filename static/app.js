@@ -31,9 +31,7 @@ const markAllReadBtn = document.getElementById("markAllReadBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
-const mobileNavFeedBtn = document.getElementById("mobileNavFeedBtn");
-const mobileNavImportantBtn = document.getElementById("mobileNavImportantBtn");
-const mobileNavReadLaterBtn = document.getElementById("mobileNavReadLaterBtn");
+const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
 const mobileTabFilterBtn = document.getElementById("mobileTabFilterBtn");
 const sourceFilters = document.getElementById("sourceFilters");
 const mobileFilterSheet = document.getElementById("mobileFilterSheet");
@@ -41,6 +39,10 @@ const mobileFilterBackdrop = document.getElementById("mobileFilterBackdrop");
 const mobileFilterCloseBtn = document.getElementById("mobileFilterCloseBtn");
 const mobileFilterCollection = document.getElementById("mobileFilterCollection");
 const mobileSourceFilters = document.getElementById("mobileSourceFilters");
+const mobileCollectionSheet = document.getElementById("mobileCollectionSheet");
+const mobileCollectionBackdrop = document.getElementById("mobileCollectionBackdrop");
+const mobileCollectionCloseBtn = document.getElementById("mobileCollectionCloseBtn");
+const mobileCollectionOptions = document.getElementById("mobileCollectionOptions");
 const themeModeSelect = document.getElementById("themeModeSelect");
 const detailFontSelect = document.getElementById("detailFontSelect");
 
@@ -347,9 +349,15 @@ function updateCollectionButtons() {
   navFeedBtn.classList.toggle("active", state.collection === "feed");
   navImportantBtn.classList.toggle("active", state.collection === "important");
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
-  if (mobileNavFeedBtn) mobileNavFeedBtn.classList.toggle("active", state.collection === "feed");
-  if (mobileNavImportantBtn) mobileNavImportantBtn.classList.toggle("active", state.collection === "important");
-  if (mobileNavReadLaterBtn) mobileNavReadLaterBtn.classList.toggle("active", state.collection === "read_later");
+  if (mobileCollectionTriggerBtn) {
+    mobileCollectionTriggerBtn.classList.toggle("active", true);
+    const names = {
+      feed: "新闻流",
+      important: "重要",
+      read_later: "稍后",
+    };
+    mobileCollectionTriggerBtn.textContent = names[state.collection] || "新闻流";
+  }
 }
 
 function updateMobileFilterCollectionText() {
@@ -368,8 +376,45 @@ function closeMobileFilterSheet() {
   mobileFilterSheet.setAttribute("aria-hidden", "true");
 }
 
+function closeMobileCollectionSheet() {
+  if (!mobileCollectionSheet) return;
+  mobileCollectionSheet.classList.add("hidden");
+  mobileCollectionSheet.setAttribute("aria-hidden", "true");
+}
+
+function renderMobileCollectionOptions() {
+  if (!mobileCollectionOptions) return;
+  mobileCollectionOptions.innerHTML = "";
+  const options = [
+    { key: "feed", label: "新闻流" },
+    { key: "important", label: "重要" },
+    { key: "read_later", label: "稍后阅读" },
+  ];
+  for (const option of options) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "mobile-source-btn";
+    btn.textContent = option.label;
+    btn.classList.toggle("active", state.collection === option.key);
+    btn.addEventListener("click", async () => {
+      await switchCollection(option.key);
+      closeMobileCollectionSheet();
+    });
+    mobileCollectionOptions.appendChild(btn);
+  }
+}
+
+function openMobileCollectionSheet() {
+  if (!mobileCollectionSheet) return;
+  closeMobileFilterSheet();
+  renderMobileCollectionOptions();
+  mobileCollectionSheet.classList.remove("hidden");
+  mobileCollectionSheet.setAttribute("aria-hidden", "false");
+}
+
 function openMobileFilterSheet() {
   if (!mobileFilterSheet) return;
+  closeMobileCollectionSheet();
   updateMobileFilterCollectionText();
   renderSourceFilters(latestSourceOptions);
   mobileFilterSheet.classList.remove("hidden");
@@ -1122,6 +1167,7 @@ async function switchCollection(collection) {
   if (state.collection === collection) return;
   state.collection = collection;
   closeMobileFilterSheet();
+  closeMobileCollectionSheet();
   await loadFirstPage();
 }
 
@@ -1137,21 +1183,9 @@ navReadLaterBtn.addEventListener("click", async () => {
   await switchCollection("read_later");
 });
 
-if (mobileNavFeedBtn) {
-  mobileNavFeedBtn.addEventListener("click", async () => {
-    await switchCollection("feed");
-  });
-}
-
-if (mobileNavImportantBtn) {
-  mobileNavImportantBtn.addEventListener("click", async () => {
-    await switchCollection("important");
-  });
-}
-
-if (mobileNavReadLaterBtn) {
-  mobileNavReadLaterBtn.addEventListener("click", async () => {
-    await switchCollection("read_later");
+if (mobileCollectionTriggerBtn) {
+  mobileCollectionTriggerBtn.addEventListener("click", () => {
+    openMobileCollectionSheet();
   });
 }
 
@@ -1167,6 +1201,14 @@ if (mobileFilterBackdrop) {
 
 if (mobileFilterCloseBtn) {
   mobileFilterCloseBtn.addEventListener("click", closeMobileFilterSheet);
+}
+
+if (mobileCollectionBackdrop) {
+  mobileCollectionBackdrop.addEventListener("click", closeMobileCollectionSheet);
+}
+
+if (mobileCollectionCloseBtn) {
+  mobileCollectionCloseBtn.addEventListener("click", closeMobileCollectionSheet);
 }
 
 if (themeModeSelect) {
@@ -1324,7 +1366,6 @@ try {
 }
 applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
-if (mobileTabFilterBtn) applyIcon(mobileTabFilterBtn, "circle", { label: "筛选与来源" });
 updateFilterButtons();
 updateBatchActionButton();
 fetchReadingCheckpoint()
