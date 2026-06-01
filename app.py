@@ -595,6 +595,7 @@ def api_news():
     LEFT JOIN item_state st ON st.item_id = items.id
     LEFT JOIN detail_jobs dj ON dj.url = items.url
     LEFT JOIN article_details ad ON ad.url = items.url
+    LEFT JOIN article_notes an ON an.url = items.url
     """
     where_sql, args = _build_news_where_clause(q, read_filter, collection, source_filter)
 
@@ -615,6 +616,7 @@ def api_news():
                    dj.status AS detail_status,
                    dj.last_error AS detail_error,
                    CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+                   CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
                    aj.status AS ai_status,
                    aj.last_error AS ai_error,
                    CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready
@@ -975,6 +977,9 @@ def api_news_detail(item_id: str):
         url = item["url"] or ""
         job = None
         detail = None
+        ai_job = None
+        ai = None
+        note_row = None
         if url:
             job = conn.execute(
                 "SELECT status, attempts, last_error, queued_at, started_at, finished_at FROM detail_jobs WHERE url=?",
@@ -992,6 +997,10 @@ def api_news_detail(item_id: str):
                 "SELECT model, key_points_zh, conclusion_zh, body_zh, generated_at FROM article_ai WHERE url=?",
                 (url,),
             ).fetchone()
+            note_row = conn.execute(
+                "SELECT note, created_at, updated_at FROM article_notes WHERE url=?",
+                (url,),
+            ).fetchone()
     finally:
         conn.close()
 
@@ -1006,6 +1015,60 @@ def api_news_detail(item_id: str):
             "ai_status": (ai_job["status"] if ai_job else "none"),
             "ai_job": dict(ai_job) if ai_job else None,
             "ai": dict(ai) if ai else None,
+            "has_note": 1 if note_row else 0,
+            "note": (dict(note_row) if note_row else None),
+        }
+    )
+
+
+@app.put("/api/news/<item_id>/note")
+def api_news_note_upsert(item_id: str):
+    body = request.get_json(silent=True) or {}
+    raw_note = body.get("note")
+    if raw_note is None:
+        return jsonify({"ok": False, "error": "missing_note"}), 400
+    if not isinstance(raw_note, str):
+        return jsonify({"ok": False, "error": "invalid_note"}), 400
+    note_text = raw_note.strip()
+
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+
+        with conn:
+            if note_text:
+                ts = now_ts()
+                conn.execute(
+                    """
+                    INSERT INTO article_notes(url, note, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(url) DO UPDATE SET
+                      note=excluded.note,
+                      updated_at=excluded.updated_at
+                    """,
+                    (url, note_text, ts, ts),
+                )
+            else:
+                conn.execute("DELETE FROM article_notes WHERE url=?", (url,))
+
+        saved = conn.execute(
+            "SELECT note, created_at, updated_at FROM article_notes WHERE url=?",
+            (url,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "has_note": 1 if saved else 0,
+            "note": (dict(saved) if saved else None),
         }
     )
 

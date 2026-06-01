@@ -61,6 +61,13 @@ const detailAiPoints = document.getElementById("detailAiPoints");
 const detailAiConclusion = document.getElementById("detailAiConclusion");
 const detailOriginalWrap = document.getElementById("detailOriginalWrap");
 const detailOriginalContent = document.getElementById("detailOriginalContent");
+const detailNoteToggleBtn = document.getElementById("detailNoteToggleBtn");
+const detailNoteCard = document.getElementById("detailNoteCard");
+const detailNoteText = document.getElementById("detailNoteText");
+const detailNoteEditor = document.getElementById("detailNoteEditor");
+const detailNoteInput = document.getElementById("detailNoteInput");
+const detailNoteSaveBtn = document.getElementById("detailNoteSaveBtn");
+const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
 
 let readObserver = null;
 let loadObserver = null;
@@ -86,6 +93,7 @@ const MOBILE_BREAKPOINT_QUERY = "(max-width: 768px)";
 const DETAIL_SWIPE_CLOSE_PX = 72;
 const DETAIL_SWIPE_EDGE_PX = 40;
 const DETAIL_SWIPE_AXIS_RATIO = 1.5;
+const NOTE_MAX_LEN = 5000;
 
 function setHint(text) {
   listHint.textContent = text || "";
@@ -290,6 +298,11 @@ function syncRowUI(li, item) {
 
   const unreadDot = li.querySelector(".unread-dot");
   if (unreadDot) unreadDot.classList.toggle("hidden", !!item.read_at);
+  const noteBadge = li.querySelector(".note-badge");
+  if (noteBadge) {
+    const hasNote = Number(item.has_note || 0) === 1;
+    noteBadge.classList.toggle("hidden", !hasNote);
+  }
 
   const importantBtn = li.querySelector(".btn-important");
   if (importantBtn) {
@@ -714,6 +727,48 @@ function handleDetailTouchEnd() {
   detailPanel.style.transform = "";
 }
 
+function setDetailNoteEditorOpen(open) {
+  detailNoteEditor.classList.toggle("hidden", !open);
+}
+
+function normalizedDetailNote(cached) {
+  const text = cached?.note?.note;
+  return typeof text === "string" ? text.trim() : "";
+}
+
+function refreshDetailNoteUI(item) {
+  const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
+  const noteText = normalizedDetailNote(cached);
+  const hasNote = noteText.length > 0;
+  item.has_note = hasNote ? 1 : 0;
+
+  detailNoteToggleBtn.textContent = hasNote ? "编辑想法" : "写想法";
+  detailNoteCard.classList.toggle("hidden", !hasNote);
+  detailNoteText.textContent = hasNote ? noteText : "";
+  if (!detailNoteEditor.classList.contains("hidden") && !detailNoteSaveBtn.disabled) {
+    detailNoteInput.value = noteText;
+  }
+}
+
+async function saveDetailNote(item, noteText) {
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/note`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note: noteText }),
+  });
+  if (!res.ok) throw new Error("save_note_failed");
+  const payload = await res.json();
+  if (!payload.ok) throw new Error(payload.error || "save_note_failed");
+  const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
+  cached.has_note = payload.has_note;
+  cached.note = payload.note;
+  if (item.url) state.detailCacheByUrl.set(item.url, cached);
+  item.has_note = payload.has_note;
+  state.itemsById.set(item.id, item);
+  rerenderOne(item.id);
+  refreshDetailNoteUI(item);
+}
+
 function renderDetail(item) {
   if (!item) {
     stopDetailPolling();
@@ -746,10 +801,12 @@ function renderDetail(item) {
     link.href = item.url;
     link.classList.remove("disabled");
     link.textContent = "打开原文";
+    detailNoteToggleBtn.disabled = false;
   } else {
     link.href = "#";
     link.classList.add("disabled");
     link.textContent = "无原文链接";
+    detailNoteToggleBtn.disabled = true;
   }
 
   const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
@@ -769,6 +826,8 @@ function renderDetail(item) {
   retranslateBtn.textContent = "重新翻译";
   retranslateBtn.disabled = false;
   retranslateBtn.classList.add("hidden");
+  setDetailNoteEditorOpen(false);
+  detailNoteInput.value = "";
 
   if (detail && detail.content) {
     const original = detail.content;
@@ -862,6 +921,7 @@ function renderDetail(item) {
     tone: item.important_at ? "danger" : "default",
     label: item.important_at ? "取消重要" : "标为重要",
   });
+  refreshDetailNoteUI(item);
 }
 
 async function fetchDetail(itemId) {
@@ -879,6 +939,7 @@ async function loadDetail(itemId) {
   state.detailCacheByUrl.set(item.url, payload);
   item.detail_status = payload.detail_status;
   item.detail_ready = payload.detail ? 1 : 0;
+  item.has_note = Number(payload.has_note || 0);
   item.ai_status = payload.ai_status || "none";
   item.ai_ready = payload.ai ? 1 : 0;
   if (payload.job && payload.job.last_error) item.detail_error = payload.job.last_error;
@@ -1005,6 +1066,10 @@ function buildItemRow(item) {
     videoBadge.textContent = "VIDEO";
     line1.appendChild(videoBadge);
   }
+  const noteBadge = document.createElement("span");
+  noteBadge.className = "note-badge hidden";
+  noteBadge.textContent = "想法";
+  line1.appendChild(noteBadge);
 
   const title = document.createElement("div");
   title.className = "title";
@@ -1417,6 +1482,41 @@ detailRetranslateBtn.addEventListener("click", async () => {
     startDetailPolling(state.selectedId);
   } finally {
     detailRetranslateBtn.disabled = false;
+  }
+});
+
+detailNoteToggleBtn.addEventListener("click", () => {
+  if (!state.selectedId) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item) return;
+  const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
+  detailNoteInput.value = normalizedDetailNote(cached);
+  setDetailNoteEditorOpen(true);
+  detailNoteInput.focus();
+});
+
+detailNoteCancelBtn.addEventListener("click", () => {
+  if (!state.selectedId) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item) return;
+  const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
+  detailNoteInput.value = normalizedDetailNote(cached);
+  setDetailNoteEditorOpen(false);
+});
+
+detailNoteSaveBtn.addEventListener("click", async () => {
+  if (!state.selectedId) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item) return;
+  const noteText = detailNoteInput.value.slice(0, NOTE_MAX_LEN);
+  detailNoteSaveBtn.disabled = true;
+  detailNoteCancelBtn.disabled = true;
+  try {
+    await saveDetailNote(item, noteText);
+    setDetailNoteEditorOpen(false);
+  } finally {
+    detailNoteSaveBtn.disabled = false;
+    detailNoteCancelBtn.disabled = false;
   }
 });
 

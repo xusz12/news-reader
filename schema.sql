@@ -98,3 +98,10 @@ CREATE TABLE IF NOT EXISTS reading_checkpoints (
   title TEXT,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS article_notes (
+  url TEXT PRIMARY KEY,
+  note TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);

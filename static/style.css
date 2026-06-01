@@ -27,6 +27,9 @@
   --video-badge-border: #f59e0b;
   --video-badge-text: #92400e;
   --video-badge-bg: #fffbeb;
+  --note-badge-border: #60a5fa;
+  --note-badge-text: #1d4ed8;
+  --note-badge-bg: #eff6ff;
   --topbar-h: 60px;
   --sticky-gap: 12px;
   --sticky-top: calc(var(--topbar-h) + var(--sticky-gap));
@@ -56,6 +59,9 @@ html[data-theme="dark"] {
   --video-badge-border: #fbbf24;
   --video-badge-text: #fcd34d;
   --video-badge-bg: #1f2937;
+  --note-badge-border: #3b82f6;
+  --note-badge-text: #bfdbfe;
+  --note-badge-bg: #1e3a8a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -82,6 +88,9 @@ html[data-theme="dark"] {
     --video-badge-border: #fbbf24;
     --video-badge-text: #fcd34d;
     --video-badge-bg: #1f2937;
+    --note-badge-border: #3b82f6;
+    --note-badge-text: #bfdbfe;
+    --note-badge-bg: #1e3a8a;
   }
 }
 
@@ -383,6 +392,21 @@ button.active {
   flex: 0 0 auto;
 }
 
+.note-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--note-badge-border);
+  color: var(--note-badge-text);
+  background: var(--note-badge-bg);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex: 0 0 auto;
+}
+
 .unread-dot {
   width: 8px;
   height: 8px;
@@ -533,6 +557,55 @@ html[data-detail-font="large"] {
   background: var(--detail-card-bg);
   border-radius: 10px;
   padding: 10px 12px;
+}
+
+.detail-note-card {
+  margin-bottom: 10px;
+  border: 1px solid var(--detail-card-border);
+  background: var(--detail-card-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.detail-note-card h4 {
+  margin: 0 0 8px;
+  font-size: calc(13px * var(--detail-font-scale));
+  color: var(--detail-text);
+}
+
+.detail-note-text {
+  margin: 0;
+  color: var(--detail-text);
+  line-height: 1.52;
+  white-space: pre-wrap;
+}
+
+.detail-note-editor {
+  margin-bottom: 10px;
+}
+
+.detail-note-input {
+  width: 100%;
+  min-height: 88px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.detail-note-input:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 1px;
+}
+
+.detail-note-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
 }
 
 .detail-ai-box h4 {

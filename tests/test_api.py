@@ -496,3 +496,60 @@ def test_news_status_batch_endpoint(tmp_path: Path, monkeypatch):
     assert len(payload["items"]) == 2
     returned_ids = {x["id"] for x in payload["items"]}
     assert returned_ids == set(ids)
+
+
+def test_article_note_save_read_and_clear(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-01.md").write_text(
+        """## Reuters · World（1条）
+### [Note Item](https://example.com/n1)
+- 发布时间：2026-06-01 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    item_id = item["id"]
+    assert int(item.get("has_note") or 0) == 0
+
+    save = client.put(
+        f"/api/news/{item_id}/note",
+        json={"note": "这是我的第一条想法。"},
+    )
+    assert save.status_code == 200
+    save_payload = save.get_json()
+    assert save_payload["ok"] is True
+    assert save_payload["has_note"] == 1
+    assert save_payload["note"]["note"] == "这是我的第一条想法。"
+
+    detail = client.get(f"/api/news/{item_id}/detail")
+    assert detail.status_code == 200
+    detail_payload = detail.get_json()
+    assert detail_payload["ok"] is True
+    assert detail_payload["has_note"] == 1
+    assert detail_payload["note"]["note"] == "这是我的第一条想法。"
+
+    listed = client.get("/api/news?per=20").get_json()["items"][0]
+    assert int(listed.get("has_note") or 0) == 1
+
+    clear = client.put(f"/api/news/{item_id}/note", json={"note": "   "})
+    assert clear.status_code == 200
+    clear_payload = clear.get_json()
+    assert clear_payload["ok"] is True
+    assert clear_payload["has_note"] == 0
+    assert clear_payload["note"] is None
+
+    detail2 = client.get(f"/api/news/{item_id}/detail").get_json()
+    assert detail2["has_note"] == 0
+    assert detail2["note"] is None
