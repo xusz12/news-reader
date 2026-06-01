@@ -84,6 +84,7 @@ let detailPollTimer = null;
 let rowStatusPollTimer = null;
 let marketPickerDirection = null;
 let lastListScrollTop = 0;
+let lastScrollDirectionDown = false;
 let lastRenderedDateKey = null;
 let latestSourceOptions = [];
 const detailSwipeState = {
@@ -1164,14 +1165,20 @@ function startDetailPolling(itemId) {
 }
 
 function setupReadObserver() {
+  if (state.collection !== "feed") {
+    if (readObserver) {
+      readObserver.disconnect();
+      readObserver = null;
+    }
+    return;
+  }
   if (readObserver) readObserver.disconnect();
   readObserver = new IntersectionObserver(
     (entries) => {
       if (document.hidden) return;
-      const currentTop = newsList.scrollTop;
-      const scrollingDown = currentTop > lastListScrollTop;
-      lastListScrollTop = currentTop;
-      const listTop = newsList.getBoundingClientRect().top;
+      if (state.collection !== "feed") return;
+      const scrollingDown = lastScrollDirectionDown;
+      const listTop = entries[0]?.rootBounds?.top ?? newsList.getBoundingClientRect().top;
 
       for (const entry of entries) {
         const el = entry.target;
@@ -1188,10 +1195,31 @@ function setupReadObserver() {
         }
       }
     },
-    { threshold: [0] }
+    { root: newsList, threshold: [0] }
   );
 
   document.querySelectorAll(".news-item").forEach((el) => readObserver.observe(el));
+}
+
+function processFeedAutoReadByScroll() {
+  if (state.collection !== "feed") return;
+  if (document.hidden) return;
+  if (!lastScrollDirectionDown) return;
+  const listRect = newsList.getBoundingClientRect();
+  const listTop = listRect.top;
+  const listBottom = listRect.bottom;
+  newsList.querySelectorAll(".news-item").forEach((el) => {
+    const id = el.dataset.id;
+    if (!id) return;
+    const rect = el.getBoundingClientRect();
+    const intersectsList = rect.bottom > listTop && rect.top < listBottom;
+    if (intersectsList) enteredViewport.add(id);
+    if (!enteredViewport.has(id)) return;
+    if (rowIsRead(el)) return;
+    if (rect.bottom < listTop) {
+      patchStateWithRollback(id, { read: true });
+    }
+  });
 }
 
 function setupLoadObserver() {
@@ -1730,7 +1758,10 @@ detailLink.addEventListener("click", async (e) => {
 });
 
 newsList.addEventListener("scroll", () => {
-  lastListScrollTop = newsList.scrollTop;
+  const currentTop = newsList.scrollTop;
+  lastScrollDirectionDown = currentTop > lastListScrollTop;
+  lastListScrollTop = currentTop;
+  processFeedAutoReadByScroll();
 });
 
 document.addEventListener("visibilitychange", () => {
