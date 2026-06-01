@@ -3,8 +3,8 @@ let state = {
   pages: 1,
   q: "",
   per: 30,
-  readFilter: "all", // all | unread
-  feedReadFilter: "all", // 仅新闻流记忆 all | unread
+  readFilter: "unread", // all | unread
+  feedReadFilter: "unread", // 仅新闻流记忆 all | unread
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
   collection: "feed", // feed | important | read_later
   total: 0,
