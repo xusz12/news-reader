@@ -32,6 +32,7 @@ const navFeedBtn = document.getElementById("navFeedBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
+const navMarketTagsBtn = document.getElementById("navMarketTagsBtn");
 const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
 const mobileTabFilterBtn = document.getElementById("mobileTabFilterBtn");
 const sourceFilters = document.getElementById("sourceFilters");
@@ -69,6 +70,13 @@ const detailNoteEditor = document.getElementById("detailNoteEditor");
 const detailNoteInput = document.getElementById("detailNoteInput");
 const detailNoteSaveBtn = document.getElementById("detailNoteSaveBtn");
 const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
+const detailBullishBtn = document.getElementById("detailBullishBtn");
+const detailBearishBtn = document.getElementById("detailBearishBtn");
+const detailMarketTagsCard = document.getElementById("detailMarketTagsCard");
+const detailMarketTagsList = document.getElementById("detailMarketTagsList");
+const detailMarketPicker = document.getElementById("detailMarketPicker");
+const detailMarketPickerTitle = document.getElementById("detailMarketPickerTitle");
+const detailMarketPickerOptions = document.getElementById("detailMarketPickerOptions");
 
 let readObserver = null;
 let loadObserver = null;
@@ -95,6 +103,7 @@ const DETAIL_SWIPE_CLOSE_PX = 72;
 const DETAIL_SWIPE_EDGE_PX = 40;
 const DETAIL_SWIPE_AXIS_RATIO = 1.5;
 const NOTE_MAX_LEN = 5000;
+const MARKET_TAG_CHOICES = ["存储", "电力", "房地产", "APPLE", "AI", "医疗", "稀土", "矿产", "新能源", "中国资产"];
 
 function setHint(text) {
   listHint.textContent = text || "";
@@ -232,6 +241,12 @@ function iconSvg(name, filled = false) {
   if (name === "pen") {
     return `<svg ${common}><path d="m4 20 4.1-1 9.3-9.3a1.7 1.7 0 0 0 0-2.4l-.7-.7a1.7 1.7 0 0 0-2.4 0L5 15.9 4 20Z"/><path d="m12.9 7.1 4 4"/></svg>`;
   }
+  if (name === "trend-up") {
+    return `<svg ${common}><path d="M4.5 15.5 9.2 10.8l3.2 3.2 6.8-6.8"/><path d="M15.6 7.2h3.6v3.6"/></svg>`;
+  }
+  if (name === "trend-down") {
+    return `<svg ${common}><path d="M4.5 8.5 9.2 13.2l3.2-3.2 6.8 6.8"/><path d="M15.6 16.8h3.6v-3.6"/></svg>`;
+  }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
 
@@ -307,6 +322,18 @@ function syncRowUI(li, item) {
     const hasNote = Number(item.has_note || 0) === 1;
     noteBadge.classList.toggle("hidden", !hasNote);
   }
+  const marketTagsWrap = li.querySelector(".market-tags");
+  if (marketTagsWrap) {
+    marketTagsWrap.innerHTML = "";
+    const tags = marketTagsFromItem(item);
+    tags.forEach((mt) => {
+      const badge = document.createElement("span");
+      badge.className = `market-tag-badge ${mt.direction}`;
+      badge.textContent = mt.tag;
+      marketTagsWrap.appendChild(badge);
+    });
+    marketTagsWrap.classList.toggle("hidden", tags.length === 0);
+  }
 
   const importantBtn = li.querySelector(".btn-important");
   if (importantBtn) {
@@ -365,7 +392,7 @@ function applyResumeIcon(label = "回到上次阅读") {
 }
 
 function updateBatchActionButton() {
-  if (state.collection === "important" || state.collection === "notes") {
+  if (state.collection === "important" || state.collection === "notes" || state.collection === "market_tags") {
     markAllReadBtn.classList.add("hidden");
     markAllReadBtn.disabled = false;
     return;
@@ -383,6 +410,7 @@ function updateCollectionButtons() {
   navImportantBtn.classList.toggle("active", state.collection === "important");
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
   if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
+  if (navMarketTagsBtn) navMarketTagsBtn.classList.toggle("active", state.collection === "market_tags");
   if (mobileCollectionTriggerBtn) {
     mobileCollectionTriggerBtn.classList.toggle("active", true);
     const names = {
@@ -390,6 +418,7 @@ function updateCollectionButtons() {
       important: "重要",
       read_later: "稍后",
       notes: "想法",
+      market_tags: "板块",
     };
     mobileCollectionTriggerBtn.textContent = names[state.collection] || "新闻流";
   }
@@ -402,6 +431,7 @@ function updateMobileFilterCollectionText() {
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
+    market_tags: "板块",
   };
   mobileFilterCollection.textContent = `当前集合：${names[state.collection] || "新闻流"}`;
 }
@@ -426,6 +456,7 @@ function renderMobileCollectionOptions() {
     { key: "important", label: "重要" },
     { key: "read_later", label: "稍后阅读" },
     { key: "notes", label: "想法" },
+    { key: "market_tags", label: "板块" },
   ];
   for (const option of options) {
     const btn = document.createElement("button");
@@ -531,6 +562,7 @@ function renderMeta() {
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
+    market_tags: "板块",
   };
   const readNames = {
     all: "全部",
@@ -745,6 +777,61 @@ function normalizedDetailNote(cached) {
   return typeof text === "string" ? text.trim() : "";
 }
 
+function normalizeMarketTags(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((x) => {
+      const tag = typeof x?.tag === "string" ? x.tag.trim() : "";
+      const direction = x?.direction === "bearish" ? "bearish" : "bullish";
+      if (!tag) return null;
+      return { tag, direction };
+    })
+    .filter(Boolean);
+}
+
+function marketTagsFromItem(item) {
+  return normalizeMarketTags(item?.market_tags);
+}
+
+async function upsertMarketTag(item, tag, direction) {
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/market-tag`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tag, direction }),
+  });
+  if (!res.ok) throw new Error("save_market_tag_failed");
+  const payload = await res.json();
+  if (!payload.ok) throw new Error(payload.error || "save_market_tag_failed");
+  const tags = normalizeMarketTags(payload.market_tags || []);
+  const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
+  cached.market_tags = tags;
+  cached.has_market_tags = payload.has_market_tags;
+  if (item.url) state.detailCacheByUrl.set(item.url, cached);
+  item.market_tags = tags;
+  item.has_market_tags = Number(payload.has_market_tags || 0);
+  state.itemsById.set(item.id, item);
+  rerenderOne(item.id);
+}
+
+async function deleteMarketTag(item, tag) {
+  const params = new URLSearchParams({ tag });
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/market-tag?${params.toString()}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("delete_market_tag_failed");
+  const payload = await res.json();
+  if (!payload.ok) throw new Error(payload.error || "delete_market_tag_failed");
+  const tags = normalizeMarketTags(payload.market_tags || []);
+  const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
+  cached.market_tags = tags;
+  cached.has_market_tags = payload.has_market_tags;
+  if (item.url) state.detailCacheByUrl.set(item.url, cached);
+  item.market_tags = tags;
+  item.has_market_tags = Number(payload.has_market_tags || 0);
+  state.itemsById.set(item.id, item);
+  rerenderOne(item.id);
+}
+
 function refreshDetailNoteUI(item) {
   const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
   const noteText = normalizedDetailNote(cached);
@@ -763,6 +850,55 @@ function refreshDetailNoteUI(item) {
   if (!detailNoteEditor.classList.contains("hidden") && !detailNoteSaveBtn.disabled) {
     detailNoteInput.value = noteText;
   }
+}
+
+function closeMarketPicker() {
+  detailMarketPicker.classList.add("hidden");
+  detailMarketPickerOptions.innerHTML = "";
+}
+
+function refreshDetailMarketTagsUI(item) {
+  const tags = marketTagsFromItem(item);
+  detailMarketTagsList.innerHTML = "";
+  tags.forEach((mt) => {
+    const chip = document.createElement("span");
+    chip.className = `detail-market-tag ${mt.direction}`;
+    chip.textContent = mt.tag;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "detail-market-remove";
+    removeBtn.textContent = "×";
+    removeBtn.title = `删除标签：${mt.tag}`;
+    removeBtn.setAttribute("aria-label", `删除标签：${mt.tag}`);
+    removeBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await deleteMarketTag(item, mt.tag);
+      refreshDetailMarketTagsUI(item);
+    });
+
+    chip.appendChild(removeBtn);
+    detailMarketTagsList.appendChild(chip);
+  });
+  detailMarketTagsCard.classList.toggle("hidden", tags.length === 0);
+}
+
+function openMarketPicker(item, direction) {
+  detailMarketPickerOptions.innerHTML = "";
+  detailMarketPickerTitle.textContent = direction === "bullish" ? "选择看多板块" : "选择看空板块";
+  MARKET_TAG_CHOICES.forEach((tag) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "detail-market-option";
+    btn.textContent = tag;
+    btn.addEventListener("click", async () => {
+      await upsertMarketTag(item, tag, direction);
+      closeMarketPicker();
+      refreshDetailMarketTagsUI(item);
+    });
+    detailMarketPickerOptions.appendChild(btn);
+  });
+  detailMarketPicker.classList.remove("hidden");
 }
 
 async function saveDetailNote(item, noteText) {
@@ -787,6 +923,7 @@ async function saveDetailNote(item, noteText) {
 function renderDetail(item) {
   if (!item) {
     stopDetailPolling();
+    closeMarketPicker();
     detailBody.classList.add("hidden");
     detailEmpty.classList.remove("hidden");
     return;
@@ -841,6 +978,9 @@ function renderDetail(item) {
   retranslateBtn.textContent = "重新翻译";
   retranslateBtn.disabled = false;
   retranslateBtn.classList.add("hidden");
+  closeMarketPicker();
+  detailMarketTagsCard.classList.add("hidden");
+  detailMarketTagsList.innerHTML = "";
   setDetailNoteEditorOpen(false);
   detailNoteInput.value = "";
 
@@ -936,7 +1076,10 @@ function renderDetail(item) {
     tone: item.important_at ? "danger" : "default",
     label: item.important_at ? "取消重要" : "标为重要",
   });
+  applyIcon(detailBullishBtn, "trend-up", { tone: "danger", label: "看多板块标记" });
+  applyIcon(detailBearishBtn, "trend-down", { tone: "success", label: "看空板块标记" });
   refreshDetailNoteUI(item);
+  refreshDetailMarketTagsUI(item);
 }
 
 async function fetchDetail(itemId) {
@@ -955,6 +1098,8 @@ async function loadDetail(itemId) {
   item.detail_status = payload.detail_status;
   item.detail_ready = payload.detail ? 1 : 0;
   item.has_note = Number(payload.has_note || 0);
+  item.market_tags = normalizeMarketTags(payload.market_tags || []);
+  item.has_market_tags = Number(payload.has_market_tags || 0);
   item.ai_status = payload.ai_status || "none";
   item.ai_ready = payload.ai ? 1 : 0;
   if (payload.job && payload.job.last_error) item.detail_error = payload.job.last_error;
@@ -1094,6 +1239,9 @@ function buildItemRow(item) {
   summary.className = "summary";
   summary.textContent = item.summary || "";
 
+  const marketTagsWrap = document.createElement("div");
+  marketTagsWrap.className = "market-tags hidden";
+
   const actions = document.createElement("div");
   actions.className = "row-actions";
   const btnImportant = document.createElement("button");
@@ -1122,6 +1270,7 @@ function buildItemRow(item) {
   li.appendChild(line1);
   li.appendChild(title);
   if (item.summary) li.appendChild(summary);
+  li.appendChild(marketTagsWrap);
   li.appendChild(actions);
 
   li.addEventListener("click", () => {
@@ -1352,6 +1501,11 @@ if (navNotesBtn) {
     await switchCollection("notes");
   });
 }
+if (navMarketTagsBtn) {
+  navMarketTagsBtn.addEventListener("click", async () => {
+    await switchCollection("market_tags");
+  });
+}
 
 if (mobileCollectionTriggerBtn) {
   mobileCollectionTriggerBtn.addEventListener("click", () => {
@@ -1394,7 +1548,7 @@ if (detailFontSelect) {
 }
 
 markAllReadBtn.addEventListener("click", async () => {
-  if (state.collection === "important" || state.collection === "notes") return;
+  if (state.collection === "important" || state.collection === "notes" || state.collection === "market_tags") return;
 
   const readLaterMode = state.collection === "read_later";
   const ok = window.confirm(
@@ -1456,6 +1610,20 @@ detailImportantBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;
   const current = !!state.itemsById.get(state.selectedId)?.important_at;
   await patchStateWithRollback(state.selectedId, { important: !current });
+});
+
+detailBullishBtn.addEventListener("click", () => {
+  if (!state.selectedId) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item) return;
+  openMarketPicker(item, "bullish");
+});
+
+detailBearishBtn.addEventListener("click", () => {
+  if (!state.selectedId) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item) return;
+  openMarketPicker(item, "bearish");
 });
 
 const detailRetryBtn = document.getElementById("detailRetryBtn");

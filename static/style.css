@@ -474,6 +474,33 @@ button.active {
   height: 16px;
 }
 
+.market-tags {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.market-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.market-tag-badge.bullish {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.market-tag-badge.bearish {
+  color: #065f46;
+  background: #d1fae5;
+}
+
 
 .tone-default {
   color: #6b7280;
@@ -586,6 +613,90 @@ html[data-detail-font="large"] {
 
 .detail-note-editor {
   margin-bottom: 10px;
+}
+
+.detail-market-tags-card {
+  margin-bottom: 10px;
+  border: 1px solid var(--detail-card-border);
+  background: var(--detail-card-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.detail-market-tags-card h4 {
+  margin: 0 0 8px;
+  font-size: calc(13px * var(--detail-font-scale));
+  color: var(--detail-text);
+}
+
+.detail-market-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-market-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.detail-market-tag.bullish {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.detail-market-tag.bearish {
+  color: #065f46;
+  background: #d1fae5;
+}
+
+.detail-market-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  font-size: 13px;
+}
+
+.detail-market-picker {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--panel);
+}
+
+.detail-market-picker-title {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.detail-market-picker-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-market-option {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.detail-market-option:hover {
+  background: var(--row-hover);
 }
 
 .detail-note-input {

@@ -32,6 +32,7 @@
         <button id="navImportantBtn" class="nav-btn">重要新闻</button>
         <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
         <button id="navNotesBtn" class="nav-btn">想法</button>
+        <button id="navMarketTagsBtn" class="nav-btn">板块</button>
 
         <h2 class="sources-title">订阅源</h2>
         <div id="sourceFilters" class="source-filters"></div>
@@ -66,9 +67,19 @@
             <button id="detailRetranslateBtn" class="detail-retry-btn hidden" type="button">重新翻译</button>
             <span class="detail-action-spacer" aria-hidden="true"></span>
             <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
+            <button id="detailBullishBtn" class="icon-btn" type="button" title="看多板块标记" aria-label="看多板块标记"></button>
+            <button id="detailBearishBtn" class="icon-btn" type="button" title="看空板块标记" aria-label="看空板块标记"></button>
             <button id="detailImportantBtn" class="icon-btn" type="button"></button>
           </div>
           <div class="detail-scroll-area">
+            <section id="detailMarketTagsCard" class="detail-market-tags-card hidden">
+              <h4>板块标签</h4>
+              <div id="detailMarketTagsList" class="detail-market-tags-list"></div>
+            </section>
+            <section id="detailMarketPicker" class="detail-market-picker hidden">
+              <div id="detailMarketPickerTitle" class="detail-market-picker-title">选择板块</div>
+              <div id="detailMarketPickerOptions" class="detail-market-picker-options"></div>
+            </section>
             <section id="detailNoteCard" class="detail-note-card hidden">
               <h4>我的想法</h4>
               <p id="detailNoteText" class="detail-note-text"></p>

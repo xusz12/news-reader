@@ -46,6 +46,20 @@ SOURCE_LABELS = {
     "x": "X",
 }
 
+MARKET_TAG_CHOICES = [
+    "存储",
+    "电力",
+    "房地产",
+    "APPLE",
+    "AI",
+    "医疗",
+    "稀土",
+    "矿产",
+    "新能源",
+    "中国资产",
+]
+MARKET_DIRECTIONS = {"bullish", "bearish"}
+
 NEWS_ORDER_BY_SQL = """
 COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) DESC,
 items.published_at ASC,
@@ -149,6 +163,8 @@ def _build_news_where_clause(
         where.append("st.read_later_at IS NOT NULL")
     elif collection == "notes":
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
+    elif collection == "market_tags":
+        where.append("EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)")
     source_clause, source_args = build_source_filter_clause(source_filter)
     if source_clause:
         where.append(source_clause)
@@ -173,6 +189,35 @@ def ensure_db() -> None:
 
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def load_market_tags_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str, list[dict]]:
+    if not urls:
+        return {}
+    uniq_urls = [u for u in dict.fromkeys(urls) if u]
+    if not uniq_urls:
+        return {}
+    placeholders = ",".join(["?"] * len(uniq_urls))
+    rows = conn.execute(
+        f"""
+        SELECT url, tag, direction, created_at, updated_at
+        FROM article_market_tags
+        WHERE url IN ({placeholders})
+        ORDER BY updated_at DESC, tag ASC
+        """,
+        uniq_urls,
+    ).fetchall()
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        grouped.setdefault(r["url"], []).append(
+            {
+                "tag": r["tag"],
+                "direction": r["direction"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+        )
+    return grouped
 
 
 def derive_date_meta(published_at: str | None, raw_date: str | None) -> tuple[str, str]:
@@ -632,11 +677,16 @@ def api_news():
             """,
             [*args, per, offset],
         ).fetchall()
+        urls = [r["url"] for r in rows if r["url"]]
+        market_tags_map = load_market_tags_map(conn, urls)
     finally:
         conn.close()
 
     items = [dict(r) for r in rows]
     for item in items:
+        tags = market_tags_map.get(item.get("url") or "", [])
+        item["market_tags"] = tags
+        item["has_market_tags"] = 1 if tags else 0
         item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
         date_key, date_label = derive_date_meta(item.get("published_at"), item.get("date"))
         item["date_key"] = date_key
@@ -711,6 +761,8 @@ def api_sources():
         where.append("st.read_later_at IS NOT NULL")
     elif collection == "notes":
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
+    elif collection == "market_tags":
+        where.append("EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)")
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()
@@ -984,6 +1036,7 @@ def api_news_detail(item_id: str):
         ai_job = None
         ai = None
         note_row = None
+        market_tags: list[dict] = []
         if url:
             job = conn.execute(
                 "SELECT status, attempts, last_error, queued_at, started_at, finished_at FROM detail_jobs WHERE url=?",
@@ -1005,6 +1058,7 @@ def api_news_detail(item_id: str):
                 "SELECT note, created_at, updated_at FROM article_notes WHERE url=?",
                 (url,),
             ).fetchone()
+            market_tags = load_market_tags_map(conn, [url]).get(url, [])
     finally:
         conn.close()
 
@@ -1021,6 +1075,9 @@ def api_news_detail(item_id: str):
             "ai": dict(ai) if ai else None,
             "has_note": 1 if note_row else 0,
             "note": (dict(note_row) if note_row else None),
+            "market_tags": market_tags,
+            "has_market_tags": 1 if market_tags else 0,
+            "market_tag_choices": MARKET_TAG_CHOICES,
         }
     )
 
@@ -1073,6 +1130,92 @@ def api_news_note_upsert(item_id: str):
             "item_id": item_id,
             "has_note": 1 if saved else 0,
             "note": (dict(saved) if saved else None),
+        }
+    )
+
+
+@app.put("/api/news/<item_id>/market-tag")
+def api_news_market_tag_upsert(item_id: str):
+    body = request.get_json(silent=True) or {}
+    raw_tag = body.get("tag")
+    raw_direction = body.get("direction")
+    if not isinstance(raw_tag, str) or not raw_tag.strip():
+        return jsonify({"ok": False, "error": "invalid_tag"}), 400
+    if not isinstance(raw_direction, str):
+        return jsonify({"ok": False, "error": "invalid_direction"}), 400
+    tag = raw_tag.strip()
+    direction = raw_direction.strip().lower()
+    if tag not in MARKET_TAG_CHOICES:
+        return jsonify({"ok": False, "error": "unsupported_tag"}), 400
+    if direction not in MARKET_DIRECTIONS:
+        return jsonify({"ok": False, "error": "invalid_direction"}), 400
+
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+
+        ts = now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_market_tags(url, tag, direction, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(url, tag) DO UPDATE SET
+                  direction=excluded.direction,
+                  updated_at=excluded.updated_at
+                """,
+                (url, tag, direction, ts, ts),
+            )
+        market_tags = load_market_tags_map(conn, [url]).get(url, [])
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "market_tags": market_tags,
+            "has_market_tags": 1 if market_tags else 0,
+        }
+    )
+
+
+@app.delete("/api/news/<item_id>/market-tag")
+def api_news_market_tag_delete(item_id: str):
+    raw_tag = (request.args.get("tag") or "").strip()
+    if not raw_tag:
+        return jsonify({"ok": False, "error": "missing_tag"}), 400
+    if raw_tag not in MARKET_TAG_CHOICES:
+        return jsonify({"ok": False, "error": "unsupported_tag"}), 400
+
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        with conn:
+            conn.execute(
+                "DELETE FROM article_market_tags WHERE url=? AND tag=?",
+                (url, raw_tag),
+            )
+        market_tags = load_market_tags_map(conn, [url]).get(url, [])
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "market_tags": market_tags,
+            "has_market_tags": 1 if market_tags else 0,
         }
     )
 
@@ -1189,6 +1332,8 @@ def api_clear_read_later():
         where.append("st.important_at IS NOT NULL")
     elif collection == "notes":
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
+    elif collection == "market_tags":
+        where.append("EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)")
     where.append("st.read_later_at IS NOT NULL")
     source_clause, source_args = build_source_filter_clause(source_filter)
     if source_clause:

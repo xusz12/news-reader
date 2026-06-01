@@ -105,3 +105,12 @@ CREATE TABLE IF NOT EXISTS article_notes (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS article_market_tags (
+  url TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (url, tag)
+);

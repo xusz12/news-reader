@@ -609,3 +609,100 @@ def test_notes_collection_and_sources_filter(tmp_path: Path, monkeypatch):
     notes_after_clear = client.get("/api/news?collection=notes&per=20").get_json()
     assert notes_after_clear["total"] == 1
     assert notes_after_clear["items"][0]["source_key"] == "bloomberg"
+
+
+def test_market_tags_crud_and_collection_filter(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-01.md").write_text(
+        """## Reuters · World（2条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-01 09:00:00
+## Bloomberg · Tech（1条）
+### [B1](https://www.bloomberg.com/news/articles/b1)
+- 发布时间：2026-06-01 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    reuters_item = next(x for x in items if "reuters.com" in (x.get("url") or ""))
+    bloomberg_item = next(x for x in items if "bloomberg.com" in (x.get("url") or ""))
+
+    p1 = client.put(
+        f"/api/news/{reuters_item['id']}/market-tag",
+        json={"tag": "AI", "direction": "bullish"},
+    )
+    assert p1.status_code == 200
+    assert p1.get_json()["has_market_tags"] == 1
+    assert p1.get_json()["market_tags"][0]["direction"] == "bullish"
+
+    # 同 tag 覆盖方向
+    p2 = client.put(
+        f"/api/news/{reuters_item['id']}/market-tag",
+        json={"tag": "AI", "direction": "bearish"},
+    )
+    assert p2.status_code == 200
+    ai_tag = next(x for x in p2.get_json()["market_tags"] if x["tag"] == "AI")
+    assert ai_tag["direction"] == "bearish"
+
+    # 多 tag 共存
+    p3 = client.put(
+        f"/api/news/{reuters_item['id']}/market-tag",
+        json={"tag": "新能源", "direction": "bullish"},
+    )
+    assert p3.status_code == 200
+    assert len(p3.get_json()["market_tags"]) == 2
+
+    p4 = client.put(
+        f"/api/news/{bloomberg_item['id']}/market-tag",
+        json={"tag": "房地产", "direction": "bearish"},
+    )
+    assert p4.status_code == 200
+
+    m_all = client.get("/api/news?collection=market_tags&per=20")
+    assert m_all.status_code == 200
+    all_payload = m_all.get_json()
+    assert all_payload["total"] == 2
+    assert all(int(x.get("has_market_tags") or 0) == 1 for x in all_payload["items"])
+
+    m_reuters = client.get("/api/news?collection=market_tags&source_filter=reuters&per=20")
+    assert m_reuters.status_code == 200
+    assert m_reuters.get_json()["total"] == 1
+    assert m_reuters.get_json()["items"][0]["source_key"] == "reuters"
+
+    d1 = client.get(f"/api/news/{reuters_item['id']}/detail")
+    assert d1.status_code == 200
+    d_payload = d1.get_json()
+    assert d_payload["has_market_tags"] == 1
+    assert len(d_payload["market_tags"]) == 2
+
+    s1 = client.get("/api/sources?collection=market_tags&read_filter=all")
+    assert s1.status_code == 200
+    s_payload = s1.get_json()
+    assert s_payload["ok"] is True
+    keys = {x["key"] for x in s_payload["sources"]}
+    assert "reuters" in keys
+    assert "bloomberg" in keys
+
+    # 删除单个 tag
+    d_tag = client.delete(f"/api/news/{reuters_item['id']}/market-tag?tag=AI")
+    assert d_tag.status_code == 200
+    assert d_tag.get_json()["ok"] is True
+    assert len(d_tag.get_json()["market_tags"]) == 1
+
+    # 删除剩余 tag 后不再属于 market_tags 集合
+    client.delete(f"/api/news/{reuters_item['id']}/market-tag?tag=新能源")
+    m_after = client.get("/api/news?collection=market_tags&per=20").get_json()
+    assert m_after["total"] == 1
+    assert m_after["items"][0]["source_key"] == "bloomberg"
