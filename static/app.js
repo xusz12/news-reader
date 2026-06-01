@@ -82,6 +82,7 @@ let readObserver = null;
 let loadObserver = null;
 let detailPollTimer = null;
 let rowStatusPollTimer = null;
+let marketPickerDirection = null;
 let lastListScrollTop = 0;
 let lastRenderedDateKey = null;
 let latestSourceOptions = [];
@@ -809,6 +810,7 @@ async function upsertMarketTag(item, tag, direction) {
   if (item.url) state.detailCacheByUrl.set(item.url, cached);
   item.market_tags = tags;
   item.has_market_tags = Number(payload.has_market_tags || 0);
+  if ("important_at" in payload && payload.important_at) item.important_at = payload.important_at;
   state.itemsById.set(item.id, item);
   rerenderOne(item.id);
 }
@@ -855,6 +857,7 @@ function refreshDetailNoteUI(item) {
 function closeMarketPicker() {
   detailMarketPicker.classList.add("hidden");
   detailMarketPickerOptions.innerHTML = "";
+  marketPickerDirection = null;
 }
 
 function refreshDetailMarketTagsUI(item) {
@@ -884,6 +887,12 @@ function refreshDetailMarketTagsUI(item) {
 }
 
 function openMarketPicker(item, direction) {
+  if (!item) return;
+  if (!detailMarketPicker.classList.contains("hidden") && marketPickerDirection === direction) {
+    closeMarketPicker();
+    return;
+  }
+  marketPickerDirection = direction;
   detailMarketPickerOptions.innerHTML = "";
   detailMarketPickerTitle.textContent = direction === "bullish" ? "选择看多板块" : "选择看空板块";
   MARKET_TAG_CHOICES.forEach((tag) => {
@@ -1718,6 +1727,10 @@ detailLink.addEventListener("click", async (e) => {
   if (!item.read_at) {
     await patchStateWithRollback(state.selectedId, { read: true });
   }
+});
+
+newsList.addEventListener("scroll", () => {
+  lastListScrollTop = newsList.scrollTop;
 });
 
 document.addEventListener("visibilitychange", () => {

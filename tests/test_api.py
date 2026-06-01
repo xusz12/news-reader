@@ -646,6 +646,7 @@ def test_market_tags_crud_and_collection_filter(tmp_path: Path, monkeypatch):
     assert p1.status_code == 200
     assert p1.get_json()["has_market_tags"] == 1
     assert p1.get_json()["market_tags"][0]["direction"] == "bullish"
+    assert p1.get_json()["important_at"] is not None
 
     # 同 tag 覆盖方向
     p2 = client.put(
@@ -706,3 +707,8 @@ def test_market_tags_crud_and_collection_filter(tmp_path: Path, monkeypatch):
     m_after = client.get("/api/news?collection=market_tags&per=20").get_json()
     assert m_after["total"] == 1
     assert m_after["items"][0]["source_key"] == "bloomberg"
+
+    # 删除标签不会自动取消 important
+    feed = client.get("/api/news?per=20").get_json()["items"]
+    r1_after = next(x for x in feed if x["id"] == reuters_item["id"])
+    assert r1_after["important_at"] is not None

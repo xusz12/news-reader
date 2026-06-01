@@ -1160,6 +1160,7 @@ def api_news_market_tag_upsert(item_id: str):
             return jsonify({"ok": False, "error": "missing_url"}), 400
 
         ts = now_ts()
+        important_at = None
         with conn:
             conn.execute(
                 """
@@ -1171,6 +1172,27 @@ def api_news_market_tag_upsert(item_id: str):
                 """,
                 (url, tag, direction, ts, ts),
             )
+            row = conn.execute(
+                "SELECT read_at, important_at, read_later_at FROM item_state WHERE item_id=?",
+                (item_id,),
+            ).fetchone()
+            read_at = row["read_at"] if row else None
+            important_at = row["important_at"] if row else None
+            read_later_at = row["read_later_at"] if row else None
+            if not important_at:
+                important_at = ts
+                conn.execute(
+                    """
+                    INSERT INTO item_state(item_id, read_at, important_at, read_later_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(item_id) DO UPDATE SET
+                      read_at=excluded.read_at,
+                      important_at=excluded.important_at,
+                      read_later_at=excluded.read_later_at,
+                      updated_at=excluded.updated_at
+                    """,
+                    (item_id, read_at, important_at, read_later_at, ts),
+                )
         market_tags = load_market_tags_map(conn, [url]).get(url, [])
     finally:
         conn.close()
@@ -1181,6 +1203,7 @@ def api_news_market_tag_upsert(item_id: str):
             "item_id": item_id,
             "market_tags": market_tags,
             "has_market_tags": 1 if market_tags else 0,
+            "important_at": important_at,
         }
     )
 

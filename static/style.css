@@ -713,8 +713,7 @@ html[data-detail-font="large"] {
 }
 
 .detail-note-input:focus-visible {
-  outline: 2px solid #93c5fd;
-  outline-offset: 1px;
+  outline: none;
 }
 
 .detail-note-actions {
