@@ -82,6 +82,8 @@ let readObserver = null;
 let loadObserver = null;
 let detailPollTimer = null;
 let rowStatusPollTimer = null;
+let feedEndAutoReadTimer = null;
+let feedEndAutoReadFiredKey = "";
 let marketPickerDirection = null;
 let lastListScrollTop = 0;
 let lastScrollDirectionDown = false;
@@ -109,6 +111,84 @@ const MARKET_TAG_CHOICES = ["存储", "电力", "房地产", "APPLE", "AI", "医
 
 function setHint(text) {
   listHint.textContent = text || "";
+}
+
+function clearFeedEndAutoReadTimer() {
+  if (!feedEndAutoReadTimer) return;
+  window.clearTimeout(feedEndAutoReadTimer);
+  feedEndAutoReadTimer = null;
+}
+
+function feedEndAutoReadKey() {
+  return `${state.collection}|${state.q}|${state.sourceFilter}|${state.readFilter}|${state.total}`;
+}
+
+function isListHintVisible() {
+  if (!listHint || !newsList) return false;
+  const hintRect = listHint.getBoundingClientRect();
+  const listRect = newsList.getBoundingClientRect();
+  return hintRect.top < listRect.bottom && hintRect.bottom > listRect.top;
+}
+
+function markLoadedRowsReadLocally() {
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  state.itemsById.forEach((item) => {
+    if (item.read_at) return;
+    item.read_at = now;
+    state.itemsById.set(item.id, item);
+    rerenderOne(item.id);
+  });
+}
+
+function scheduleFeedEndAutoReadIfNeeded() {
+  const canSchedule =
+    state.collection === "feed" &&
+    !state.hasMore &&
+    state.total > 0 &&
+    isListHintVisible();
+
+  if (!canSchedule) {
+    clearFeedEndAutoReadTimer();
+    return;
+  }
+
+  const key = feedEndAutoReadKey();
+  if (feedEndAutoReadFiredKey === key) {
+    clearFeedEndAutoReadTimer();
+    return;
+  }
+
+  if (feedEndAutoReadTimer) return;
+
+  feedEndAutoReadTimer = window.setTimeout(async () => {
+    feedEndAutoReadTimer = null;
+    const stillValid =
+      state.collection === "feed" &&
+      !state.hasMore &&
+      state.total > 0 &&
+      isListHintVisible();
+    if (!stillValid) return;
+
+    const nowKey = feedEndAutoReadKey();
+    if (feedEndAutoReadFiredKey === nowKey) return;
+
+    try {
+      const res = await fetch("/api/news/mark-all-read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          q: state.q,
+          read_filter: state.readFilter,
+          collection: state.collection,
+          source_filter: state.sourceFilter,
+        }),
+      });
+      if (!res.ok) return;
+      feedEndAutoReadFiredKey = nowKey;
+      markLoadedRowsReadLocally();
+      setHint("已将当前范围标为已读，列表将在下次刷新后更新");
+    } catch {}
+  }, 5000);
 }
 
 function isMobileLayout() {
@@ -1361,6 +1441,8 @@ function resetList() {
   state.selectedId = null;
   stopDetailPolling();
   stopRowStatusPolling();
+  clearFeedEndAutoReadTimer();
+  feedEndAutoReadFiredKey = "";
   closeDetailOnMobile();
   renderDetail(null);
   lastRenderedDateKey = null;
@@ -1395,6 +1477,7 @@ function appendNewsRow(item, row) {
 }
 
 async function loadFirstPage() {
+  clearFeedEndAutoReadTimer();
   if (state.collection === "feed") {
     state.readFilter = state.feedReadFilter;
   } else if (state.readFilter !== "all") {
@@ -1427,6 +1510,8 @@ async function loadFirstPage() {
       setHint("已加载全部新闻");
     }
 
+    scheduleFeedEndAutoReadIfNeeded();
+
     setupReadObserver();
     ensureRowStatusPolling();
   } finally {
@@ -1455,6 +1540,7 @@ async function loadNextPage() {
     state.hasMore = state.page < state.pages;
     renderMeta();
     setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
+    scheduleFeedEndAutoReadIfNeeded();
     ensureRowStatusPolling();
   } finally {
     state.loading = false;
@@ -1762,14 +1848,17 @@ newsList.addEventListener("scroll", () => {
   lastScrollDirectionDown = currentTop > lastListScrollTop;
   lastListScrollTop = currentTop;
   processFeedAutoReadByScroll();
+  scheduleFeedEndAutoReadIfNeeded();
 });
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     lastListScrollTop = newsList.scrollTop;
     stopRowStatusPolling();
+    clearFeedEndAutoReadTimer();
   } else {
     kickRowStatusPolling();
+    scheduleFeedEndAutoReadIfNeeded();
   }
 });
 
