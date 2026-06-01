@@ -31,6 +31,7 @@ const markAllReadBtn = document.getElementById("markAllReadBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
+const navNotesBtn = document.getElementById("navNotesBtn");
 const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
 const mobileTabFilterBtn = document.getElementById("mobileTabFilterBtn");
 const sourceFilters = document.getElementById("sourceFilters");
@@ -228,12 +229,15 @@ function iconSvg(name, filled = false) {
   if (name === "crosshair") {
     return `<svg ${common}><circle cx="12" cy="12" r="6.8"/><path d="M12 3.5v2.2"/><path d="M12 18.3v2.2"/><path d="M3.5 12h2.2"/><path d="M18.3 12h2.2"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg>`;
   }
+  if (name === "pen") {
+    return `<svg ${common}><path d="m4 20 4.1-1 9.3-9.3a1.7 1.7 0 0 0 0-2.4l-.7-.7a1.7 1.7 0 0 0-2.4 0L5 15.9 4 20Z"/><path d="m12.9 7.1 4 4"/></svg>`;
+  }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
 
 function applyIcon(btn, iconName, { filled = false, label = "", tone = "default" } = {}) {
   btn.innerHTML = `<span class="glyph">${iconSvg(iconName, filled)}</span>`;
-  btn.classList.remove("tone-default", "tone-danger", "tone-warning", "tone-success");
+  btn.classList.remove("tone-default", "tone-muted", "tone-danger", "tone-warning", "tone-success", "tone-accent");
   btn.classList.add(`tone-${tone}`);
   btn.dataset.icon = iconName;
   btn.dataset.filled = filled ? "1" : "0";
@@ -361,7 +365,7 @@ function applyResumeIcon(label = "回到上次阅读") {
 }
 
 function updateBatchActionButton() {
-  if (state.collection === "important") {
+  if (state.collection === "important" || state.collection === "notes") {
     markAllReadBtn.classList.add("hidden");
     markAllReadBtn.disabled = false;
     return;
@@ -378,12 +382,14 @@ function updateCollectionButtons() {
   navFeedBtn.classList.toggle("active", state.collection === "feed");
   navImportantBtn.classList.toggle("active", state.collection === "important");
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
+  if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
   if (mobileCollectionTriggerBtn) {
     mobileCollectionTriggerBtn.classList.toggle("active", true);
     const names = {
       feed: "新闻流",
       important: "重要",
       read_later: "稍后",
+      notes: "想法",
     };
     mobileCollectionTriggerBtn.textContent = names[state.collection] || "新闻流";
   }
@@ -395,6 +401,7 @@ function updateMobileFilterCollectionText() {
     feed: "新闻流",
     important: "重要新闻",
     read_later: "稍后再看",
+    notes: "想法",
   };
   mobileFilterCollection.textContent = `当前集合：${names[state.collection] || "新闻流"}`;
 }
@@ -418,6 +425,7 @@ function renderMobileCollectionOptions() {
     { key: "feed", label: "新闻流" },
     { key: "important", label: "重要" },
     { key: "read_later", label: "稍后阅读" },
+    { key: "notes", label: "想法" },
   ];
   for (const option of options) {
     const btn = document.createElement("button");
@@ -522,6 +530,7 @@ function renderMeta() {
     feed: "新闻流",
     important: "重要新闻",
     read_later: "稍后再看",
+    notes: "想法",
   };
   const readNames = {
     all: "全部",
@@ -742,7 +751,13 @@ function refreshDetailNoteUI(item) {
   const hasNote = noteText.length > 0;
   item.has_note = hasNote ? 1 : 0;
 
-  detailNoteToggleBtn.textContent = hasNote ? "编辑想法" : "写想法";
+  applyIcon(detailNoteToggleBtn, "pen", {
+    filled: false,
+    tone: hasNote ? "accent" : "default",
+    label: hasNote ? "编辑想法" : "写想法",
+  });
+  detailNoteToggleBtn.title = hasNote ? "编辑想法" : "写想法";
+  detailNoteToggleBtn.setAttribute("aria-label", hasNote ? "编辑想法" : "写想法");
   detailNoteCard.classList.toggle("hidden", !hasNote);
   detailNoteText.textContent = hasNote ? noteText : "";
   if (!detailNoteEditor.classList.contains("hidden") && !detailNoteSaveBtn.disabled) {
@@ -1332,6 +1347,11 @@ navImportantBtn.addEventListener("click", async () => {
 navReadLaterBtn.addEventListener("click", async () => {
   await switchCollection("read_later");
 });
+if (navNotesBtn) {
+  navNotesBtn.addEventListener("click", async () => {
+    await switchCollection("notes");
+  });
+}
 
 if (mobileCollectionTriggerBtn) {
   mobileCollectionTriggerBtn.addEventListener("click", () => {
@@ -1374,7 +1394,7 @@ if (detailFontSelect) {
 }
 
 markAllReadBtn.addEventListener("click", async () => {
-  if (state.collection === "important") return;
+  if (state.collection === "important" || state.collection === "notes") return;
 
   const readLaterMode = state.collection === "read_later";
   const ok = window.confirm(

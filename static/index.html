@@ -31,6 +31,7 @@
         <button id="navFeedBtn" class="nav-btn active">新闻流</button>
         <button id="navImportantBtn" class="nav-btn">重要新闻</button>
         <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
+        <button id="navNotesBtn" class="nav-btn">想法</button>
 
         <h2 class="sources-title">订阅源</h2>
         <div id="sourceFilters" class="source-filters"></div>
@@ -63,8 +64,9 @@
             <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
             <button id="detailRetryBtn" class="detail-retry-btn hidden" type="button">重试详情抓取</button>
             <button id="detailRetranslateBtn" class="detail-retry-btn hidden" type="button">重新翻译</button>
+            <span class="detail-action-spacer" aria-hidden="true"></span>
+            <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
             <button id="detailImportantBtn" class="icon-btn" type="button"></button>
-            <button id="detailNoteToggleBtn" class="detail-retry-btn" type="button">写想法</button>
           </div>
           <div class="detail-scroll-area">
             <section id="detailNoteCard" class="detail-note-card hidden">

@@ -147,6 +147,8 @@ def _build_news_where_clause(
         where.append("st.important_at IS NOT NULL")
     elif collection == "read_later":
         where.append("st.read_later_at IS NOT NULL")
+    elif collection == "notes":
+        where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
     source_clause, source_args = build_source_filter_clause(source_filter)
     if source_clause:
         where.append(source_clause)
@@ -707,6 +709,8 @@ def api_sources():
         where.append("st.important_at IS NOT NULL")
     elif collection == "read_later":
         where.append("st.read_later_at IS NOT NULL")
+    elif collection == "notes":
+        where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()
@@ -1183,6 +1187,8 @@ def api_clear_read_later():
     # 默认仅清理 read_later 集合；即使传入其它 collection，也不允许扩大到全量。
     if collection == "important":
         where.append("st.important_at IS NOT NULL")
+    elif collection == "notes":
+        where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
     where.append("st.read_later_at IS NOT NULL")
     source_clause, source_args = build_source_filter_clause(source_filter)
     if source_clause:

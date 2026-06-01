@@ -553,3 +553,59 @@ def test_article_note_save_read_and_clear(tmp_path: Path, monkeypatch):
     detail2 = client.get(f"/api/news/{item_id}/detail").get_json()
     assert detail2["has_note"] == 0
     assert detail2["note"] is None
+
+
+def test_notes_collection_and_sources_filter(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-01.md").write_text(
+        """## Reuters · World（2条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-01 09:00:00
+## Bloomberg · Tech（1条）
+### [B1](https://www.bloomberg.com/news/articles/b1)
+- 发布时间：2026-06-01 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    reuters_item = next(x for x in items if "reuters.com" in (x.get("url") or ""))
+    bloomberg_item = next(x for x in items if "bloomberg.com" in (x.get("url") or ""))
+
+    assert client.put(f"/api/news/{reuters_item['id']}/note", json={"note": "R note"}).status_code == 200
+    assert client.put(f"/api/news/{bloomberg_item['id']}/note", json={"note": "B note"}).status_code == 200
+
+    notes_all = client.get("/api/news?collection=notes&per=20")
+    assert notes_all.status_code == 200
+    notes_items = notes_all.get_json()["items"]
+    assert notes_all.get_json()["total"] == 2
+    assert all(int(x.get("has_note") or 0) == 1 for x in notes_items)
+
+    notes_reuters = client.get("/api/news?collection=notes&source_filter=reuters&per=20")
+    assert notes_reuters.status_code == 200
+    assert notes_reuters.get_json()["total"] == 1
+    assert notes_reuters.get_json()["items"][0]["source_key"] == "reuters"
+
+    sources_notes = client.get("/api/sources?collection=notes&read_filter=all")
+    assert sources_notes.status_code == 200
+    payload = sources_notes.get_json()
+    assert payload["ok"] is True
+    keys = {x["key"] for x in payload["sources"]}
+    assert "reuters" in keys
+    assert "bloomberg" in keys
+
+    assert client.put(f"/api/news/{reuters_item['id']}/note", json={"note": ""}).status_code == 200
+    notes_after_clear = client.get("/api/news?collection=notes&per=20").get_json()
+    assert notes_after_clear["total"] == 1
+    assert notes_after_clear["items"][0]["source_key"] == "bloomberg"
