@@ -400,6 +400,7 @@ button.active {
   color: var(--muted);
   opacity: 0.7;
   font-size: 12px;
+  cursor: pointer;
 }
 
 .trend-chip-btn {
@@ -441,11 +442,22 @@ button.active {
   margin-bottom: 2px;
 }
 
+.trend-chip-note {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  opacity: 0.82;
+}
+
 .detail-trend-body {
   min-height: 0;
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.detail-trend-actions {
+  margin-bottom: 10px;
 }
 
 .detail-tag-admin-body {

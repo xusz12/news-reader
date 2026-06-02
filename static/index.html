@@ -68,7 +68,49 @@
         <div id="detailTrendBody" class="detail-trend-body hidden">
           <h3 id="detailTrendTitle" class="detail-title"></h3>
           <div id="detailTrendMeta" class="detail-meta"></div>
+          <div class="detail-actions detail-trend-actions">
+            <button id="trendComposeBtn" class="detail-retry-btn" type="button">写趋势想法</button>
+            <button id="trendBullishNoteBtn" class="detail-retry-btn" type="button">写看多想法</button>
+            <button id="trendBearishNoteBtn" class="detail-retry-btn" type="button">写看空想法</button>
+          </div>
+          <section id="detailTrendNoteCard" class="detail-note-card hidden">
+            <h4 id="detailTrendNoteTitle">趋势想法</h4>
+            <p id="detailTrendNoteText" class="detail-note-text"></p>
+          </section>
+          <section id="detailTrendNoteEditor" class="detail-note-editor hidden">
+            <div id="detailTrendNoteEditorMeta" class="detail-meta"></div>
+            <textarea id="detailTrendNoteInput" class="detail-note-input" rows="4" maxlength="5000" placeholder="记录你对这个日期、板块与方向的判断..."></textarea>
+            <div class="detail-note-actions">
+              <button id="detailTrendNoteSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="detailTrendNoteDeleteBtn" class="detail-retry-btn" type="button">删除</button>
+              <button id="detailTrendNoteCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
           <div id="detailTrendList" class="detail-trend-list"></div>
+        </div>
+        <div id="detailTrendComposerBody" class="detail-tag-admin-body hidden">
+          <div class="detail-tag-admin-header">
+            <div>
+              <h3 class="detail-title">写趋势想法</h3>
+              <div class="detail-meta">手动添加板块看多/看空信号与想法</div>
+            </div>
+          </div>
+          <section class="detail-tag-create detail-trend-compose">
+            <select id="trendNoteDateSelect" class="pref-select"></select>
+            <select id="trendNoteTagSelect" class="pref-select"></select>
+            <select id="trendNoteDirectionSelect" class="pref-select">
+              <option value="bullish">看多</option>
+              <option value="bearish">看空</option>
+            </select>
+          </section>
+          <section class="detail-note-editor">
+            <textarea id="trendNoteComposeInput" class="detail-note-input" rows="5" maxlength="5000" placeholder="记录你对这个趋势单元格的判断..."></textarea>
+            <div class="detail-note-actions">
+              <button id="trendNoteComposeSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="trendNoteComposeDeleteBtn" class="detail-retry-btn" type="button">删除</button>
+              <button id="trendNoteComposeCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
         </div>
         <div id="detailTagAdminBody" class="detail-tag-admin-body hidden">
           <div class="detail-tag-admin-header">

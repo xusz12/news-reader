@@ -306,6 +306,48 @@ def load_notes_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str, dict]
     return {r["url"]: dict(r) for r in rows}
 
 
+def load_trend_notes_map(
+    conn: sqlite3.Connection,
+    keys: list[tuple[str, str, str]],
+) -> dict[tuple[str, str, str], dict]:
+    if not keys:
+        return {}
+    uniq_keys = list(dict.fromkeys(keys))
+    placeholders = ",".join(["(?, ?, ?)"] * len(uniq_keys))
+    args: list[str] = []
+    for date_key, tag_key, direction in uniq_keys:
+        args.extend([date_key, tag_key, direction])
+    rows = conn.execute(
+        f"""
+        SELECT mtn.id,
+               mtn.date_key,
+               mtn.tag,
+               mtn.direction,
+               mtn.note,
+               mtn.created_at,
+               mtn.updated_at,
+               mtd.display_name
+        FROM market_trend_notes mtn
+        LEFT JOIN market_tag_definitions mtd ON mtd.key = mtn.tag
+        WHERE (mtn.date_key, mtn.tag, mtn.direction) IN ({placeholders})
+        """,
+        args,
+    ).fetchall()
+    return {
+        (r["date_key"], r["tag"], r["direction"]): {
+            "id": r["id"],
+            "date_key": r["date_key"],
+            "tag_key": r["tag"],
+            "tag": r["display_name"] or r["tag"],
+            "direction": r["direction"],
+            "note": r["note"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    }
+
+
 def derive_date_meta(published_at: str | None, raw_date: str | None) -> tuple[str, str]:
     date_key = (raw_date or "").strip()
     if not date_key and published_at:
@@ -895,11 +937,17 @@ def api_market_trends():
         active_tags = load_market_tag_definitions(conn, active_only=True)
         date_rows = conn.execute(
             f"""
-            SELECT DISTINCT {ITEM_DATE_SQL} AS date_key
-            FROM items
-            WHERE EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)
-              AND {ITEM_DATE_SQL} IS NOT NULL
-              AND {ITEM_DATE_SQL} != ''
+            SELECT date_key
+            FROM (
+              SELECT DISTINCT {ITEM_DATE_SQL} AS date_key
+              FROM items
+              WHERE EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)
+                AND {ITEM_DATE_SQL} IS NOT NULL
+                AND {ITEM_DATE_SQL} != ''
+              UNION
+              SELECT DISTINCT date_key
+              FROM market_trend_notes
+            )
             ORDER BY date_key DESC
             LIMIT ?
             """,
@@ -932,6 +980,16 @@ def api_market_trends():
             """,
             latest_dates_desc,
         ).fetchall()
+        note_rows = conn.execute(
+            f"""
+            SELECT date_key, tag, direction, COUNT(*) AS total
+            FROM market_trend_notes
+            WHERE date_key IN ({placeholders})
+            GROUP BY date_key, tag, direction
+            ORDER BY date_key ASC, tag ASC, direction ASC
+            """,
+            latest_dates_desc,
+        ).fetchall()
         tagged_item_count = conn.execute(
             f"""
             SELECT COUNT(*)
@@ -945,6 +1003,7 @@ def api_market_trends():
         conn.close()
 
     counts: dict[tuple[str, str], dict[str, int]] = {}
+    note_counts: dict[tuple[str, str], dict[str, int]] = {}
     non_zero_tags: set[str] = set()
     for row in agg_rows:
         date_key = row["date_key"]
@@ -953,6 +1012,14 @@ def api_market_trends():
         total = int(row["total"] or 0)
         non_zero_tags.add(tag)
         slot = counts.setdefault((tag, date_key), {"bullish": 0, "bearish": 0})
+        slot[direction] = total
+    for row in note_rows:
+        date_key = row["date_key"]
+        tag = row["tag"]
+        direction = row["direction"]
+        total = int(row["total"] or 0)
+        non_zero_tags.add(tag)
+        slot = note_counts.setdefault((tag, date_key), {"bullish": 0, "bearish": 0})
         slot[direction] = total
 
     tags_in_use = [tag for tag in active_tags if tag["key"] in non_zero_tags]
@@ -963,10 +1030,21 @@ def api_market_trends():
         row_total = 0
         for date_key in latest_dates:
             slot = counts.get((tag_key, date_key), {"bullish": 0, "bearish": 0})
+            note_slot = note_counts.get((tag_key, date_key), {"bullish": 0, "bearish": 0})
             bullish = int(slot.get("bullish") or 0)
             bearish = int(slot.get("bearish") or 0)
+            bullish_notes = int(note_slot.get("bullish") or 0)
+            bearish_notes = int(note_slot.get("bearish") or 0)
             row_total += bullish + bearish
-            values.append({"date": date_key, "bullish": bullish, "bearish": bearish})
+            values.append(
+                {
+                    "date": date_key,
+                    "bullish": bullish,
+                    "bearish": bearish,
+                    "bullish_notes": bullish_notes,
+                    "bearish_notes": bearish_notes,
+                }
+            )
         rows_payload.append(
             {
                 "tag": tag_key,
@@ -1027,6 +1105,7 @@ def api_market_trends_detail():
         urls = [r["url"] for r in rows if r["url"]]
         notes_map = load_notes_map(conn, urls)
         market_tags_map = load_market_tags_map(conn, urls)
+        trend_note = load_trend_notes_map(conn, [(date_key, tag_def["key"], direction)]).get((date_key, tag_def["key"], direction))
     finally:
         conn.close()
 
@@ -1053,8 +1132,108 @@ def api_market_trends_detail():
             "tag": tag_def["display_name"],
             "tag_key": tag_def["key"],
             "direction": direction,
+            "trend_note": trend_note,
             "total": len(items),
             "items": items,
+        }
+    )
+
+
+@app.put("/api/market-trend-note")
+@app.put("/api/market-trends/note")
+def api_market_trend_note_upsert():
+    body = request.get_json(silent=True) or {}
+    date_key = (body.get("date_key") or body.get("date") or "").strip()
+    tag_key = (body.get("tag_key") or body.get("tag") or "").strip()
+    direction = (body.get("direction") or "").strip().lower()
+    raw_note = body.get("note")
+    if not date_key:
+        return jsonify({"ok": False, "error": "missing_date"}), 400
+    if not isinstance(raw_note, str):
+        return jsonify({"ok": False, "error": "invalid_note"}), 400
+    if direction not in MARKET_DIRECTIONS:
+        return jsonify({"ok": False, "error": "invalid_direction"}), 400
+
+    note_text = raw_note.strip()
+    conn = db_conn()
+    try:
+        tag_def = conn.execute(
+            "SELECT key, display_name FROM market_tag_definitions WHERE key=? AND active=1",
+            (tag_key,),
+        ).fetchone()
+        if not tag_def:
+            return jsonify({"ok": False, "error": "unsupported_tag"}), 400
+        with conn:
+            if note_text:
+                ts = now_ts()
+                conn.execute(
+                    """
+                    INSERT INTO market_trend_notes(date_key, tag, direction, note, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(date_key, tag, direction) DO UPDATE SET
+                      note=excluded.note,
+                      updated_at=excluded.updated_at
+                    """,
+                    (date_key, tag_key, direction, note_text, ts, ts),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM market_trend_notes WHERE date_key=? AND tag=? AND direction=?",
+                    (date_key, tag_key, direction),
+                )
+        trend_note = load_trend_notes_map(conn, [(date_key, tag_key, direction)]).get((date_key, tag_key, direction))
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "date": date_key,
+            "tag": tag_def["display_name"],
+            "tag_key": tag_key,
+            "direction": direction,
+            "trend_note": trend_note,
+            "has_trend_note": 1 if trend_note else 0,
+        }
+    )
+
+
+@app.delete("/api/market-trends/note")
+def api_market_trend_note_delete():
+    date_key = (request.args.get("date") or "").strip()
+    tag_key = (request.args.get("tag") or "").strip()
+    direction = (request.args.get("direction") or "").strip().lower()
+    if not date_key:
+        return jsonify({"ok": False, "error": "missing_date"}), 400
+    if direction not in MARKET_DIRECTIONS:
+        return jsonify({"ok": False, "error": "invalid_direction"}), 400
+
+    conn = db_conn()
+    try:
+        tag_def = conn.execute(
+            "SELECT key, display_name FROM market_tag_definitions WHERE key=?",
+            (tag_key,),
+        ).fetchone()
+        if not tag_def:
+            return jsonify({"ok": False, "error": "unsupported_tag"}), 400
+        with conn:
+            conn.execute(
+                "DELETE FROM market_trend_notes WHERE date_key=? AND tag=? AND direction=?",
+                (date_key, tag_key, direction),
+            )
+        trend_note = load_trend_notes_map(conn, [(date_key, tag_key, direction)]).get((date_key, tag_key, direction))
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "date": date_key,
+            "tag": tag_def["display_name"],
+            "tag_key": tag_key,
+            "direction": direction,
+            "trend_note": trend_note,
+            "has_trend_note": 1 if trend_note else 0,
         }
     )
 

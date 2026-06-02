@@ -123,3 +123,14 @@ CREATE TABLE IF NOT EXISTS market_tag_definitions (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS market_trend_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date_key TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  note TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (date_key, tag, direction)
+);

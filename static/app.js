@@ -18,8 +18,10 @@ let state = {
   trendRows: [],
   trendDates: [],
   trendSelection: null,
+  trendNoteContext: null,
   marketTagChoices: [],
   tagAdminOpen: false,
+  trendComposeOpen: false,
 };
 
 const mediaIconMap = {
@@ -71,7 +73,27 @@ const detailEmpty = document.getElementById("detailEmpty");
 const detailTrendBody = document.getElementById("detailTrendBody");
 const detailTrendTitle = document.getElementById("detailTrendTitle");
 const detailTrendMeta = document.getElementById("detailTrendMeta");
+const trendComposeBtn = document.getElementById("trendComposeBtn");
+const trendBullishNoteBtn = document.getElementById("trendBullishNoteBtn");
+const trendBearishNoteBtn = document.getElementById("trendBearishNoteBtn");
+const detailTrendNoteCard = document.getElementById("detailTrendNoteCard");
+const detailTrendNoteTitle = document.getElementById("detailTrendNoteTitle");
+const detailTrendNoteText = document.getElementById("detailTrendNoteText");
+const detailTrendNoteEditor = document.getElementById("detailTrendNoteEditor");
+const detailTrendNoteEditorMeta = document.getElementById("detailTrendNoteEditorMeta");
+const detailTrendNoteInput = document.getElementById("detailTrendNoteInput");
+const detailTrendNoteSaveBtn = document.getElementById("detailTrendNoteSaveBtn");
+const detailTrendNoteDeleteBtn = document.getElementById("detailTrendNoteDeleteBtn");
+const detailTrendNoteCancelBtn = document.getElementById("detailTrendNoteCancelBtn");
 const detailTrendList = document.getElementById("detailTrendList");
+const detailTrendComposerBody = document.getElementById("detailTrendComposerBody");
+const trendNoteDateSelect = document.getElementById("trendNoteDateSelect");
+const trendNoteTagSelect = document.getElementById("trendNoteTagSelect");
+const trendNoteDirectionSelect = document.getElementById("trendNoteDirectionSelect");
+const trendNoteComposeInput = document.getElementById("trendNoteComposeInput");
+const trendNoteComposeSaveBtn = document.getElementById("trendNoteComposeSaveBtn");
+const trendNoteComposeDeleteBtn = document.getElementById("trendNoteComposeDeleteBtn");
+const trendNoteComposeCancelBtn = document.getElementById("trendNoteComposeCancelBtn");
 const detailTagAdminBody = document.getElementById("detailTagAdminBody");
 const detailTagCreateInput = document.getElementById("detailTagCreateInput");
 const detailTagCreateBtn = document.getElementById("detailTagCreateBtn");
@@ -140,7 +162,7 @@ function showTrendsView(show) {
 function updateWorkspaceLayout() {
   if (!workspace) return;
   const trendsMode = state.collection === "trends";
-  const trendDetailOpen = trendsMode && (!!state.trendSelection || state.tagAdminOpen);
+  const trendDetailOpen = trendsMode && (!!state.trendSelection || state.tagAdminOpen || state.trendComposeOpen);
   workspace.classList.toggle("trends-mode", trendsMode);
   workspace.classList.toggle("trends-detail-open", trendDetailOpen);
 }
@@ -794,6 +816,130 @@ function activeMarketTagChoices() {
   return state.marketTagChoices.filter((tag) => Number(tag.active || 0) === 1);
 }
 
+function closeTrendComposerView() {
+  state.trendComposeOpen = false;
+  if (detailTrendComposerBody) {
+    detailTrendComposerBody.classList.add("hidden");
+  }
+}
+
+function closeTrendNoteEditor() {
+  state.trendNoteContext = null;
+  if (detailTrendNoteEditor) {
+    detailTrendNoteEditor.classList.add("hidden");
+  }
+}
+
+function currentTrendSelectionBase() {
+  if (!state.trendSelection) return null;
+  return {
+    date: state.trendSelection.date,
+    tagKey: state.trendSelection.tagKey,
+    tagLabel: state.trendSelection.tagLabel,
+  };
+}
+
+async function saveTrendNote(payload) {
+  const body = {
+    date_key: payload.date,
+    tag_key: payload.tag,
+    direction: payload.direction,
+    note: payload.note,
+  };
+  const res = await fetch("/api/market-trends/note", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("trend_note_save_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "trend_note_save_failed");
+  return data;
+}
+
+async function deleteTrendNote(payload) {
+  const params = new URLSearchParams({
+    date: payload.date,
+    tag: payload.tag,
+    direction: payload.direction,
+  });
+  const res = await fetch(`/api/market-trends/note?${params.toString()}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("trend_note_delete_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "trend_note_delete_failed");
+  return data;
+}
+
+function refreshTrendNoteCard(note, direction) {
+  const hasNote = !!note?.note;
+  detailTrendNoteCard.classList.toggle("hidden", !hasNote);
+  if (!hasNote) {
+    detailTrendNoteText.textContent = "";
+    return;
+  }
+  detailTrendNoteTitle.textContent = direction === "bullish" ? "看多想法" : "看空想法";
+  detailTrendNoteText.textContent = note.note;
+}
+
+function renderTrendComposeOptions() {
+  if (!trendNoteDateSelect || !trendNoteTagSelect) return;
+  trendNoteDateSelect.innerHTML = "";
+  state.trendDates.forEach((date) => {
+    const option = document.createElement("option");
+    option.value = date;
+    option.textContent = date;
+    trendNoteDateSelect.appendChild(option);
+  });
+  trendNoteTagSelect.innerHTML = "";
+  activeMarketTagChoices().forEach((tag) => {
+    const option = document.createElement("option");
+    option.value = tag.key;
+    option.textContent = tag.display_name;
+    trendNoteTagSelect.appendChild(option);
+  });
+}
+
+function openTrendComposeView(prefill = null) {
+  const base = prefill || currentTrendSelectionBase();
+  closeTagAdminView();
+  closeTrendNoteEditor();
+  detailBody.classList.add("hidden");
+  detailTrendBody.classList.add("hidden");
+  detailEmpty.classList.add("hidden");
+  detailTrendComposerBody.classList.remove("hidden");
+  state.trendComposeOpen = true;
+  renderTrendComposeOptions();
+  if (state.trendDates.length) {
+    trendNoteDateSelect.value = state.trendDates[state.trendDates.length - 1];
+  }
+  if (base) {
+    trendNoteDateSelect.value = base.date;
+    trendNoteTagSelect.value = base.tagKey;
+  }
+  trendNoteComposeInput.value = "";
+  updateWorkspaceLayout();
+  openDetailOnMobile();
+}
+
+function openTrendNoteEditor(direction) {
+  const base = currentTrendSelectionBase();
+  if (!base) return;
+  const detail = state.trendSelection?.detailPayload || null;
+  const note = detail?.trend_note || null;
+  const sameDirection = detailTrendNoteEditor.dataset.direction === direction;
+  if (!detailTrendNoteEditor.classList.contains("hidden") && sameDirection) {
+    closeTrendNoteEditor();
+    return;
+  }
+  state.trendNoteContext = { ...base, direction };
+  detailTrendNoteEditor.dataset.direction = direction;
+  detailTrendNoteEditorMeta.textContent = `${base.date} · ${base.tagLabel} · ${direction === "bullish" ? "看多" : "看空"}`;
+  detailTrendNoteInput.value = note && note.direction === direction ? note.note || "" : "";
+  detailTrendNoteEditor.classList.remove("hidden");
+}
+
 function closeTagAdminView() {
   state.tagAdminOpen = false;
   if (detailTagAdminBody) {
@@ -876,6 +1022,8 @@ async function refreshTrendTagAdminState() {
 
 async function openTagAdminView() {
   state.tagAdminOpen = true;
+  closeTrendComposerView();
+  closeTrendNoteEditor();
   state.trendSelection = null;
   closeMarketPicker();
   detailBody.classList.add("hidden");
@@ -889,9 +1037,13 @@ async function openTagAdminView() {
 
 function renderTrendDetail(payload) {
   closeTagAdminView();
+  closeTrendComposerView();
+  closeTrendNoteEditor();
   detailBody.classList.add("hidden");
   if (!payload) {
     detailTrendBody.classList.add("hidden");
+    detailTrendNoteCard.classList.add("hidden");
+    detailTrendList.innerHTML = "";
     detailEmpty.classList.remove("hidden");
     detailEmpty.textContent = state.collection === "trends" ? "选择一个趋势单元格查看新闻明细" : "选择一条新闻查看摘要与正文";
     updateWorkspaceLayout();
@@ -899,9 +1051,11 @@ function renderTrendDetail(payload) {
   }
 
   detailEmpty.classList.add("hidden");
+  detailTrendComposerBody.classList.add("hidden");
   detailTrendBody.classList.remove("hidden");
   detailTrendTitle.textContent = `${payload.tag} · ${payload.direction === "bullish" ? "看多" : "看空"}`;
   detailTrendMeta.textContent = `${payload.date} · ${payload.total} 条新闻`;
+  refreshTrendNoteCard(payload.trend_note, payload.direction);
   detailTrendList.innerHTML = "";
 
   payload.items.forEach((item) => {
@@ -990,54 +1144,89 @@ function renderTrendsView() {
       const activeKey = `${tagKey}|${date}`;
 
       if (!value.bullish && !value.bearish) {
-        wrap.classList.add("empty");
-        wrap.textContent = "-";
+        if (value.bullish_notes || value.bearish_notes) {
+          wrap.classList.add("split");
+        } else {
+          wrap.classList.add("empty");
+          wrap.textContent = "-";
+          wrap.addEventListener("click", () => {
+            openTrendComposeView({
+              date,
+              tagKey,
+              tagLabel: row.tag_label || row.tag,
+            });
+          });
+        }
       } else {
         if (value.bullish && value.bearish) {
           wrap.classList.add("split");
         }
-        if (value.bullish) {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "trend-chip-btn bullish";
-          if (
-            state.trendSelection &&
-            state.trendSelection.key === activeKey &&
-            state.trendSelection.direction === "bullish"
-          ) {
-            btn.classList.add("active");
-          }
-          btn.innerHTML = `<span class="trend-chip-label">看多</span>+${value.bullish}`;
-          btn.addEventListener("click", async () => {
-            const payload = await fetchMarketTrendDetail(date, tagKey, "bullish");
-            state.trendSelection = { key: activeKey, tagKey, direction: "bullish" };
-            renderTrendsView();
-            renderTrendDetail(payload);
-            openDetailOnMobile();
-          });
-          wrap.appendChild(btn);
+        if (!value.bullish && value.bullish_notes && !wrap.classList.contains("split")) {
+          wrap.classList.add("split");
         }
-        if (value.bearish) {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "trend-chip-btn bearish";
-          if (
-            state.trendSelection &&
-            state.trendSelection.key === activeKey &&
-            state.trendSelection.direction === "bearish"
-          ) {
-            btn.classList.add("active");
-          }
-          btn.innerHTML = `<span class="trend-chip-label">看空</span>+${value.bearish}`;
-          btn.addEventListener("click", async () => {
-            const payload = await fetchMarketTrendDetail(date, tagKey, "bearish");
-            state.trendSelection = { key: activeKey, tagKey, direction: "bearish" };
-            renderTrendsView();
-            renderTrendDetail(payload);
-            openDetailOnMobile();
-          });
-          wrap.appendChild(btn);
+        if (!value.bearish && value.bearish_notes && !wrap.classList.contains("split")) {
+          wrap.classList.add("split");
         }
+      }
+      if (value.bullish || value.bullish_notes) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "trend-chip-btn bullish";
+        if (
+          state.trendSelection &&
+          state.trendSelection.key === activeKey &&
+          state.trendSelection.direction === "bullish"
+        ) {
+          btn.classList.add("active");
+        }
+        btn.innerHTML =
+          `<span class="trend-chip-label">看多</span>+${value.bullish || 0}` +
+          (value.bullish_notes ? `<span class="trend-chip-note">想法 ${value.bullish_notes}</span>` : "");
+        btn.addEventListener("click", async () => {
+          const payload = await fetchMarketTrendDetail(date, tagKey, "bullish");
+          state.trendSelection = {
+            key: activeKey,
+            tagKey,
+            tagLabel: row.tag_label || row.tag,
+            date,
+            direction: "bullish",
+            detailPayload: payload,
+          };
+          renderTrendsView();
+          renderTrendDetail(payload);
+          openDetailOnMobile();
+        });
+        wrap.appendChild(btn);
+      }
+      if (value.bearish || value.bearish_notes) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "trend-chip-btn bearish";
+        if (
+          state.trendSelection &&
+          state.trendSelection.key === activeKey &&
+          state.trendSelection.direction === "bearish"
+        ) {
+          btn.classList.add("active");
+        }
+        btn.innerHTML =
+          `<span class="trend-chip-label">看空</span>+${value.bearish || 0}` +
+          (value.bearish_notes ? `<span class="trend-chip-note">想法 ${value.bearish_notes}</span>` : "");
+        btn.addEventListener("click", async () => {
+          const payload = await fetchMarketTrendDetail(date, tagKey, "bearish");
+          state.trendSelection = {
+            key: activeKey,
+            tagKey,
+            tagLabel: row.tag_label || row.tag,
+            date,
+            direction: "bearish",
+            detailPayload: payload,
+          };
+          renderTrendsView();
+          renderTrendDetail(payload);
+          openDetailOnMobile();
+        });
+        wrap.appendChild(btn);
       }
       td.appendChild(wrap);
       tr.appendChild(td);
@@ -1845,7 +2034,9 @@ function resetList() {
   state.trendRows = [];
   state.trendDates = [];
   state.trendSelection = null;
+  state.trendNoteContext = null;
   state.tagAdminOpen = false;
+  state.trendComposeOpen = false;
   showTrendsView(false);
   closeDetailOnMobile();
   renderDetail(null);
@@ -2097,6 +2288,24 @@ if (manageMarketTagsBtn) {
   });
 }
 
+if (trendComposeBtn) {
+  trendComposeBtn.addEventListener("click", () => {
+    openTrendComposeView();
+  });
+}
+
+if (trendBullishNoteBtn) {
+  trendBullishNoteBtn.addEventListener("click", () => {
+    openTrendNoteEditor("bullish");
+  });
+}
+
+if (trendBearishNoteBtn) {
+  trendBearishNoteBtn.addEventListener("click", () => {
+    openTrendNoteEditor("bearish");
+  });
+}
+
 if (mobileFilterBackdrop) {
   mobileFilterBackdrop.addEventListener("click", closeMobileFilterSheet);
 }
@@ -2220,6 +2429,133 @@ if (detailTagCreateBtn) {
       await refreshTrendTagAdminState();
     } finally {
       detailTagCreateBtn.disabled = false;
+    }
+  });
+}
+
+if (detailTrendNoteCancelBtn) {
+  detailTrendNoteCancelBtn.addEventListener("click", closeTrendNoteEditor);
+}
+
+if (detailTrendNoteSaveBtn) {
+  detailTrendNoteSaveBtn.addEventListener("click", async () => {
+    if (!state.trendNoteContext) return;
+    detailTrendNoteSaveBtn.disabled = true;
+    try {
+      const context = { ...state.trendNoteContext };
+      await saveTrendNote({
+        date: context.date,
+        tag: context.tagKey,
+        direction: context.direction,
+        note: detailTrendNoteInput.value,
+      });
+      await refreshTrendTagAdminState();
+      const payload = await fetchMarketTrendDetail(context.date, context.tagKey, context.direction);
+      state.trendSelection = {
+        key: `${context.tagKey}|${context.date}`,
+        tagKey: context.tagKey,
+        tagLabel: payload.tag,
+        date: context.date,
+        direction: context.direction,
+        detailPayload: payload,
+      };
+      renderTrendsView();
+      renderTrendDetail(payload);
+      closeTrendNoteEditor();
+    } finally {
+      detailTrendNoteSaveBtn.disabled = false;
+    }
+  });
+}
+
+if (detailTrendNoteDeleteBtn) {
+  detailTrendNoteDeleteBtn.addEventListener("click", async () => {
+    if (!state.trendNoteContext) return;
+    detailTrendNoteDeleteBtn.disabled = true;
+    try {
+      const context = { ...state.trendNoteContext };
+      await deleteTrendNote({
+        date: context.date,
+        tag: context.tagKey,
+        direction: context.direction,
+      });
+      await refreshTrendTagAdminState();
+      const payload = await fetchMarketTrendDetail(context.date, context.tagKey, context.direction);
+      state.trendSelection = {
+        key: `${context.tagKey}|${context.date}`,
+        tagKey: context.tagKey,
+        tagLabel: payload.tag,
+        date: context.date,
+        direction: context.direction,
+        detailPayload: payload,
+      };
+      renderTrendsView();
+      renderTrendDetail(payload);
+      closeTrendNoteEditor();
+    } finally {
+      detailTrendNoteDeleteBtn.disabled = false;
+    }
+  });
+}
+
+if (trendNoteComposeCancelBtn) {
+  trendNoteComposeCancelBtn.addEventListener("click", () => {
+    closeTrendComposerView();
+    if (state.trendSelection?.detailPayload) {
+      renderTrendDetail(state.trendSelection.detailPayload);
+    } else {
+      renderTrendDetail(null);
+    }
+  });
+}
+
+if (trendNoteComposeSaveBtn) {
+  trendNoteComposeSaveBtn.addEventListener("click", async () => {
+    const date = trendNoteDateSelect.value;
+    const tag = trendNoteTagSelect.value;
+    const direction = trendNoteDirectionSelect.value;
+    if (!date || !tag || !direction) return;
+    trendNoteComposeSaveBtn.disabled = true;
+    try {
+      await saveTrendNote({
+        date,
+        tag,
+        direction,
+        note: trendNoteComposeInput.value,
+      });
+      await refreshTrendTagAdminState();
+      closeTrendComposerView();
+      const payload = await fetchMarketTrendDetail(date, tag, direction);
+      state.trendSelection = {
+        key: `${tag}|${date}`,
+        tagKey: tag,
+        tagLabel: payload.tag,
+        date,
+        direction,
+        detailPayload: payload,
+      };
+      renderTrendsView();
+      renderTrendDetail(payload);
+    } finally {
+      trendNoteComposeSaveBtn.disabled = false;
+    }
+  });
+}
+
+if (trendNoteComposeDeleteBtn) {
+  trendNoteComposeDeleteBtn.addEventListener("click", async () => {
+    const date = trendNoteDateSelect.value;
+    const tag = trendNoteTagSelect.value;
+    const direction = trendNoteDirectionSelect.value;
+    if (!date || !tag || !direction) return;
+    trendNoteComposeDeleteBtn.disabled = true;
+    try {
+      await deleteTrendNote({ date, tag, direction });
+      await refreshTrendTagAdminState();
+      closeTrendComposerView();
+      renderTrendDetail(null);
+    } finally {
+      trendNoteComposeDeleteBtn.disabled = false;
     }
   });
 }

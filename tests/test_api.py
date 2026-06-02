@@ -891,3 +891,70 @@ def test_market_tag_definitions_crud_and_dynamic_usage(tmp_path: Path, monkeypat
     detail_after_deactivate = client.get(f"/api/news/{item['id']}/detail").get_json()
     historical_tag = next(tag for tag in detail_after_deactivate["market_tags"] if tag["key"] == created_tag["key"])
     assert historical_tag["tag"] == "大宏观"
+
+
+def test_market_trend_notes_manual_signal(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（1条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-02 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    assert client.put(
+        f"/api/news/{item['id']}/market-tag",
+        json={"tag": "AI", "direction": "bullish"},
+    ).status_code == 200
+
+    bullish_note = client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-02", "tag_key": "AI", "direction": "bullish", "note": "继续看多 AI 主线"},
+    )
+    assert bullish_note.status_code == 200
+    assert bullish_note.get_json()["trend_note"]["note"] == "继续看多 AI 主线"
+
+    bearish_note = client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-02", "tag_key": "AI", "direction": "bearish", "note": "短线也要警惕回撤"},
+    )
+    assert bearish_note.status_code == 200
+    assert bearish_note.get_json()["has_trend_note"] == 1
+
+    trends = client.get("/api/market-trends?days=7")
+    assert trends.status_code == 200
+    ai_row = next(row for row in trends.get_json()["rows"] if row["tag_key"] == "AI")
+    slot = next(value for value in ai_row["values"] if value["date"] == "2026-06-02")
+    assert slot["bullish"] == 1
+    assert slot["bullish_notes"] == 1
+    assert slot["bearish"] == 0
+    assert slot["bearish_notes"] == 1
+
+    bullish_detail = client.get("/api/market-trends/detail?date=2026-06-02&tag=AI&direction=bullish")
+    assert bullish_detail.status_code == 200
+    bullish_payload = bullish_detail.get_json()
+    assert bullish_payload["total"] == 1
+    assert bullish_payload["trend_note"]["note"] == "继续看多 AI 主线"
+
+    bearish_detail = client.get("/api/market-trends/detail?date=2026-06-02&tag=AI&direction=bearish")
+    assert bearish_detail.status_code == 200
+    bearish_payload = bearish_detail.get_json()
+    assert bearish_payload["total"] == 0
+    assert bearish_payload["trend_note"]["note"] == "短线也要警惕回撤"
+
+    delete_res = client.delete("/api/market-trends/note?date=2026-06-02&tag=AI&direction=bearish")
+    assert delete_res.status_code == 200
+    assert delete_res.get_json()["has_trend_note"] == 0
