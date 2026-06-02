@@ -45,6 +45,7 @@
           <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
           <button id="markAllReadBtn" class="icon-btn" type="button"></button>
           <button id="refreshBtn" class="icon-btn" type="button"></button>
+          <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
         </div>
         <div id="meta" class="meta"></div>
         <ul id="newsList" class="news-list">
@@ -68,6 +69,19 @@
           <h3 id="detailTrendTitle" class="detail-title"></h3>
           <div id="detailTrendMeta" class="detail-meta"></div>
           <div id="detailTrendList" class="detail-trend-list"></div>
+        </div>
+        <div id="detailTagAdminBody" class="detail-tag-admin-body hidden">
+          <div class="detail-tag-admin-header">
+            <div>
+              <h3 class="detail-title">管理板块</h3>
+              <div class="detail-meta">新增、重命名或停用板块标签</div>
+            </div>
+          </div>
+          <section class="detail-tag-create">
+            <input id="detailTagCreateInput" class="detail-tag-create-input" type="text" maxlength="40" placeholder="新增板块名称" />
+            <button id="detailTagCreateBtn" class="detail-retry-btn" type="button">新增</button>
+          </section>
+          <div id="detailTagAdminList" class="detail-tag-admin-list"></div>
         </div>
         <div id="detailBody" class="detail-body hidden">
           <h3 id="detailTitle" class="detail-title"></h3>

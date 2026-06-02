@@ -46,7 +46,7 @@ SOURCE_LABELS = {
     "x": "X",
 }
 
-MARKET_TAG_CHOICES = [
+DEFAULT_MARKET_TAG_CHOICES = [
     "存储",
     "电力",
     "房地产",
@@ -197,12 +197,59 @@ def ensure_db() -> None:
     conn = db_conn()
     try:
         apply_schema(conn, SCHEMA_PATH)
+        seed_market_tag_definitions(conn)
     finally:
         conn.close()
 
 
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
+    where_sql = "WHERE active=1" if active_only else ""
+    rows = conn.execute(
+        f"""
+        SELECT key, display_name, active, sort_order, created_at, updated_at
+        FROM market_tag_definitions
+        {where_sql}
+        ORDER BY sort_order ASC, created_at ASC, key ASC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def load_market_tag_definition_map(conn: sqlite3.Connection) -> dict[str, dict]:
+    return {row["key"]: row for row in load_market_tag_definitions(conn, active_only=False)}
+
+
+def seed_market_tag_definitions(conn: sqlite3.Connection) -> None:
+    existing = {
+        row["key"]: row["display_name"]
+        for row in conn.execute("SELECT key, display_name FROM market_tag_definitions").fetchall()
+    }
+    ts = now_ts()
+    with conn:
+        for idx, tag in enumerate(DEFAULT_MARKET_TAG_CHOICES):
+            if tag in existing:
+                continue
+            conn.execute(
+                """
+                INSERT INTO market_tag_definitions(key, display_name, active, sort_order, created_at, updated_at)
+                VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (tag, tag, idx, ts, ts),
+            )
+
+
+def create_market_tag_key(conn: sqlite3.Connection, display_name: str) -> str:
+    base = display_name.strip()
+    candidate = base
+    suffix = 2
+    while conn.execute("SELECT 1 FROM market_tag_definitions WHERE key=?", (candidate,)).fetchone():
+        candidate = f"{base} ({suffix})"
+        suffix += 1
+    return candidate
 
 
 def load_market_tags_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str, list[dict]]:
@@ -214,10 +261,16 @@ def load_market_tags_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str,
     placeholders = ",".join(["?"] * len(uniq_urls))
     rows = conn.execute(
         f"""
-        SELECT url, tag, direction, created_at, updated_at
-        FROM article_market_tags
-        WHERE url IN ({placeholders})
-        ORDER BY updated_at DESC, tag ASC
+        SELECT amt.url,
+               amt.tag,
+               amt.direction,
+               amt.created_at,
+               amt.updated_at,
+               mtd.display_name
+        FROM article_market_tags amt
+        LEFT JOIN market_tag_definitions mtd ON mtd.key = amt.tag
+        WHERE amt.url IN ({placeholders})
+        ORDER BY amt.updated_at DESC, amt.tag ASC
         """,
         uniq_urls,
     ).fetchall()
@@ -225,7 +278,8 @@ def load_market_tags_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str,
     for r in rows:
         grouped.setdefault(r["url"], []).append(
             {
-                "tag": r["tag"],
+                "key": r["tag"],
+                "tag": r["display_name"] or r["tag"],
                 "direction": r["direction"],
                 "created_at": r["created_at"],
                 "updated_at": r["updated_at"],
@@ -838,6 +892,7 @@ def api_market_trends():
 
     conn = db_conn()
     try:
+        active_tags = load_market_tag_definitions(conn, active_only=True)
         date_rows = conn.execute(
             f"""
             SELECT DISTINCT {ITEM_DATE_SQL} AS date_key
@@ -900,18 +955,27 @@ def api_market_trends():
         slot = counts.setdefault((tag, date_key), {"bullish": 0, "bearish": 0})
         slot[direction] = total
 
-    tags_in_use = [tag for tag in MARKET_TAG_CHOICES if tag in non_zero_tags]
+    tags_in_use = [tag for tag in active_tags if tag["key"] in non_zero_tags]
     rows_payload = []
-    for tag in tags_in_use:
+    for tag_def in tags_in_use:
+        tag_key = tag_def["key"]
         values = []
         row_total = 0
         for date_key in latest_dates:
-            slot = counts.get((tag, date_key), {"bullish": 0, "bearish": 0})
+            slot = counts.get((tag_key, date_key), {"bullish": 0, "bearish": 0})
             bullish = int(slot.get("bullish") or 0)
             bearish = int(slot.get("bearish") or 0)
             row_total += bullish + bearish
             values.append({"date": date_key, "bullish": bullish, "bearish": bearish})
-        rows_payload.append({"tag": tag, "values": values, "total": row_total})
+        rows_payload.append(
+            {
+                "tag": tag_key,
+                "tag_key": tag_key,
+                "tag_label": tag_def["display_name"],
+                "values": values,
+                "total": row_total,
+            }
+        )
 
     return jsonify(
         {
@@ -932,13 +996,16 @@ def api_market_trends_detail():
     direction = (request.args.get("direction") or "").strip().lower()
     if not date_key:
         return jsonify({"ok": False, "error": "missing_date"}), 400
-    if tag not in MARKET_TAG_CHOICES:
-        return jsonify({"ok": False, "error": "invalid_tag"}), 400
-    if direction not in MARKET_DIRECTIONS:
-        return jsonify({"ok": False, "error": "invalid_direction"}), 400
-
     conn = db_conn()
     try:
+        tag_def = conn.execute(
+            "SELECT key, display_name, active FROM market_tag_definitions WHERE key=?",
+            (tag,),
+        ).fetchone()
+        if not tag_def:
+            return jsonify({"ok": False, "error": "invalid_tag"}), 400
+        if direction not in MARKET_DIRECTIONS:
+            return jsonify({"ok": False, "error": "invalid_direction"}), 400
         rows = conn.execute(
             f"""
             SELECT items.id, items.source_file, items.item_order, items.published_at,
@@ -983,7 +1050,8 @@ def api_market_trends_detail():
         {
             "ok": True,
             "date": date_key,
-            "tag": tag,
+            "tag": tag_def["display_name"],
+            "tag_key": tag_def["key"],
             "direction": direction,
             "total": len(items),
             "items": items,
@@ -1233,6 +1301,7 @@ def api_news_detail(item_id: str):
         ai = None
         note_row = None
         market_tags: list[dict] = []
+        market_tag_choices = load_market_tag_definitions(conn, active_only=True)
         if url:
             job = conn.execute(
                 "SELECT status, attempts, last_error, queued_at, started_at, finished_at FROM detail_jobs WHERE url=?",
@@ -1273,9 +1342,122 @@ def api_news_detail(item_id: str):
             "note": (dict(note_row) if note_row else None),
             "market_tags": market_tags,
             "has_market_tags": 1 if market_tags else 0,
-            "market_tag_choices": MARKET_TAG_CHOICES,
+            "market_tag_choices": market_tag_choices,
         }
     )
+
+
+@app.get("/api/market-tags")
+def api_market_tags():
+    active_only = ((request.args.get("active_only") or "").strip().lower() in ("1", "true", "yes"))
+    conn = db_conn()
+    try:
+        tags = load_market_tag_definitions(conn, active_only=active_only)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "tags": tags})
+
+
+@app.post("/api/market-tags")
+def api_market_tags_create():
+    body = request.get_json(silent=True) or {}
+    raw_name = body.get("display_name")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        return jsonify({"ok": False, "error": "invalid_display_name"}), 400
+    display_name = raw_name.strip()
+
+    conn = db_conn()
+    try:
+        duplicate = conn.execute(
+            "SELECT key FROM market_tag_definitions WHERE display_name=? COLLATE NOCASE",
+            (display_name,),
+        ).fetchone()
+        if duplicate:
+            return jsonify({"ok": False, "error": "display_name_exists"}), 400
+        key = create_market_tag_key(conn, display_name)
+        row = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM market_tag_definitions").fetchone()
+        sort_order = int(row[0] or 0)
+        ts = now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO market_tag_definitions(key, display_name, active, sort_order, created_at, updated_at)
+                VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (key, display_name, sort_order, ts, ts),
+            )
+        created = conn.execute(
+            """
+            SELECT key, display_name, active, sort_order, created_at, updated_at
+            FROM market_tag_definitions
+            WHERE key=?
+            """,
+            (key,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "tag": dict(created)})
+
+
+@app.patch("/api/market-tags/<tag_key>")
+def api_market_tags_update(tag_key: str):
+    body = request.get_json(silent=True) or {}
+    updates: list[str] = []
+    args: list = []
+    display_name = body.get("display_name")
+    active = body.get("active")
+
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            "SELECT key FROM market_tag_definitions WHERE key=?",
+            (tag_key,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "tag_not_found"}), 404
+
+        if display_name is not None:
+            if not isinstance(display_name, str) or not display_name.strip():
+                return jsonify({"ok": False, "error": "invalid_display_name"}), 400
+            normalized_name = display_name.strip()
+            duplicate = conn.execute(
+                "SELECT key FROM market_tag_definitions WHERE display_name=? COLLATE NOCASE AND key<>?",
+                (normalized_name, tag_key),
+            ).fetchone()
+            if duplicate:
+                return jsonify({"ok": False, "error": "display_name_exists"}), 400
+            updates.append("display_name=?")
+            args.append(normalized_name)
+
+        if active is not None:
+            if not isinstance(active, bool):
+                return jsonify({"ok": False, "error": "invalid_active"}), 400
+            updates.append("active=?")
+            args.append(1 if active else 0)
+
+        if not updates:
+            return jsonify({"ok": False, "error": "missing_updates"}), 400
+
+        ts = now_ts()
+        updates.append("updated_at=?")
+        args.append(ts)
+        args.append(tag_key)
+        with conn:
+            conn.execute(
+                f"UPDATE market_tag_definitions SET {', '.join(updates)} WHERE key=?",
+                args,
+            )
+        updated = conn.execute(
+            """
+            SELECT key, display_name, active, sort_order, created_at, updated_at
+            FROM market_tag_definitions
+            WHERE key=?
+            """,
+            (tag_key,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "tag": dict(updated)})
 
 
 @app.put("/api/news/<item_id>/note")
@@ -1341,13 +1523,17 @@ def api_news_market_tag_upsert(item_id: str):
         return jsonify({"ok": False, "error": "invalid_direction"}), 400
     tag = raw_tag.strip()
     direction = raw_direction.strip().lower()
-    if tag not in MARKET_TAG_CHOICES:
-        return jsonify({"ok": False, "error": "unsupported_tag"}), 400
     if direction not in MARKET_DIRECTIONS:
         return jsonify({"ok": False, "error": "invalid_direction"}), 400
 
     conn = db_conn()
     try:
+        tag_def = conn.execute(
+            "SELECT key FROM market_tag_definitions WHERE key=? AND active=1",
+            (tag,),
+        ).fetchone()
+        if not tag_def:
+            return jsonify({"ok": False, "error": "unsupported_tag"}), 400
         item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
         if not item:
             return jsonify({"ok": False, "error": "item_not_found"}), 404
@@ -1409,11 +1595,15 @@ def api_news_market_tag_delete(item_id: str):
     raw_tag = (request.args.get("tag") or "").strip()
     if not raw_tag:
         return jsonify({"ok": False, "error": "missing_tag"}), 400
-    if raw_tag not in MARKET_TAG_CHOICES:
-        return jsonify({"ok": False, "error": "unsupported_tag"}), 400
 
     conn = db_conn()
     try:
+        tag_def = conn.execute(
+            "SELECT key FROM market_tag_definitions WHERE key=?",
+            (raw_tag,),
+        ).fetchone()
+        if not tag_def:
+            return jsonify({"ok": False, "error": "unsupported_tag"}), 400
         item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
         if not item:
             return jsonify({"ok": False, "error": "item_not_found"}), 404

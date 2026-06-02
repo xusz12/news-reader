@@ -817,3 +817,77 @@ def test_market_trends_matrix_and_detail(tmp_path: Path, monkeypatch):
     assert bearish_payload["items"][0]["has_note"] == 1
     assert bearish_payload["items"][0]["note"]["note"] == "留意 Apple 链条影响"
     assert bearish_payload["items"][0]["market_tags"][0]["direction"] == "bearish"
+
+
+def test_market_tag_definitions_crud_and_dynamic_usage(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（1条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-02 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    tags_res = client.get("/api/market-tags")
+    assert tags_res.status_code == 200
+    tags_payload = tags_res.get_json()
+    assert tags_payload["ok"] is True
+    assert any(tag["display_name"] == "AI" for tag in tags_payload["tags"])
+
+    create_res = client.post("/api/market-tags", json={"display_name": "宏观观察"})
+    assert create_res.status_code == 200
+    created_tag = create_res.get_json()["tag"]
+    assert created_tag["display_name"] == "宏观观察"
+    assert created_tag["active"] == 1
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    put_res = client.put(
+        f"/api/news/{item['id']}/market-tag",
+        json={"tag": created_tag["key"], "direction": "bullish"},
+    )
+    assert put_res.status_code == 200
+    assert put_res.get_json()["market_tags"][0]["tag"] == "宏观观察"
+
+    rename_res = client.patch(
+        f"/api/market-tags/{created_tag['key']}",
+        json={"display_name": "大宏观"},
+    )
+    assert rename_res.status_code == 200
+    assert rename_res.get_json()["tag"]["display_name"] == "大宏观"
+
+    detail_res = client.get(f"/api/news/{item['id']}/detail")
+    assert detail_res.status_code == 200
+    detail_payload = detail_res.get_json()
+    renamed_tag = next(tag for tag in detail_payload["market_tags"] if tag["key"] == created_tag["key"])
+    assert renamed_tag["tag"] == "大宏观"
+    choice = next(tag for tag in detail_payload["market_tag_choices"] if tag["key"] == created_tag["key"])
+    assert choice["display_name"] == "大宏观"
+
+    deactivate_res = client.patch(
+        f"/api/market-tags/{created_tag['key']}",
+        json={"active": False},
+    )
+    assert deactivate_res.status_code == 200
+    assert deactivate_res.get_json()["tag"]["active"] == 0
+
+    active_tags = client.get("/api/market-tags?active_only=1").get_json()["tags"]
+    assert all(tag["key"] != created_tag["key"] for tag in active_tags)
+
+    trends = client.get("/api/market-trends?days=7").get_json()
+    assert all(row["tag_key"] != created_tag["key"] for row in trends["rows"])
+
+    detail_after_deactivate = client.get(f"/api/news/{item['id']}/detail").get_json()
+    historical_tag = next(tag for tag in detail_after_deactivate["market_tags"] if tag["key"] == created_tag["key"])
+    assert historical_tag["tag"] == "大宏观"
