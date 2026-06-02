@@ -66,6 +66,8 @@ items.published_at ASC,
 items.id ASC
 """
 
+ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10))"
+
 
 def _source_prefix(source: str | None) -> str:
     if not source:
@@ -218,6 +220,24 @@ def load_market_tags_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str,
             }
         )
     return grouped
+
+
+def load_notes_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str, dict]:
+    if not urls:
+        return {}
+    uniq_urls = [u for u in dict.fromkeys(urls) if u]
+    if not uniq_urls:
+        return {}
+    placeholders = ",".join(["?"] * len(uniq_urls))
+    rows = conn.execute(
+        f"""
+        SELECT url, note, created_at, updated_at
+        FROM article_notes
+        WHERE url IN ({placeholders})
+        """,
+        uniq_urls,
+    ).fetchall()
+    return {r["url"]: dict(r) for r in rows}
 
 
 def derive_date_meta(published_at: str | None, raw_date: str | None) -> tuple[str, str]:
@@ -793,6 +813,169 @@ def api_sources():
         ordered.append({"key": key, "label": labels.get(key, key), "count": counts[key]})
 
     return jsonify({"ok": True, "sources": ordered})
+
+
+@app.get("/api/market-trends")
+def api_market_trends():
+    try:
+        days = int(request.args.get("days", "7"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid_days"}), 400
+    days = min(30, max(3, days))
+
+    conn = db_conn()
+    try:
+        date_rows = conn.execute(
+            f"""
+            SELECT DISTINCT {ITEM_DATE_SQL} AS date_key
+            FROM items
+            WHERE EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)
+              AND {ITEM_DATE_SQL} IS NOT NULL
+              AND {ITEM_DATE_SQL} != ''
+            ORDER BY date_key DESC
+            LIMIT ?
+            """,
+            (days,),
+        ).fetchall()
+        latest_dates_desc = [r["date_key"] for r in date_rows]
+        if not latest_dates_desc:
+            return jsonify({
+                "ok": True,
+                "days": days,
+                "dates": [],
+                "rows": [],
+                "tag_count": 0,
+                "tagged_item_count": 0,
+            })
+
+        latest_dates = list(reversed(latest_dates_desc))
+        placeholders = ",".join(["?"] * len(latest_dates_desc))
+        agg_rows = conn.execute(
+            f"""
+            SELECT {ITEM_DATE_SQL} AS date_key,
+                   mt.tag,
+                   mt.direction,
+                   COUNT(*) AS total
+            FROM items
+            JOIN article_market_tags mt ON mt.url = items.url
+            WHERE {ITEM_DATE_SQL} IN ({placeholders})
+            GROUP BY date_key, mt.tag, mt.direction
+            ORDER BY date_key ASC, mt.tag ASC, mt.direction ASC
+            """,
+            latest_dates_desc,
+        ).fetchall()
+        tagged_item_count = conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM items
+            WHERE EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)
+              AND {ITEM_DATE_SQL} IN ({placeholders})
+            """,
+            latest_dates_desc,
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    counts: dict[tuple[str, str], dict[str, int]] = {}
+    non_zero_tags: set[str] = set()
+    for row in agg_rows:
+        date_key = row["date_key"]
+        tag = row["tag"]
+        direction = row["direction"]
+        total = int(row["total"] or 0)
+        non_zero_tags.add(tag)
+        slot = counts.setdefault((tag, date_key), {"bullish": 0, "bearish": 0})
+        slot[direction] = total
+
+    tags_in_use = [tag for tag in MARKET_TAG_CHOICES if tag in non_zero_tags]
+    rows_payload = []
+    for tag in tags_in_use:
+        values = []
+        row_total = 0
+        for date_key in latest_dates:
+            slot = counts.get((tag, date_key), {"bullish": 0, "bearish": 0})
+            bullish = int(slot.get("bullish") or 0)
+            bearish = int(slot.get("bearish") or 0)
+            row_total += bullish + bearish
+            values.append({"date": date_key, "bullish": bullish, "bearish": bearish})
+        rows_payload.append({"tag": tag, "values": values, "total": row_total})
+
+    return jsonify(
+        {
+            "ok": True,
+            "days": days,
+            "dates": latest_dates,
+            "rows": rows_payload,
+            "tag_count": len(rows_payload),
+            "tagged_item_count": int(tagged_item_count or 0),
+        }
+    )
+
+
+@app.get("/api/market-trends/detail")
+def api_market_trends_detail():
+    date_key = (request.args.get("date") or "").strip()
+    tag = (request.args.get("tag") or "").strip()
+    direction = (request.args.get("direction") or "").strip().lower()
+    if not date_key:
+        return jsonify({"ok": False, "error": "missing_date"}), 400
+    if tag not in MARKET_TAG_CHOICES:
+        return jsonify({"ok": False, "error": "invalid_tag"}), 400
+    if direction not in MARKET_DIRECTIONS:
+        return jsonify({"ok": False, "error": "invalid_direction"}), 400
+
+    conn = db_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT items.id, items.source_file, items.item_order, items.published_at,
+                   items.date, items.time, items.source, items.source_type,
+                   items.source_name, items.title, items.summary, items.url,
+                   st.read_at, st.important_at, st.read_later_at,
+                   CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note
+            FROM items
+            JOIN article_market_tags mt ON mt.url = items.url
+            LEFT JOIN item_state st ON st.item_id = items.id
+            LEFT JOIN article_notes an ON an.url = items.url
+            WHERE {ITEM_DATE_SQL} = ?
+              AND mt.tag = ?
+              AND mt.direction = ?
+            ORDER BY items.published_at ASC, items.id ASC
+            """,
+            (date_key, tag, direction),
+        ).fetchall()
+        urls = [r["url"] for r in rows if r["url"]]
+        notes_map = load_notes_map(conn, urls)
+        market_tags_map = load_market_tags_map(conn, urls)
+    finally:
+        conn.close()
+
+    items = []
+    for row in rows:
+        item = dict(row)
+        url = item.get("url") or ""
+        note = notes_map.get(url)
+        tags = market_tags_map.get(url, [])
+        item["note"] = note
+        item["has_note"] = 1 if note else 0
+        item["market_tags"] = tags
+        item["has_market_tags"] = 1 if tags else 0
+        item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
+        key, label = derive_date_meta(item.get("published_at"), item.get("date"))
+        item["date_key"] = key
+        item["date_label"] = label
+        items.append(item)
+
+    return jsonify(
+        {
+            "ok": True,
+            "date": date_key,
+            "tag": tag,
+            "direction": direction,
+            "total": len(items),
+            "items": items,
+        }
+    )
 
 
 @app.get("/api/reading-checkpoint")

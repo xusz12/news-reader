@@ -25,7 +25,7 @@
       </div>
     </header>
 
-    <main class="workspace">
+    <main id="workspace" class="workspace">
       <aside class="left-nav">
         <h2>集合入口</h2>
         <button id="navFeedBtn" class="nav-btn active">新闻流</button>
@@ -33,6 +33,7 @@
         <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
         <button id="navNotesBtn" class="nav-btn">想法</button>
         <button id="navMarketTagsBtn" class="nav-btn">板块</button>
+        <button id="navTrendsBtn" class="nav-btn">趋势</button>
 
         <h2 class="sources-title">订阅源</h2>
         <div id="sourceFilters" class="source-filters"></div>
@@ -50,6 +51,11 @@
           <li id="listHint" class="list-hint"></li>
           <li id="loadMoreSentinel" class="load-sentinel" aria-hidden="true"></li>
         </ul>
+        <div id="trendsView" class="trends-view hidden">
+          <div class="trends-scroll">
+            <table id="trendsTable" class="trends-table"></table>
+          </div>
+        </div>
         <div class="pager hidden" aria-hidden="true">
           <span id="pageInfo">1 / 1</span>
         </div>
@@ -58,6 +64,11 @@
       <aside id="detailPanel" class="detail-panel" aria-live="polite">
         <button id="detailCloseBtn" class="detail-close" type="button">关闭</button>
         <div id="detailEmpty" class="detail-empty">选择一条新闻查看摘要与正文</div>
+        <div id="detailTrendBody" class="detail-trend-body hidden">
+          <h3 id="detailTrendTitle" class="detail-title"></h3>
+          <div id="detailTrendMeta" class="detail-meta"></div>
+          <div id="detailTrendList" class="detail-trend-list"></div>
+        </div>
         <div id="detailBody" class="detail-body hidden">
           <h3 id="detailTitle" class="detail-title"></h3>
           <div id="detailMeta" class="detail-meta"></div>

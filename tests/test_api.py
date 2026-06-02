@@ -712,3 +712,70 @@ def test_market_tags_crud_and_collection_filter(tmp_path: Path, monkeypatch):
     feed = client.get("/api/news?per=20").get_json()["items"]
     r1_after = next(x for x in feed if x["id"] == reuters_item["id"])
     assert r1_after["important_at"] is not None
+
+
+def test_market_trends_matrix_and_detail(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（2条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-02 09:00:00
+### [R2](https://www.reuters.com/world/r2)
+- 发布时间：2026-06-02 10:00:00
+## Bloomberg · Tech（1条）
+### [B1](https://www.bloomberg.com/news/articles/b1)
+- 发布时间：2026-06-01 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    r1 = next(x for x in items if x["title"] == "R1")
+    r2 = next(x for x in items if x["title"] == "R2")
+    b1 = next(x for x in items if x["title"] == "B1")
+
+    assert client.put(f"/api/news/{r1['id']}/market-tag", json={"tag": "AI", "direction": "bullish"}).status_code == 200
+    assert client.put(f"/api/news/{r2['id']}/market-tag", json={"tag": "AI", "direction": "bullish"}).status_code == 200
+    assert client.put(f"/api/news/{b1['id']}/market-tag", json={"tag": "AI", "direction": "bearish"}).status_code == 200
+    assert client.put(f"/api/news/{b1['id']}/note", json={"note": "留意 Apple 链条影响"}).status_code == 200
+
+    trends = client.get("/api/market-trends?days=7")
+    assert trends.status_code == 200
+    payload = trends.get_json()
+    assert payload["ok"] is True
+    assert payload["dates"] == ["2026-06-01", "2026-06-02"]
+    ai_row = next(row for row in payload["rows"] if row["tag"] == "AI")
+    counts_by_date = {slot["date"]: slot for slot in ai_row["values"]}
+    assert counts_by_date["2026-06-02"]["bullish"] == 2
+    assert counts_by_date["2026-06-02"]["bearish"] == 0
+    assert counts_by_date["2026-06-01"]["bullish"] == 0
+    assert counts_by_date["2026-06-01"]["bearish"] == 1
+
+    detail = client.get("/api/market-trends/detail?date=2026-06-02&tag=AI&direction=bullish")
+    assert detail.status_code == 200
+    detail_payload = detail.get_json()
+    assert detail_payload["ok"] is True
+    assert detail_payload["total"] == 2
+    assert [item["title"] for item in detail_payload["items"]] == ["R1", "R2"]
+    assert all(item["date_key"] == "2026-06-02" for item in detail_payload["items"])
+    assert all(item["source_key"] == "reuters" for item in detail_payload["items"])
+
+    bearish_detail = client.get("/api/market-trends/detail?date=2026-06-01&tag=AI&direction=bearish")
+    assert bearish_detail.status_code == 200
+    bearish_payload = bearish_detail.get_json()
+    assert bearish_payload["total"] == 1
+    assert bearish_payload["items"][0]["title"] == "B1"
+    assert bearish_payload["items"][0]["has_note"] == 1
+    assert bearish_payload["items"][0]["note"]["note"] == "留意 Apple 链条影响"
+    assert bearish_payload["items"][0]["market_tags"][0]["direction"] == "bearish"

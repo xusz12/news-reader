@@ -6,7 +6,7 @@ let state = {
   readFilter: "unread", // all | unread
   feedReadFilter: "unread", // 仅新闻流记忆 all | unread
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
-  collection: "feed", // feed | important | read_later
+  collection: "feed", // feed | important | read_later | notes | market_tags | trends
   total: 0,
   loading: false,
   hasMore: true,
@@ -14,6 +14,10 @@ let state = {
   itemsById: new Map(),
   detailCacheByUrl: new Map(),
   readingCheckpoint: null,
+  trendDays: 7,
+  trendRows: [],
+  trendDates: [],
+  trendSelection: null,
 };
 
 const mediaIconMap = {
@@ -33,6 +37,7 @@ const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
 const navMarketTagsBtn = document.getElementById("navMarketTagsBtn");
+const navTrendsBtn = document.getElementById("navTrendsBtn");
 const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
 const mobileTabFilterBtn = document.getElementById("mobileTabFilterBtn");
 const sourceFilters = document.getElementById("sourceFilters");
@@ -53,9 +58,16 @@ const meta = document.getElementById("meta");
 const pageInfo = document.getElementById("pageInfo");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
+const workspace = document.getElementById("workspace");
+const trendsView = document.getElementById("trendsView");
+const trendsTable = document.getElementById("trendsTable");
 
 const detailPanel = document.getElementById("detailPanel");
 const detailEmpty = document.getElementById("detailEmpty");
+const detailTrendBody = document.getElementById("detailTrendBody");
+const detailTrendTitle = document.getElementById("detailTrendTitle");
+const detailTrendMeta = document.getElementById("detailTrendMeta");
+const detailTrendList = document.getElementById("detailTrendList");
 const detailBody = document.getElementById("detailBody");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
 const detailAiBox = document.getElementById("detailAiBox");
@@ -111,6 +123,45 @@ const MARKET_TAG_CHOICES = ["存储", "电力", "房地产", "APPLE", "AI", "医
 
 function setHint(text) {
   listHint.textContent = text || "";
+}
+
+function showTrendsView(show) {
+  trendsView.classList.toggle("hidden", !show);
+  newsList.classList.toggle("hidden", !!show);
+}
+
+function updateWorkspaceLayout() {
+  if (!workspace) return;
+  const trendsMode = state.collection === "trends";
+  const trendDetailOpen = trendsMode && !!state.trendSelection;
+  workspace.classList.toggle("trends-mode", trendsMode);
+  workspace.classList.toggle("trends-detail-open", trendDetailOpen);
+}
+
+function updateSourceFilterVisibility() {
+  const visible = state.collection !== "trends";
+  document.querySelectorAll(".sources-title, #sourceFilters").forEach((node) => {
+    node.classList.toggle("hidden", !visible);
+  });
+  if (!visible) closeMobileFilterSheet();
+}
+
+async function fetchMarketTrends() {
+  const params = new URLSearchParams({ days: String(state.trendDays || 7) });
+  const res = await fetch(`/api/market-trends?${params.toString()}`);
+  if (!res.ok) throw new Error("market_trends_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_trends_fetch_failed");
+  return data;
+}
+
+async function fetchMarketTrendDetail(date, tag, direction) {
+  const params = new URLSearchParams({ date, tag, direction });
+  const res = await fetch(`/api/market-trends/detail?${params.toString()}`);
+  if (!res.ok) throw new Error("market_trend_detail_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_trend_detail_fetch_failed");
+  return data;
 }
 
 function clearFeedEndAutoReadTimer() {
@@ -474,7 +525,12 @@ function applyResumeIcon(label = "回到上次阅读") {
 }
 
 function updateBatchActionButton() {
-  if (state.collection === "important" || state.collection === "notes" || state.collection === "market_tags") {
+  if (
+    state.collection === "important" ||
+    state.collection === "notes" ||
+    state.collection === "market_tags" ||
+    state.collection === "trends"
+  ) {
     markAllReadBtn.classList.add("hidden");
     markAllReadBtn.disabled = false;
     return;
@@ -493,6 +549,7 @@ function updateCollectionButtons() {
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
   if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
   if (navMarketTagsBtn) navMarketTagsBtn.classList.toggle("active", state.collection === "market_tags");
+  if (navTrendsBtn) navTrendsBtn.classList.toggle("active", state.collection === "trends");
   if (mobileCollectionTriggerBtn) {
     mobileCollectionTriggerBtn.classList.toggle("active", true);
     const names = {
@@ -501,6 +558,7 @@ function updateCollectionButtons() {
       read_later: "稍后",
       notes: "想法",
       market_tags: "板块",
+      trends: "趋势",
     };
     mobileCollectionTriggerBtn.textContent = names[state.collection] || "新闻流";
   }
@@ -514,6 +572,7 @@ function updateMobileFilterCollectionText() {
     read_later: "稍后再看",
     notes: "想法",
     market_tags: "板块",
+    trends: "趋势",
   };
   mobileFilterCollection.textContent = `当前集合：${names[state.collection] || "新闻流"}`;
 }
@@ -539,6 +598,7 @@ function renderMobileCollectionOptions() {
     { key: "read_later", label: "稍后阅读" },
     { key: "notes", label: "想法" },
     { key: "market_tags", label: "板块" },
+    { key: "trends", label: "趋势" },
   ];
   for (const option of options) {
     const btn = document.createElement("button");
@@ -645,7 +705,13 @@ function renderMeta() {
     read_later: "稍后再看",
     notes: "想法",
     market_tags: "板块",
+    trends: "趋势",
   };
+  if (state.collection === "trends") {
+    meta.textContent = `趋势 · 近 ${state.trendDays} 天 · ${state.trendRows.length} 个板块 · ${state.total} 条标记`;
+    pageInfo.textContent = "- / -";
+    return;
+  }
   const readNames = {
     all: "全部",
     unread: "仅未读",
@@ -654,6 +720,161 @@ function renderMeta() {
   const sourceName = state.sourceFilter === "all" ? "全部来源" : sourceLabel(state.sourceFilter);
   meta.textContent = `${names[state.collection]} · ${readFilterName} · ${sourceName} · 共 ${state.total} 条`;
   pageInfo.textContent = `${state.page} / ${state.pages}`;
+}
+
+function renderTrendDetail(payload) {
+  detailBody.classList.add("hidden");
+  if (!payload) {
+    detailTrendBody.classList.add("hidden");
+    detailEmpty.classList.remove("hidden");
+    detailEmpty.textContent = state.collection === "trends" ? "选择一个趋势单元格查看新闻明细" : "选择一条新闻查看摘要与正文";
+    updateWorkspaceLayout();
+    return;
+  }
+
+  detailEmpty.classList.add("hidden");
+  detailTrendBody.classList.remove("hidden");
+  detailTrendTitle.textContent = `${payload.tag} · ${payload.direction === "bullish" ? "看多" : "看空"}`;
+  detailTrendMeta.textContent = `${payload.date} · ${payload.total} 条新闻`;
+  detailTrendList.innerHTML = "";
+
+  payload.items.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "trend-detail-card";
+
+    const title = document.createElement("h4");
+    title.className = "trend-detail-title";
+    const link = document.createElement("a");
+    link.href = item.url || "#";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = item.title || "未命名新闻";
+    title.appendChild(link);
+
+    const metaLine = document.createElement("div");
+    metaLine.className = "trend-detail-meta";
+    metaLine.textContent = `${item.source || "未知来源"} · ${item.published_at || item.date_key || ""}`;
+
+    const summary = document.createElement("p");
+    summary.className = "trend-detail-summary";
+    summary.textContent = item.summary || "无摘要";
+
+    card.appendChild(title);
+    card.appendChild(metaLine);
+    card.appendChild(summary);
+
+    if (item.note?.note) {
+      const note = document.createElement("div");
+      note.className = "trend-detail-note";
+      note.textContent = item.note.note;
+      card.appendChild(note);
+    }
+
+    if (Array.isArray(item.market_tags) && item.market_tags.length) {
+      const tags = document.createElement("div");
+      tags.className = "trend-detail-tags";
+      item.market_tags.forEach((tag) => {
+        const chip = document.createElement("span");
+        chip.className = `trend-detail-tag ${tag.direction}`;
+        chip.textContent = tag.tag;
+        tags.appendChild(chip);
+      });
+      card.appendChild(tags);
+    }
+
+    detailTrendList.appendChild(card);
+  });
+  updateWorkspaceLayout();
+}
+
+function renderTrendsView() {
+  trendsTable.innerHTML = "";
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const headDate = document.createElement("th");
+  headDate.textContent = "日期";
+  headRow.appendChild(headDate);
+  state.trendRows.forEach((row) => {
+    const th = document.createElement("th");
+    th.textContent = row.tag;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  trendsTable.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  const rowMap = new Map(state.trendRows.map((row) => [row.tag, row]));
+  state.trendDates.forEach((date) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.textContent = date;
+    tr.appendChild(th);
+
+    state.trendRows.forEach((row) => {
+      const value = rowMap.get(row.tag)?.values.find((entry) => entry.date === date) || {
+        date,
+        bullish: 0,
+        bearish: 0,
+      };
+      const td = document.createElement("td");
+      const wrap = document.createElement("div");
+      wrap.className = "trends-cell";
+      const activeKey = `${row.tag}|${date}`;
+
+      if (!value.bullish && !value.bearish) {
+        wrap.classList.add("empty");
+        wrap.textContent = "-";
+      } else {
+        if (value.bullish) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "trend-chip-btn bullish";
+          if (
+            state.trendSelection &&
+            state.trendSelection.key === activeKey &&
+            state.trendSelection.direction === "bullish"
+          ) {
+            btn.classList.add("active");
+          }
+          btn.innerHTML = `<span class="trend-chip-label">看多</span>+${value.bullish}`;
+          btn.addEventListener("click", async () => {
+            const payload = await fetchMarketTrendDetail(date, row.tag, "bullish");
+            state.trendSelection = { key: activeKey, direction: "bullish" };
+            renderTrendsView();
+            renderTrendDetail(payload);
+            openDetailOnMobile();
+          });
+          wrap.appendChild(btn);
+        }
+        if (value.bearish) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "trend-chip-btn bearish";
+          if (
+            state.trendSelection &&
+            state.trendSelection.key === activeKey &&
+            state.trendSelection.direction === "bearish"
+          ) {
+            btn.classList.add("active");
+          }
+          btn.innerHTML = `<span class="trend-chip-label">看空</span>+${value.bearish}`;
+          btn.addEventListener("click", async () => {
+            const payload = await fetchMarketTrendDetail(date, row.tag, "bearish");
+            state.trendSelection = { key: activeKey, direction: "bearish" };
+            renderTrendsView();
+            renderTrendDetail(payload);
+            openDetailOnMobile();
+          });
+          wrap.appendChild(btn);
+        }
+      }
+      td.appendChild(wrap);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  trendsTable.appendChild(tbody);
 }
 
 async function patchState(itemId, payload) {
@@ -1014,10 +1235,14 @@ function renderDetail(item) {
   if (!item) {
     stopDetailPolling();
     closeMarketPicker();
+    detailTrendBody.classList.add("hidden");
     detailBody.classList.add("hidden");
     detailEmpty.classList.remove("hidden");
+    detailEmpty.textContent = state.collection === "trends" ? "选择一个趋势单元格查看新闻明细" : "选择一条新闻查看摘要与正文";
+    updateWorkspaceLayout();
     return;
   }
+  detailTrendBody.classList.add("hidden");
   detailEmpty.classList.add("hidden");
   detailBody.classList.remove("hidden");
 
@@ -1170,6 +1395,7 @@ function renderDetail(item) {
   applyIcon(detailBearishBtn, "trend-down", { tone: "success", label: "看空板块标记" });
   refreshDetailNoteUI(item);
   refreshDetailMarketTagsUI(item);
+  updateWorkspaceLayout();
 }
 
 async function fetchDetail(itemId) {
@@ -1443,6 +1669,10 @@ function resetList() {
   stopRowStatusPolling();
   clearFeedEndAutoReadTimer();
   feedEndAutoReadFiredKey = "";
+  state.trendRows = [];
+  state.trendDates = [];
+  state.trendSelection = null;
+  showTrendsView(false);
   closeDetailOnMobile();
   renderDetail(null);
   lastRenderedDateKey = null;
@@ -1485,6 +1715,29 @@ async function loadFirstPage() {
   }
   state.loading = true;
   try {
+    resetList();
+
+    if (state.collection === "trends") {
+      const data = await fetchMarketTrends();
+      state.total = Number(data.tagged_item_count || 0);
+      state.pages = 1;
+      state.page = 1;
+      state.hasMore = false;
+      state.trendDates = Array.isArray(data.dates) ? data.dates : [];
+      state.trendRows = Array.isArray(data.rows) ? data.rows : [];
+      showTrendsView(true);
+      renderTrendsView();
+      renderTrendDetail(null);
+      renderMeta();
+      setHint(state.trendRows.length ? "点击单元格查看趋势明细" : "暂无板块趋势数据");
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      stopRowStatusPolling();
+      return;
+    }
+
     const sourceList = await fetchSources();
     const available = new Set(sourceList.map((x) => x.key));
     if (state.sourceFilter !== "all" && !available.has(state.sourceFilter)) {
@@ -1493,7 +1746,6 @@ async function loadFirstPage() {
     renderSourceFilters(sourceList);
 
     const data = await fetchNewsPage(1);
-    resetList();
     state.total = data.total;
     state.pages = data.pages;
     state.page = 1;
@@ -1519,11 +1771,13 @@ async function loadFirstPage() {
     updateFilterButtons();
     updateBatchActionButton();
     updateCollectionButtons();
+    updateSourceFilterVisibility();
     updateResumeButton();
   }
 }
 
 async function loadNextPage() {
+  if (state.collection === "trends") return;
   if (!state.hasMore) return;
   const next = state.page + 1;
   state.loading = true;
@@ -1629,6 +1883,11 @@ if (navMarketTagsBtn) {
     await switchCollection("market_tags");
   });
 }
+if (navTrendsBtn) {
+  navTrendsBtn.addEventListener("click", async () => {
+    await switchCollection("trends");
+  });
+}
 
 if (mobileCollectionTriggerBtn) {
   mobileCollectionTriggerBtn.addEventListener("click", () => {
@@ -1671,7 +1930,12 @@ if (detailFontSelect) {
 }
 
 markAllReadBtn.addEventListener("click", async () => {
-  if (state.collection === "important" || state.collection === "notes" || state.collection === "market_tags") return;
+  if (
+    state.collection === "important" ||
+    state.collection === "notes" ||
+    state.collection === "market_tags" ||
+    state.collection === "trends"
+  ) return;
 
   const readLaterMode = state.collection === "read_later";
   const ok = window.confirm(
