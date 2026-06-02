@@ -10,6 +10,10 @@
   --muted: #6b7280;
   --accent: #2563eb;
   --row-title: #0f172a;
+  --row-title-important: #a16207;
+  --row-title-bullish: #b91c1c;
+  --row-title-bearish: #047857;
+  --row-title-mixed: #7c3aed;
   --row-summary: #475569;
   --row-hover: #f1f5f9;
   --row-selected: #eff6ff;
@@ -43,6 +47,10 @@ html[data-theme="dark"] {
   --text: #e5e7eb;
   --muted: #94a3b8;
   --row-title: #e5e7eb;
+  --row-title-important: #fbbf24;
+  --row-title-bullish: #fca5a5;
+  --row-title-bearish: #6ee7b7;
+  --row-title-mixed: #c4b5fd;
   --row-summary: #cbd5e1;
   --row-hover: #1f2937;
   --row-selected: #1e293b;
@@ -72,6 +80,10 @@ html[data-theme="dark"] {
     --text: #e5e7eb;
     --muted: #94a3b8;
     --row-title: #e5e7eb;
+    --row-title-important: #fbbf24;
+    --row-title-bullish: #fca5a5;
+    --row-title-bearish: #6ee7b7;
+    --row-title-mixed: #c4b5fd;
     --row-summary: #cbd5e1;
     --row-hover: #1f2937;
     --row-selected: #1e293b;
@@ -690,6 +702,22 @@ button.active {
   font-size: 15px;
   color: var(--row-title);
   margin-bottom: 6px;
+}
+
+.title.tone-important {
+  color: var(--row-title-important);
+}
+
+.title.tone-bullish {
+  color: var(--row-title-bullish);
+}
+
+.title.tone-bearish {
+  color: var(--row-title-bearish);
+}
+
+.title.tone-mixed {
+  color: var(--row-title-mixed);
 }
 
 .summary {

@@ -456,6 +456,7 @@ function syncRowUI(li, item) {
     noteBadge.classList.toggle("hidden", !hasNote);
   }
   const marketTagsWrap = li.querySelector(".market-tags");
+  const titleEl = li.querySelector(".title");
   if (marketTagsWrap) {
     marketTagsWrap.innerHTML = "";
     const tags = marketTagsFromItem(item);
@@ -466,6 +467,22 @@ function syncRowUI(li, item) {
       marketTagsWrap.appendChild(badge);
     });
     marketTagsWrap.classList.toggle("hidden", tags.length === 0);
+  }
+
+  if (titleEl) {
+    titleEl.classList.remove("tone-important", "tone-bullish", "tone-bearish", "tone-mixed");
+    const tags = marketTagsFromItem(item);
+    const hasBullish = tags.some((mt) => mt.direction === "bullish");
+    const hasBearish = tags.some((mt) => mt.direction === "bearish");
+    if (hasBullish && hasBearish) {
+      titleEl.classList.add("tone-mixed");
+    } else if (hasBullish) {
+      titleEl.classList.add("tone-bullish");
+    } else if (hasBearish) {
+      titleEl.classList.add("tone-bearish");
+    } else if (item.important_at) {
+      titleEl.classList.add("tone-important");
+    }
   }
 
   const importantBtn = li.querySelector(".btn-important");
