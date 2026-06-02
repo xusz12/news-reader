@@ -60,13 +60,23 @@ MARKET_TAG_CHOICES = [
 ]
 MARKET_DIRECTIONS = {"bullish", "bearish"}
 
-NEWS_ORDER_BY_SQL = """
+FEED_NEWS_ORDER_BY_SQL = """
 COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) DESC,
 items.published_at ASC,
 items.id ASC
 """
 
+NON_FEED_NEWS_ORDER_BY_SQL = """
+COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) DESC,
+items.published_at DESC,
+items.id DESC
+"""
+
 ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10))"
+
+
+def news_order_by_sql(collection: str) -> str:
+    return FEED_NEWS_ORDER_BY_SQL if collection == "feed" else NON_FEED_NEWS_ORDER_BY_SQL
 
 
 def _source_prefix(source: str | None) -> str:
@@ -665,6 +675,7 @@ def api_news():
     LEFT JOIN article_notes an ON an.url = items.url
     """
     where_sql, args = _build_news_where_clause(q, read_filter, collection, source_filter)
+    order_by_sql = news_order_by_sql(collection)
 
     conn = db_conn()
     try:
@@ -692,7 +703,7 @@ def api_news():
             LEFT JOIN ai_jobs aj ON aj.url = items.url
             LEFT JOIN article_ai aa ON aa.url = items.url
             {where_sql}
-            ORDER BY {NEWS_ORDER_BY_SQL}
+            ORDER BY {order_by_sql}
             LIMIT ? OFFSET ?
             """,
             [*args, per, offset],
@@ -1056,7 +1067,7 @@ def api_locate_reading_checkpoint():
         sql = f"""
         WITH filtered AS (
           SELECT items.id, items.url,
-                 ROW_NUMBER() OVER (ORDER BY {NEWS_ORDER_BY_SQL}) AS rn,
+                 ROW_NUMBER() OVER (ORDER BY {FEED_NEWS_ORDER_BY_SQL}) AS rn,
                  COUNT(*) OVER () AS total
           FROM items
           LEFT JOIN item_state st ON st.item_id = items.id

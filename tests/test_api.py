@@ -82,6 +82,44 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     assert combo.get_json()["total"] == 1
 
 
+def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（3条）
+### [Morning](https://example.com/morning)
+- 发布时间：2026-06-02 09:00:00
+### [Noon](https://example.com/noon)
+- 发布时间：2026-06-02 12:00:00
+### [Evening](https://example.com/evening)
+- 发布时间：2026-06-02 18:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    feed_items = client.get("/api/news?per=20").get_json()["items"]
+    assert [item["title"] for item in feed_items] == ["Morning", "Noon", "Evening"]
+
+    for item in feed_items:
+        res = client.patch(f"/api/news/{item['id']}/state", json={"important": True})
+        assert res.status_code == 200
+
+    important_items = client.get("/api/news?collection=important&per=20").get_json()["items"]
+    assert [item["title"] for item in important_items] == ["Evening", "Noon", "Morning"]
+
+
 def test_mark_all_read_cross_page_with_filter(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"
     daily_dir.mkdir(parents=True)
