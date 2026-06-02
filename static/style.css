@@ -1209,7 +1209,7 @@ html[data-detail-font="large"] {
 
   .workspace {
     display: block;
-    padding: 8px 8px calc(66px + var(--mobile-safe-bottom));
+    padding: 8px 8px calc(74px + var(--mobile-safe-bottom));
   }
 
   .workspace.trends-mode,
@@ -1227,7 +1227,7 @@ html[data-detail-font="large"] {
   }
 
   .feed-column {
-    height: calc(100dvh - var(--topbar-h) - 18px - (66px + var(--mobile-safe-bottom)));
+    height: calc(100dvh - var(--topbar-h) - 18px - (74px + var(--mobile-safe-bottom)));
     border-radius: 12px;
   }
 
@@ -1450,7 +1450,7 @@ html[data-detail-font="large"] {
     bottom: 0;
     z-index: 45;
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 6px;
     padding: 8px 10px calc(8px + var(--mobile-safe-bottom));
     border-top: 1px solid var(--border);

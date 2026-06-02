@@ -40,6 +40,7 @@ const navMarketTagsBtn = document.getElementById("navMarketTagsBtn");
 const navTrendsBtn = document.getElementById("navTrendsBtn");
 const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
 const mobileTabFilterBtn = document.getElementById("mobileTabFilterBtn");
+const mobileTrendsTabBtn = document.getElementById("mobileTrendsTabBtn");
 const sourceFilters = document.getElementById("sourceFilters");
 const mobileFilterSheet = document.getElementById("mobileFilterSheet");
 const mobileFilterBackdrop = document.getElementById("mobileFilterBackdrop");
@@ -568,7 +569,7 @@ function updateCollectionButtons() {
   if (navMarketTagsBtn) navMarketTagsBtn.classList.toggle("active", state.collection === "market_tags");
   if (navTrendsBtn) navTrendsBtn.classList.toggle("active", state.collection === "trends");
   if (mobileCollectionTriggerBtn) {
-    mobileCollectionTriggerBtn.classList.toggle("active", true);
+    mobileCollectionTriggerBtn.classList.toggle("active", state.collection !== "trends");
     const names = {
       feed: "新闻流",
       important: "重要",
@@ -577,7 +578,10 @@ function updateCollectionButtons() {
       market_tags: "板块",
       trends: "趋势",
     };
-    mobileCollectionTriggerBtn.textContent = names[state.collection] || "新闻流";
+    mobileCollectionTriggerBtn.textContent = state.collection === "trends" ? "集合" : (names[state.collection] || "新闻流");
+  }
+  if (mobileTrendsTabBtn) {
+    mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
   }
 }
 
@@ -615,7 +619,6 @@ function renderMobileCollectionOptions() {
     { key: "read_later", label: "稍后阅读" },
     { key: "notes", label: "想法" },
     { key: "market_tags", label: "板块" },
-    { key: "trends", label: "趋势" },
   ];
   for (const option of options) {
     const btn = document.createElement("button");
@@ -1918,6 +1921,12 @@ if (mobileCollectionTriggerBtn) {
 if (mobileTabFilterBtn) {
   mobileTabFilterBtn.addEventListener("click", () => {
     openMobileFilterSheet();
+  });
+}
+
+if (mobileTrendsTabBtn) {
+  mobileTrendsTabBtn.addEventListener("click", async () => {
+    await switchCollection("trends");
   });
 }
 
