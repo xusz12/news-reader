@@ -120,7 +120,7 @@ const DETAIL_SWIPE_CLOSE_PX = 72;
 const DETAIL_SWIPE_EDGE_PX = 40;
 const DETAIL_SWIPE_AXIS_RATIO = 1.5;
 const NOTE_MAX_LEN = 5000;
-const MARKET_TAG_CHOICES = ["存储", "电力", "房地产", "APPLE", "AI", "医疗", "稀土", "矿产", "新能源", "中国资产"];
+const MARKET_TAG_CHOICES = ["存储", "电力", "房地产", "APPLE", "AI", "电子消费", "医疗", "国际形势", "稀土", "矿产", "新能源", "中国资产"];
 
 function setHint(text) {
   listHint.textContent = text || "";
