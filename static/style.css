@@ -185,10 +185,11 @@ button.active {
   grid-template-columns: minmax(160px, 1fr) minmax(380px, 2fr) minmax(520px, 3fr);
   gap: 14px;
   align-items: start;
+  --trends-left-col-w: 220px;
 }
 
 .workspace.trends-mode {
-  grid-template-columns: minmax(160px, 1fr) minmax(960px, 1fr);
+  grid-template-columns: var(--trends-left-col-w) minmax(0, 1fr);
 }
 
 .workspace.trends-mode .feed-column {
@@ -200,7 +201,7 @@ button.active {
 }
 
 .workspace.trends-mode.trends-detail-open {
-  grid-template-columns: minmax(160px, 1fr) minmax(520px, 3fr) minmax(380px, 2fr);
+  grid-template-columns: var(--trends-left-col-w) minmax(520px, 3fr) minmax(380px, 2fr);
 }
 
 .workspace.trends-mode.trends-detail-open .detail-panel {
@@ -367,6 +368,18 @@ button.active {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.trends-cell.split {
+  gap: 4px;
+  flex-direction: row;
+}
+
+.trends-cell.split .trend-chip-btn {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .trends-cell.empty {
@@ -1193,6 +1206,46 @@ html[data-detail-font="large"] {
   .feed-controls {
     margin: -2px -2px 2px;
     padding: 4px 6px 8px;
+  }
+
+  .trends-table {
+    width: max(100%, 520px);
+  }
+
+  .trends-table thead th {
+    position: static !important;
+    left: auto !important;
+    font-size: 11px;
+    padding: 8px 6px;
+  }
+
+  .trends-table tbody th {
+    position: static !important;
+    left: auto !important;
+    min-width: 86px;
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+
+  .trends-table tbody td {
+    min-width: 92px;
+    padding: 6px;
+  }
+
+  .trends-cell {
+    min-height: 60px;
+    gap: 4px;
+  }
+
+  .trend-chip-btn {
+    border-radius: 10px;
+    padding: 6px 7px;
+    font-size: 11px;
+  }
+
+  .trend-chip-label {
+    font-size: 10px;
+    margin-bottom: 1px;
   }
 
   .detail-panel {

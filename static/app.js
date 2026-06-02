@@ -826,6 +826,9 @@ function renderTrendsView() {
         wrap.classList.add("empty");
         wrap.textContent = "-";
       } else {
+        if (value.bullish && value.bearish) {
+          wrap.classList.add("split");
+        }
         if (value.bullish) {
           const btn = document.createElement("button");
           btn.type = "button";
