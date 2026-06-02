@@ -578,7 +578,7 @@ function updateCollectionButtons() {
       market_tags: "板块",
       trends: "趋势",
     };
-    mobileCollectionTriggerBtn.textContent = state.collection === "trends" ? "集合" : (names[state.collection] || "新闻流");
+    mobileCollectionTriggerBtn.textContent = state.collection === "trends" ? "新闻流" : (names[state.collection] || "新闻流");
   }
   if (mobileTrendsTabBtn) {
     mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
@@ -1913,7 +1913,11 @@ if (navTrendsBtn) {
 }
 
 if (mobileCollectionTriggerBtn) {
-  mobileCollectionTriggerBtn.addEventListener("click", () => {
+  mobileCollectionTriggerBtn.addEventListener("click", async () => {
+    if (state.collection === "trends") {
+      await switchCollection("feed");
+      return;
+    }
     openMobileCollectionSheet();
   });
 }
