@@ -193,6 +193,15 @@ async function fetchMarketTrendDetail(date, tag, direction) {
   return data;
 }
 
+async function fetchMarketTrendTagDetail(tag) {
+  const params = new URLSearchParams({ tag });
+  const res = await fetch(`/api/market-trends/tag-detail?${params.toString()}`);
+  if (!res.ok) throw new Error("market_trend_tag_detail_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_trend_tag_detail_fetch_failed");
+  return data;
+}
+
 async function fetchMarketTagDefinitions() {
   const res = await fetch("/api/market-tags");
   if (!res.ok) throw new Error("market_tags_fetch_failed");
@@ -1053,58 +1062,131 @@ function renderTrendDetail(payload) {
   detailEmpty.classList.add("hidden");
   detailTrendComposerBody.classList.add("hidden");
   detailTrendBody.classList.remove("hidden");
-  detailTrendTitle.textContent = `${payload.tag} · ${payload.direction === "bullish" ? "看多" : "看空"}`;
-  detailTrendMeta.textContent = `${payload.date} · ${payload.total} 条新闻`;
-  refreshTrendNoteCard(payload.trend_note, payload.direction);
+  const isTagOverview = payload.view === "tag";
+  trendComposeBtn.classList.toggle("hidden", false);
+  trendBullishNoteBtn.classList.toggle("hidden", isTagOverview);
+  trendBearishNoteBtn.classList.toggle("hidden", isTagOverview);
+  if (isTagOverview) {
+    detailTrendTitle.textContent = `${payload.tag} · 板块总览`;
+    detailTrendMeta.textContent = `${payload.item_total || 0} 条新闻 · ${payload.trend_note_total || 0} 条趋势想法`;
+    detailTrendNoteCard.classList.add("hidden");
+  } else {
+    detailTrendTitle.textContent = `${payload.tag} · ${payload.direction === "bullish" ? "看多" : "看空"}`;
+    detailTrendMeta.textContent = `${payload.date} · ${payload.total} 条新闻`;
+    refreshTrendNoteCard(payload.trend_note, payload.direction);
+  }
   detailTrendList.innerHTML = "";
-
-  payload.items.forEach((item) => {
-    const card = document.createElement("article");
-    card.className = "trend-detail-card";
-
-    const title = document.createElement("h4");
-    title.className = "trend-detail-title";
-    const link = document.createElement("a");
-    link.href = item.url || "#";
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.textContent = item.title || "未命名新闻";
-    title.appendChild(link);
-
-    const metaLine = document.createElement("div");
-    metaLine.className = "trend-detail-meta";
-    metaLine.textContent = `${item.source || "未知来源"} · ${item.published_at || item.date_key || ""}`;
-
-    const summary = document.createElement("p");
-    summary.className = "trend-detail-summary";
-    summary.textContent = item.summary || "无摘要";
-
-    card.appendChild(title);
-    card.appendChild(metaLine);
-    card.appendChild(summary);
-
-    if (item.note?.note) {
-      const note = document.createElement("div");
-      note.className = "trend-detail-note";
-      note.textContent = item.note.note;
-      card.appendChild(note);
-    }
-
-    if (Array.isArray(item.market_tags) && item.market_tags.length) {
-      const tags = document.createElement("div");
-      tags.className = "trend-detail-tags";
-      item.market_tags.forEach((tag) => {
-        const chip = document.createElement("span");
-        chip.className = `trend-detail-tag ${tag.direction}`;
-        chip.textContent = tag.tag;
-        tags.appendChild(chip);
-      });
-      card.appendChild(tags);
-    }
-
-    detailTrendList.appendChild(card);
-  });
+  if (isTagOverview) {
+    renderTrendTagOverview(payload);
+  } else {
+    payload.items.forEach((item) => {
+      detailTrendList.appendChild(buildTrendNewsCard(item));
+    });
+  }
   updateWorkspaceLayout();
+}
+
+function buildTrendNewsCard(item) {
+  const card = document.createElement("article");
+  card.className = "trend-detail-card";
+
+  const title = document.createElement("h4");
+  title.className = "trend-detail-title";
+  const link = document.createElement("a");
+  link.href = item.url || "#";
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = item.title || "未命名新闻";
+  title.appendChild(link);
+
+  const directionLabel = item.direction === "bullish" ? "看多" : item.direction === "bearish" ? "看空" : "";
+  const metaLine = document.createElement("div");
+  metaLine.className = "trend-detail-meta";
+  metaLine.textContent = `${directionLabel ? `${directionLabel} · ` : ""}${item.source || "未知来源"} · ${item.published_at || item.date_key || ""}`;
+
+  const summary = document.createElement("p");
+  summary.className = "trend-detail-summary";
+  summary.textContent = item.summary || "无摘要";
+
+  card.appendChild(title);
+  card.appendChild(metaLine);
+  card.appendChild(summary);
+
+  if (item.note?.note) {
+    const note = document.createElement("div");
+    note.className = "trend-detail-note";
+    note.textContent = item.note.note;
+    card.appendChild(note);
+  }
+
+  if (Array.isArray(item.market_tags) && item.market_tags.length) {
+    const tags = document.createElement("div");
+    tags.className = "trend-detail-tags";
+    item.market_tags.forEach((tag) => {
+      const chip = document.createElement("span");
+      chip.className = `trend-detail-tag ${tag.direction}`;
+      chip.textContent = tag.tag;
+      tags.appendChild(chip);
+    });
+    card.appendChild(tags);
+  }
+
+  return card;
+}
+
+function buildTrendNoteCard(note) {
+  const card = document.createElement("article");
+  card.className = "trend-detail-card trend-detail-note-card";
+
+  const title = document.createElement("h4");
+  title.className = "trend-detail-title";
+  title.textContent = `${note.direction === "bullish" ? "看多" : "看空"}想法`;
+
+  const metaLine = document.createElement("div");
+  metaLine.className = "trend-detail-meta";
+  metaLine.textContent = `${note.updated_at || note.date_key || ""}`;
+
+  const noteBody = document.createElement("div");
+  noteBody.className = "trend-detail-note";
+  noteBody.textContent = note.note || "";
+
+  card.appendChild(title);
+  card.appendChild(metaLine);
+  card.appendChild(noteBody);
+  return card;
+}
+
+function renderTrendTagOverview(payload) {
+  const grouped = new Map();
+  (payload.trend_notes || []).forEach((note) => {
+    const date = note.date_key || "unknown";
+    if (!grouped.has(date)) grouped.set(date, { notes: [], items: [] });
+    grouped.get(date).notes.push(note);
+  });
+  (payload.items || []).forEach((item) => {
+    const date = item.date_key || "unknown";
+    if (!grouped.has(date)) grouped.set(date, { notes: [], items: [] });
+    grouped.get(date).items.push(item);
+  });
+  const dates = Array.from(grouped.keys()).sort((a, b) => b.localeCompare(a));
+  dates.forEach((date) => {
+    const section = document.createElement("section");
+    section.className = "trend-overview-section";
+
+    const heading = document.createElement("h4");
+    heading.className = "trend-overview-date";
+    heading.textContent = date;
+    section.appendChild(heading);
+
+    const bucket = grouped.get(date);
+    bucket.notes.forEach((note) => {
+      section.appendChild(buildTrendNoteCard(note));
+    });
+    bucket.items.forEach((item) => {
+      section.appendChild(buildTrendNewsCard(item));
+    });
+    detailTrendList.appendChild(section);
+  });
 }
 
 function renderTrendsView() {
@@ -1117,7 +1199,32 @@ function renderTrendsView() {
   headRow.appendChild(headDate);
   state.trendRows.forEach((row) => {
     const th = document.createElement("th");
-    th.textContent = row.tag_label || row.tag;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "trend-header-btn";
+    btn.textContent = row.tag_label || row.tag;
+    if (
+      state.trendSelection &&
+      state.trendSelection.kind === "tag" &&
+      state.trendSelection.tagKey === (row.tag_key || row.tag)
+    ) {
+      btn.classList.add("active");
+    }
+    btn.addEventListener("click", async () => {
+      const tagKey = row.tag_key || row.tag;
+      const payload = await fetchMarketTrendTagDetail(tagKey);
+      state.trendSelection = {
+        kind: "tag",
+        key: `tag|${tagKey}`,
+        tagKey,
+        tagLabel: row.tag_label || row.tag,
+        detailPayload: payload,
+      };
+      renderTrendsView();
+      renderTrendDetail(payload);
+      openDetailOnMobile();
+    });
+    th.appendChild(btn);
     headRow.appendChild(th);
   });
   thead.appendChild(headRow);
@@ -1185,6 +1292,7 @@ function renderTrendsView() {
         btn.addEventListener("click", async () => {
           const payload = await fetchMarketTrendDetail(date, tagKey, "bullish");
           state.trendSelection = {
+            kind: "cell",
             key: activeKey,
             tagKey,
             tagLabel: row.tag_label || row.tag,
@@ -1215,6 +1323,7 @@ function renderTrendsView() {
         btn.addEventListener("click", async () => {
           const payload = await fetchMarketTrendDetail(date, tagKey, "bearish");
           state.trendSelection = {
+            kind: "cell",
             key: activeKey,
             tagKey,
             tagLabel: row.tag_label || row.tag,

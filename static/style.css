@@ -347,6 +347,21 @@ button.active {
   text-align: center;
 }
 
+.trend-header-btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+  cursor: pointer;
+}
+
+.trend-header-btn.active {
+  color: var(--accent);
+}
+
 .trends-table thead th:first-child {
   left: 0;
   z-index: 3;
@@ -530,6 +545,19 @@ button.active {
   padding-right: 4px;
 }
 
+.trend-overview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.trend-overview-date {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
 .trend-detail-card {
   border: 1px solid var(--detail-card-border);
   background: var(--detail-card-bg);
@@ -574,6 +602,10 @@ button.active {
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.trend-detail-note-card {
+  border-style: dashed;
 }
 
 .trend-detail-tags {
@@ -1345,6 +1377,10 @@ html[data-detail-font="large"] {
   .trend-chip-label {
     font-size: 10px;
     margin-bottom: 1px;
+  }
+
+  .trend-header-btn {
+    font-size: 11px;
   }
 
   .detail-panel {

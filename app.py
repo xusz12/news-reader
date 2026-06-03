@@ -1128,6 +1128,7 @@ def api_market_trends_detail():
     return jsonify(
         {
             "ok": True,
+            "view": "cell",
             "date": date_key,
             "tag": tag_def["display_name"],
             "tag_key": tag_def["key"],
@@ -1135,6 +1136,104 @@ def api_market_trends_detail():
             "trend_note": trend_note,
             "total": len(items),
             "items": items,
+        }
+    )
+
+
+@app.get("/api/market-trends/tag-detail")
+def api_market_trends_tag_detail():
+    tag = (request.args.get("tag") or "").strip()
+    conn = db_conn()
+    try:
+        tag_def = conn.execute(
+            "SELECT key, display_name, active FROM market_tag_definitions WHERE key=?",
+            (tag,),
+        ).fetchone()
+        if not tag_def:
+            return jsonify({"ok": False, "error": "invalid_tag"}), 400
+
+        item_rows = conn.execute(
+            f"""
+            SELECT items.id, items.source_file, items.item_order, items.published_at,
+                   items.date, items.time, items.source, items.source_type,
+                   items.source_name, items.title, items.summary, items.url,
+                   st.read_at, st.important_at, st.read_later_at,
+                   amt.direction,
+                   CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note
+            FROM items
+            JOIN article_market_tags amt ON amt.url = items.url
+            LEFT JOIN item_state st ON st.item_id = items.id
+            LEFT JOIN article_notes an ON an.url = items.url
+            WHERE amt.tag = ?
+            ORDER BY {ITEM_DATE_SQL} DESC, items.published_at DESC, items.id DESC
+            """,
+            (tag,),
+        ).fetchall()
+        urls = [r["url"] for r in item_rows if r["url"]]
+        notes_map = load_notes_map(conn, urls)
+        market_tags_map = load_market_tags_map(conn, urls)
+
+        trend_note_rows = conn.execute(
+            """
+            SELECT mtn.id,
+                   mtn.date_key,
+                   mtn.tag,
+                   mtn.direction,
+                   mtn.note,
+                   mtn.created_at,
+                   mtn.updated_at,
+                   mtd.display_name
+            FROM market_trend_notes mtn
+            LEFT JOIN market_tag_definitions mtd ON mtd.key = mtn.tag
+            WHERE mtn.tag = ?
+            ORDER BY mtn.date_key DESC, mtn.updated_at DESC, mtn.id DESC
+            """,
+            (tag,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    items = []
+    for row in item_rows:
+        item = dict(row)
+        url = item.get("url") or ""
+        note = notes_map.get(url)
+        tags = market_tags_map.get(url, [])
+        item["note"] = note
+        item["has_note"] = 1 if note else 0
+        item["market_tags"] = tags
+        item["has_market_tags"] = 1 if tags else 0
+        item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
+        key, label = derive_date_meta(item.get("published_at"), item.get("date"))
+        item["date_key"] = key
+        item["date_label"] = label
+        items.append(item)
+
+    trend_notes = []
+    for row in trend_note_rows:
+        note = {
+            "id": row["id"],
+            "date_key": row["date_key"],
+            "tag_key": row["tag"],
+            "tag": row["display_name"] or row["tag"],
+            "direction": row["direction"],
+            "note": row["note"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        trend_notes.append(note)
+
+    return jsonify(
+        {
+            "ok": True,
+            "view": "tag",
+            "tag": tag_def["display_name"],
+            "tag_key": tag_def["key"],
+            "total": len(items),
+            "item_total": len(items),
+            "trend_note_total": len(trend_notes),
+            "items": items,
+            "trend_notes": trend_notes,
         }
     )
 
