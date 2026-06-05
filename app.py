@@ -2113,6 +2113,47 @@ def api_mark_all_read():
     return jsonify({"ok": True, "marked": len(item_ids)})
 
 
+@app.post("/api/news/mark-read-by-ids")
+def api_mark_read_by_ids():
+    body = request.get_json(silent=True) or {}
+    raw_item_ids = body.get("item_ids")
+    if not isinstance(raw_item_ids, list):
+        return jsonify({"ok": False, "error": "invalid_item_ids"}), 400
+
+    item_ids = [str(x).strip() for x in raw_item_ids if str(x).strip()]
+    if not item_ids:
+        return jsonify({"ok": True, "marked": 0})
+
+    placeholders = ",".join(["?"] * len(item_ids))
+    conn = db_conn()
+    try:
+        existing_ids = [
+            r[0]
+            for r in conn.execute(
+                f"SELECT id FROM items WHERE id IN ({placeholders})",
+                item_ids,
+            ).fetchall()
+        ]
+        if not existing_ids:
+            return jsonify({"ok": True, "marked": 0})
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO item_state(item_id, read_at, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(item_id) DO UPDATE SET
+                  read_at=excluded.read_at,
+                  updated_at=excluded.updated_at
+                """,
+                [(item_id, ts, ts) for item_id in existing_ids],
+            )
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "marked": len(existing_ids)})
+
+
 @app.post("/api/news/clear-read-later")
 def api_clear_read_later():
     body = request.get_json(silent=True) or {}

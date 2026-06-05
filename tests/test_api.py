@@ -217,6 +217,49 @@ def test_mark_all_read_respects_collection(tmp_path: Path, monkeypatch):
     assert item2 in ids
 
 
+def test_mark_read_by_ids_only_touches_loaded_rows(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（3条）
+### [Alpha 1](https://example.com/a1)
+- 发布时间：2026-05-25 12:00:00
+### [Alpha 2](https://example.com/a2)
+- 发布时间：2026-05-25 11:00:00
+### [Alpha 3](https://example.com/a3)
+- 发布时间：2026-05-25 10:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    all_items = client.get("/api/news?per=20&q=Alpha").get_json()["items"]
+    loaded_ids = [all_items[0]["id"], all_items[1]["id"]]
+    untouched_id = all_items[2]["id"]
+
+    mark = client.post(
+        "/api/news/mark-read-by-ids",
+        json={"item_ids": loaded_ids},
+    )
+    assert mark.status_code == 200
+    assert mark.get_json()["marked"] == 2
+
+    read_alpha = client.get("/api/news?read_filter=read&q=Alpha").get_json()["items"]
+    assert {it["id"] for it in read_alpha} == set(loaded_ids)
+
+    unread_alpha = client.get("/api/news?read_filter=unread&q=Alpha").get_json()["items"]
+    assert {it["id"] for it in unread_alpha} == {untouched_id}
+
+
 def test_read_later_enqueues_detail_job_and_retry(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"
     daily_dir.mkdir(parents=True)

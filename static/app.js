@@ -252,9 +252,18 @@ function isListHintVisible() {
   return hintRect.top < listRect.bottom && hintRect.bottom > listRect.top;
 }
 
-function markLoadedRowsReadLocally() {
+function currentLoadedRowIds() {
+  if (!newsList) return [];
+  return Array.from(newsList.querySelectorAll(".news-item"))
+    .map((row) => row.dataset.id || "")
+    .filter(Boolean);
+}
+
+function markLoadedRowsReadLocally(itemIds = null) {
+  const allow = Array.isArray(itemIds) ? new Set(itemIds) : null;
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   state.itemsById.forEach((item) => {
+    if (allow && !allow.has(String(item.id))) return;
     if (item.read_at) return;
     item.read_at = now;
     state.itemsById.set(item.id, item);
@@ -293,21 +302,20 @@ function scheduleFeedEndAutoReadIfNeeded() {
 
     const nowKey = feedEndAutoReadKey();
     if (feedEndAutoReadFiredKey === nowKey) return;
+    const itemIds = currentLoadedRowIds();
+    if (!itemIds.length) return;
 
     try {
-      const res = await fetch("/api/news/mark-all-read", {
+      const res = await fetch("/api/news/mark-read-by-ids", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          q: state.q,
-          read_filter: state.readFilter,
-          collection: state.collection,
-          source_filter: state.sourceFilter,
+          item_ids: itemIds,
         }),
       });
       if (!res.ok) return;
       feedEndAutoReadFiredKey = nowKey;
-      markLoadedRowsReadLocally();
+      markLoadedRowsReadLocally(itemIds);
       setHint("已将当前范围标为已读，列表将在下次刷新后更新");
     } catch {}
   }, 5000);
