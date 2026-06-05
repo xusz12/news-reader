@@ -457,9 +457,21 @@ button.active {
   color: #991b1b;
 }
 
+.trend-chip-btn.bullish.with-item-note {
+  background: #fecaca;
+  color: #7f1d1d;
+  border-color: #f87171;
+}
+
 .trend-chip-btn.bearish {
   background: #d1fae5;
   color: #065f46;
+}
+
+.trend-chip-btn.bearish.with-item-note {
+  background: #a7f3d0;
+  color: #064e3b;
+  border-color: #34d399;
 }
 
 .trend-chip-label {
@@ -577,6 +589,13 @@ button.active {
   padding: 12px;
 }
 
+.trend-detail-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .trend-detail-title {
   margin: 0;
   font-size: 14px;
@@ -604,6 +623,26 @@ button.active {
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.trend-detail-inline-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.trend-detail-inline-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.trend-detail-inline-btn.danger {
+  color: #b91c1c;
 }
 
 .trend-detail-note {

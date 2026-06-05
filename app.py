@@ -197,6 +197,7 @@ def ensure_db() -> None:
     conn = db_conn()
     try:
         apply_schema(conn, SCHEMA_PATH)
+        migrate_market_trend_notes(conn)
         seed_market_tag_definitions(conn)
     finally:
         conn.close()
@@ -240,6 +241,55 @@ def seed_market_tag_definitions(conn: sqlite3.Connection) -> None:
                 """,
                 (tag, tag, idx, ts, ts),
             )
+
+
+def migrate_market_trend_notes(conn: sqlite3.Connection) -> None:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='market_trend_notes'"
+    ).fetchone()
+    if not exists:
+        return
+
+    index_rows = conn.execute("PRAGMA index_list('market_trend_notes')").fetchall()
+    legacy_unique_index = None
+    for row in index_rows:
+        if int(row["unique"] or 0) != 1:
+            continue
+        index_name = row["name"]
+        cols = [
+            info["name"]
+            for info in conn.execute(f"PRAGMA index_info('{index_name}')").fetchall()
+        ]
+        if cols == ["date_key", "tag", "direction"]:
+            legacy_unique_index = index_name
+            break
+    if not legacy_unique_index:
+        return
+
+    with conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS market_trend_notes_v2 (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              date_key TEXT NOT NULL,
+              tag TEXT NOT NULL,
+              direction TEXT NOT NULL,
+              note TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO market_trend_notes_v2(id, date_key, tag, direction, note, created_at, updated_at)
+            SELECT id, date_key, tag, direction, note, created_at, updated_at
+            FROM market_trend_notes
+            ORDER BY id ASC
+            """
+        )
+        conn.execute("DROP TABLE market_trend_notes")
+        conn.execute("ALTER TABLE market_trend_notes_v2 RENAME TO market_trend_notes")
 
 
 def create_market_tag_key(conn: sqlite3.Connection, display_name: str) -> str:
@@ -309,7 +359,7 @@ def load_notes_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str, dict]
 def load_trend_notes_map(
     conn: sqlite3.Connection,
     keys: list[tuple[str, str, str]],
-) -> dict[tuple[str, str, str], dict]:
+) -> dict[tuple[str, str, str], list[dict]]:
     if not keys:
         return {}
     uniq_keys = list(dict.fromkeys(keys))
@@ -330,22 +380,26 @@ def load_trend_notes_map(
         FROM market_trend_notes mtn
         LEFT JOIN market_tag_definitions mtd ON mtd.key = mtn.tag
         WHERE (mtn.date_key, mtn.tag, mtn.direction) IN ({placeholders})
+        ORDER BY mtn.updated_at DESC, mtn.id DESC
         """,
         args,
     ).fetchall()
-    return {
-        (r["date_key"], r["tag"], r["direction"]): {
-            "id": r["id"],
-            "date_key": r["date_key"],
-            "tag_key": r["tag"],
-            "tag": r["display_name"] or r["tag"],
-            "direction": r["direction"],
-            "note": r["note"],
-            "created_at": r["created_at"],
-            "updated_at": r["updated_at"],
-        }
-        for r in rows
-    }
+    mapped: dict[tuple[str, str, str], list[dict]] = {}
+    for r in rows:
+        key = (r["date_key"], r["tag"], r["direction"])
+        mapped.setdefault(key, []).append(
+            {
+                "id": r["id"],
+                "date_key": r["date_key"],
+                "tag_key": r["tag"],
+                "tag": r["display_name"] or r["tag"],
+                "direction": r["direction"],
+                "note": r["note"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+        )
+    return mapped
 
 
 def derive_date_meta(published_at: str | None, raw_date: str | None) -> tuple[str, str]:
@@ -980,9 +1034,11 @@ def api_market_trends():
             SELECT {ITEM_DATE_SQL} AS date_key,
                    mt.tag,
                    mt.direction,
-                   COUNT(*) AS total
+                   COUNT(*) AS total,
+                   MAX(CASE WHEN an.url IS NULL THEN 0 ELSE 1 END) AS has_item_note
             FROM items
             JOIN article_market_tags mt ON mt.url = items.url
+            LEFT JOIN article_notes an ON an.url = items.url
             WHERE {ITEM_DATE_SQL} IN ({placeholders})
             GROUP BY date_key, mt.tag, mt.direction
             ORDER BY date_key ASC, mt.tag ASC, mt.direction ASC
@@ -1012,6 +1068,7 @@ def api_market_trends():
         conn.close()
 
     counts: dict[tuple[str, str], dict[str, int]] = {}
+    item_note_flags: dict[tuple[str, str], dict[str, int]] = {}
     note_counts: dict[tuple[str, str], dict[str, int]] = {}
     non_zero_tags: set[str] = set()
     for row in agg_rows:
@@ -1022,6 +1079,8 @@ def api_market_trends():
         non_zero_tags.add(tag)
         slot = counts.setdefault((tag, date_key), {"bullish": 0, "bearish": 0})
         slot[direction] = total
+        note_flag_slot = item_note_flags.setdefault((tag, date_key), {"bullish": 0, "bearish": 0})
+        note_flag_slot[direction] = int(row["has_item_note"] or 0)
     for row in note_rows:
         date_key = row["date_key"]
         tag = row["tag"]
@@ -1040,6 +1099,7 @@ def api_market_trends():
         for date_key in latest_dates:
             slot = counts.get((tag_key, date_key), {"bullish": 0, "bearish": 0})
             note_slot = note_counts.get((tag_key, date_key), {"bullish": 0, "bearish": 0})
+            item_note_slot = item_note_flags.get((tag_key, date_key), {"bullish": 0, "bearish": 0})
             bullish = int(slot.get("bullish") or 0)
             bearish = int(slot.get("bearish") or 0)
             bullish_notes = int(note_slot.get("bullish") or 0)
@@ -1052,6 +1112,8 @@ def api_market_trends():
                     "bearish": bearish,
                     "bullish_notes": bullish_notes,
                     "bearish_notes": bearish_notes,
+                    "bullish_has_item_note": int(item_note_slot.get("bullish") or 0),
+                    "bearish_has_item_note": int(item_note_slot.get("bearish") or 0),
                 }
             )
         rows_payload.append(
@@ -1114,7 +1176,7 @@ def api_market_trends_detail():
         urls = [r["url"] for r in rows if r["url"]]
         notes_map = load_notes_map(conn, urls)
         market_tags_map = load_market_tags_map(conn, urls)
-        trend_note = load_trend_notes_map(conn, [(date_key, tag_def["key"], direction)]).get((date_key, tag_def["key"], direction))
+        trend_notes = load_trend_notes_map(conn, [(date_key, tag_def["key"], direction)]).get((date_key, tag_def["key"], direction), [])
     finally:
         conn.close()
 
@@ -1142,7 +1204,8 @@ def api_market_trends_detail():
             "tag": tag_def["display_name"],
             "tag_key": tag_def["key"],
             "direction": direction,
-            "trend_note": trend_note,
+            "trend_notes": trend_notes,
+            "trend_note_total": len(trend_notes),
             "total": len(items),
             "items": items,
         }
@@ -1249,7 +1312,7 @@ def api_market_trends_tag_detail():
 
 @app.put("/api/market-trend-note")
 @app.put("/api/market-trends/note")
-def api_market_trend_note_upsert():
+def api_market_trend_note_create():
     body = request.get_json(silent=True) or {}
     date_key = (body.get("date_key") or body.get("date") or "").strip()
     tag_key = (body.get("tag_key") or body.get("tag") or "").strip()
@@ -1271,25 +1334,20 @@ def api_market_trend_note_upsert():
         ).fetchone()
         if not tag_def:
             return jsonify({"ok": False, "error": "unsupported_tag"}), 400
+        if not note_text:
+            return jsonify({"ok": False, "error": "empty_note"}), 400
+        ts = now_ts()
         with conn:
-            if note_text:
-                ts = now_ts()
-                conn.execute(
-                    """
-                    INSERT INTO market_trend_notes(date_key, tag, direction, note, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(date_key, tag, direction) DO UPDATE SET
-                      note=excluded.note,
-                      updated_at=excluded.updated_at
-                    """,
-                    (date_key, tag_key, direction, note_text, ts, ts),
-                )
-            else:
-                conn.execute(
-                    "DELETE FROM market_trend_notes WHERE date_key=? AND tag=? AND direction=?",
-                    (date_key, tag_key, direction),
-                )
-        trend_note = load_trend_notes_map(conn, [(date_key, tag_key, direction)]).get((date_key, tag_key, direction))
+            cur = conn.execute(
+                """
+                INSERT INTO market_trend_notes(date_key, tag, direction, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (date_key, tag_key, direction, note_text, ts, ts),
+            )
+        note_id = cur.lastrowid
+        trend_notes = load_trend_notes_map(conn, [(date_key, tag_key, direction)]).get((date_key, tag_key, direction), [])
+        trend_note = next((note for note in trend_notes if note["id"] == note_id), None)
     finally:
         conn.close()
 
@@ -1301,47 +1359,94 @@ def api_market_trend_note_upsert():
             "tag_key": tag_key,
             "direction": direction,
             "trend_note": trend_note,
-            "has_trend_note": 1 if trend_note else 0,
+            "trend_notes": trend_notes,
+            "has_trend_note": 1 if trend_notes else 0,
         }
     )
 
 
-@app.delete("/api/market-trends/note")
-def api_market_trend_note_delete():
-    date_key = (request.args.get("date") or "").strip()
-    tag_key = (request.args.get("tag") or "").strip()
-    direction = (request.args.get("direction") or "").strip().lower()
-    if not date_key:
-        return jsonify({"ok": False, "error": "missing_date"}), 400
-    if direction not in MARKET_DIRECTIONS:
-        return jsonify({"ok": False, "error": "invalid_direction"}), 400
-
+@app.patch("/api/market-trends/note/<int:note_id>")
+def api_market_trend_note_update(note_id: int):
+    body = request.get_json(silent=True) or {}
+    raw_note = body.get("note")
+    if not isinstance(raw_note, str):
+        return jsonify({"ok": False, "error": "invalid_note"}), 400
+    note_text = raw_note.strip()
+    if not note_text:
+        return jsonify({"ok": False, "error": "empty_note"}), 400
     conn = db_conn()
     try:
-        tag_def = conn.execute(
-            "SELECT key, display_name FROM market_tag_definitions WHERE key=?",
-            (tag_key,),
+        existing = conn.execute(
+            """
+            SELECT mtn.id, mtn.date_key, mtn.tag, mtn.direction, mtd.display_name
+            FROM market_trend_notes mtn
+            LEFT JOIN market_tag_definitions mtd ON mtd.key = mtn.tag
+            WHERE mtn.id=?
+            """,
+            (note_id,),
         ).fetchone()
-        if not tag_def:
-            return jsonify({"ok": False, "error": "unsupported_tag"}), 400
+        if not existing:
+            return jsonify({"ok": False, "error": "note_not_found"}), 404
         with conn:
             conn.execute(
-                "DELETE FROM market_trend_notes WHERE date_key=? AND tag=? AND direction=?",
-                (date_key, tag_key, direction),
+                "UPDATE market_trend_notes SET note=?, updated_at=? WHERE id=?",
+                (note_text, now_ts(), note_id),
             )
-        trend_note = load_trend_notes_map(conn, [(date_key, tag_key, direction)]).get((date_key, tag_key, direction))
+        trend_notes = load_trend_notes_map(
+            conn,
+            [(existing["date_key"], existing["tag"], existing["direction"])],
+        ).get((existing["date_key"], existing["tag"], existing["direction"]), [])
+        trend_note = next((note for note in trend_notes if note["id"] == note_id), None)
     finally:
         conn.close()
 
     return jsonify(
         {
             "ok": True,
-            "date": date_key,
-            "tag": tag_def["display_name"],
-            "tag_key": tag_key,
-            "direction": direction,
+            "date": existing["date_key"],
+            "tag": existing["display_name"] or existing["tag"],
+            "tag_key": existing["tag"],
+            "direction": existing["direction"],
             "trend_note": trend_note,
-            "has_trend_note": 1 if trend_note else 0,
+            "trend_notes": trend_notes,
+            "has_trend_note": 1 if trend_notes else 0,
+        }
+    )
+
+
+@app.delete("/api/market-trends/note/<int:note_id>")
+def api_market_trend_note_delete(note_id: int):
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            """
+            SELECT mtn.id, mtn.date_key, mtn.tag, mtn.direction, mtd.display_name
+            FROM market_trend_notes mtn
+            LEFT JOIN market_tag_definitions mtd ON mtd.key = mtn.tag
+            WHERE mtn.id=?
+            """,
+            (note_id,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "note_not_found"}), 404
+        with conn:
+            conn.execute("DELETE FROM market_trend_notes WHERE id=?", (note_id,))
+        trend_notes = load_trend_notes_map(
+            conn,
+            [(existing["date_key"], existing["tag"], existing["direction"])],
+        ).get((existing["date_key"], existing["tag"], existing["direction"]), [])
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "date": existing["date_key"],
+            "tag": existing["display_name"] or existing["tag"],
+            "tag_key": existing["tag"],
+            "direction": existing["direction"],
+            "trend_notes": trend_notes,
+            "has_trend_note": 1 if trend_notes else 0,
         }
     )
 

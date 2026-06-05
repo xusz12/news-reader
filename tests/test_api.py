@@ -933,6 +933,11 @@ def test_market_trend_notes_manual_signal(tmp_path: Path, monkeypatch):
     )
     assert bullish_note.status_code == 200
     assert bullish_note.get_json()["trend_note"]["note"] == "继续看多 AI 主线"
+    bullish_note_2 = client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-02", "tag_key": "AI", "direction": "bullish", "note": "继续加仓，但分批做"},
+    )
+    assert bullish_note_2.status_code == 200
 
     bearish_note = client.put(
         "/api/market-trends/note",
@@ -946,7 +951,8 @@ def test_market_trend_notes_manual_signal(tmp_path: Path, monkeypatch):
     ai_row = next(row for row in trends.get_json()["rows"] if row["tag_key"] == "AI")
     slot = next(value for value in ai_row["values"] if value["date"] == "2026-06-02")
     assert slot["bullish"] == 1
-    assert slot["bullish_notes"] == 1
+    assert slot["bullish_notes"] == 2
+    assert slot["bullish_has_item_note"] == 0
     assert slot["bearish"] == 0
     assert slot["bearish_notes"] == 1
 
@@ -954,15 +960,24 @@ def test_market_trend_notes_manual_signal(tmp_path: Path, monkeypatch):
     assert bullish_detail.status_code == 200
     bullish_payload = bullish_detail.get_json()
     assert bullish_payload["total"] == 1
-    assert bullish_payload["trend_note"]["note"] == "继续看多 AI 主线"
+    assert bullish_payload["trend_note_total"] == 2
+    assert [note["note"] for note in bullish_payload["trend_notes"]] == ["继续加仓，但分批做", "继续看多 AI 主线"]
+    edited_note = bullish_payload["trend_notes"][1]
 
     bearish_detail = client.get("/api/market-trends/detail?date=2026-06-02&tag=AI&direction=bearish")
     assert bearish_detail.status_code == 200
     bearish_payload = bearish_detail.get_json()
     assert bearish_payload["total"] == 0
-    assert bearish_payload["trend_note"]["note"] == "短线也要警惕回撤"
+    assert bearish_payload["trend_notes"][0]["note"] == "短线也要警惕回撤"
 
-    delete_res = client.delete("/api/market-trends/note?date=2026-06-02&tag=AI&direction=bearish")
+    patch_res = client.patch(
+        f"/api/market-trends/note/{edited_note['id']}",
+        json={"note": "继续看多 AI 主线，暂不追高"},
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.get_json()["trend_note"]["note"] == "继续看多 AI 主线，暂不追高"
+
+    delete_res = client.delete(f"/api/market-trends/note/{bearish_payload['trend_notes'][0]['id']}")
     assert delete_res.status_code == 200
     assert delete_res.get_json()["has_trend_note"] == 0
 

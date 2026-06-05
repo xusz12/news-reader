@@ -131,6 +131,5 @@ CREATE TABLE IF NOT EXISTS market_trend_notes (
   direction TEXT NOT NULL,
   note TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (date_key, tag, direction)
+  updated_at TEXT NOT NULL
 );
