@@ -845,6 +845,18 @@ def api_news():
             args,
         ).fetchone()[0]
 
+        date_count_rows = conn.execute(
+            f"""
+            SELECT {ITEM_DATE_SQL} AS date_key, COUNT(*) AS total
+            FROM items
+            {join_sql}
+            {where_sql}
+            GROUP BY date_key
+            ORDER BY date_key DESC
+            """,
+            args,
+        ).fetchall()
+
         offset = (page - 1) * per
         rows = conn.execute(
             f"""
@@ -875,6 +887,11 @@ def api_news():
         conn.close()
 
     items = [dict(r) for r in rows]
+    date_counts = {
+        row["date_key"]: row["total"]
+        for row in date_count_rows
+        if row["date_key"]
+    }
     for item in items:
         tags = market_tags_map.get(item.get("url") or "", [])
         item["market_tags"] = tags
@@ -888,6 +905,7 @@ def api_news():
         {
             "items": items,
             "total": total,
+            "date_counts": date_counts,
             "page": page,
             "pages": pages,
         }

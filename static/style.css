@@ -34,6 +34,12 @@
   --note-badge-border: #60a5fa;
   --note-badge-text: #1d4ed8;
   --note-badge-bg: #eff6ff;
+  --trend-bullish-note-bg: #f3d0e6;
+  --trend-bullish-note-text: #be185d;
+  --trend-bullish-note-border: #db2777;
+  --trend-bearish-note-bg: #c9f3ec;
+  --trend-bearish-note-text: #0d9488;
+  --trend-bearish-note-border: #14b8a6;
   --topbar-h: 60px;
   --sticky-gap: 12px;
   --sticky-top: calc(var(--topbar-h) + var(--sticky-gap));
@@ -70,6 +76,12 @@ html[data-theme="dark"] {
   --note-badge-border: #3b82f6;
   --note-badge-text: #bfdbfe;
   --note-badge-bg: #1e3a8a;
+  --trend-bullish-note-bg: #4a1233;
+  --trend-bullish-note-text: #f472b6;
+  --trend-bullish-note-border: #ec4899;
+  --trend-bearish-note-bg: #123a42;
+  --trend-bearish-note-text: #5eeadb;
+  --trend-bearish-note-border: #2dd4bf;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -103,6 +115,12 @@ html[data-theme="dark"] {
     --note-badge-border: #3b82f6;
     --note-badge-text: #bfdbfe;
     --note-badge-bg: #1e3a8a;
+    --trend-bullish-note-bg: #4a1233;
+    --trend-bullish-note-text: #f472b6;
+    --trend-bullish-note-border: #ec4899;
+    --trend-bearish-note-bg: #123a42;
+    --trend-bearish-note-text: #5eeadb;
+    --trend-bearish-note-border: #2dd4bf;
   }
 }
 
@@ -458,9 +476,9 @@ button.active {
 }
 
 .trend-chip-btn.bullish.with-item-note {
-  background: #fecaca;
-  color: #7f1d1d;
-  border-color: #f87171;
+  background: var(--trend-bullish-note-bg);
+  color: var(--trend-bullish-note-text);
+  border-color: var(--trend-bullish-note-border);
 }
 
 .trend-chip-btn.bearish {
@@ -469,9 +487,9 @@ button.active {
 }
 
 .trend-chip-btn.bearish.with-item-note {
-  background: #a7f3d0;
-  color: #064e3b;
-  border-color: #34d399;
+  background: var(--trend-bearish-note-bg);
+  color: var(--trend-bearish-note-text);
+  border-color: var(--trend-bearish-note-border);
 }
 
 .trend-chip-label {
@@ -705,8 +723,9 @@ button.active {
   top: 0;
   z-index: 5;
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 8px 12px 6px;
   background: var(--bg);
   border-top: 1px solid var(--border);
@@ -719,6 +738,13 @@ button.active {
   font-weight: 600;
   padding: 0;
   background: var(--bg);
+}
+
+.date-section-count {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .news-item.selected {

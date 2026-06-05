@@ -22,6 +22,7 @@ let state = {
   marketTagChoices: [],
   tagAdminOpen: false,
   trendComposeOpen: false,
+  dateCounts: new Map(),
 };
 
 const mediaIconMap = {
@@ -259,14 +260,65 @@ function currentLoadedRowIds() {
     .filter(Boolean);
 }
 
+function setDateCounts(dateCounts) {
+  state.dateCounts = new Map(Object.entries(dateCounts || {}));
+}
+
+function getDateCount(dateKey) {
+  if (!dateKey) return null;
+  return state.dateCounts.has(dateKey) ? state.dateCounts.get(dateKey) : null;
+}
+
+function formatDateCount(dateKey) {
+  const value = getDateCount(dateKey);
+  if (value == null) return "";
+  return `${value} 条`;
+}
+
+function updateDateSectionCount(dateKey) {
+  if (!dateKey || !newsList) return;
+  const selector = `.date-section[data-date-key="${CSS.escape(dateKey)}"] .date-section-count`;
+  const countEl = newsList.querySelector(selector);
+  if (!countEl) return;
+  countEl.textContent = formatDateCount(dateKey);
+}
+
+function itemMatchesCurrentDateCountScope(item) {
+  if (!item || state.collection === "trends") return false;
+  let inCollection = false;
+  if (state.collection === "feed") inCollection = true;
+  else if (state.collection === "important") inCollection = !!item.important_at;
+  else if (state.collection === "read_later") inCollection = !!item.read_later_at;
+  else if (state.collection === "notes") inCollection = !!item.has_note;
+  else if (state.collection === "market_tags") inCollection = !!item.has_market_tags;
+  if (!inCollection) return false;
+  if (state.readFilter === "unread") return !item.read_at;
+  if (state.readFilter === "read") return !!item.read_at;
+  return true;
+}
+
+function adjustDateCountForScopeTransition(beforeItem, afterItem) {
+  const dateKey = (afterItem && afterItem.date_key) || (beforeItem && beforeItem.date_key) || null;
+  if (!dateKey || !state.dateCounts.has(dateKey)) return;
+  const wasIncluded = itemMatchesCurrentDateCountScope(beforeItem);
+  const isIncluded = itemMatchesCurrentDateCountScope(afterItem);
+  if (wasIncluded === isIncluded) return;
+  const current = Number(state.dateCounts.get(dateKey) || 0);
+  const next = isIncluded ? current + 1 : Math.max(0, current - 1);
+  state.dateCounts.set(dateKey, next);
+  updateDateSectionCount(dateKey);
+}
+
 function markLoadedRowsReadLocally(itemIds = null) {
   const allow = Array.isArray(itemIds) ? new Set(itemIds) : null;
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   state.itemsById.forEach((item) => {
     if (allow && !allow.has(String(item.id))) return;
     if (item.read_at) return;
+    const beforeItem = { ...item };
     item.read_at = now;
     state.itemsById.set(item.id, item);
+    adjustDateCountForScopeTransition(beforeItem, item);
     rerenderOne(item.id);
   });
 }
@@ -1415,7 +1467,7 @@ function renderTrendsView() {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "trend-chip-btn bullish";
-        if (value.bullish_has_item_note) btn.classList.add("with-item-note");
+        if (value.bullish_has_item_note || value.bullish_notes) btn.classList.add("with-item-note");
         if (
           state.trendSelection &&
           state.trendSelection.key === activeKey &&
@@ -1447,7 +1499,7 @@ function renderTrendsView() {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "trend-chip-btn bearish";
-        if (value.bearish_has_item_note) btn.classList.add("with-item-note");
+        if (value.bearish_has_item_note || value.bearish_notes) btn.classList.add("with-item-note");
         if (
           state.trendSelection &&
           state.trendSelection.key === activeKey &&
@@ -1554,12 +1606,16 @@ async function patchStateWithRollback(itemId, payload) {
     return;
   }
   const backup = {
+    date_key: item.date_key,
     read_at: item.read_at,
     important_at: item.important_at,
     read_later_at: item.read_later_at,
+    has_note: item.has_note,
+    has_market_tags: item.has_market_tags,
   };
 
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const beforeItem = { ...backup };
   if ("read" in payload) item.read_at = payload.read ? now : null;
   if ("important" in payload) item.important_at = payload.important ? now : null;
   if ("read_later" in payload) {
@@ -1575,6 +1631,7 @@ async function patchStateWithRollback(itemId, payload) {
       stopDetailPolling();
     }
   }
+  adjustDateCountForScopeTransition(beforeItem, item);
   rerenderOne(itemId);
 
   try {
@@ -1589,6 +1646,7 @@ async function patchStateWithRollback(itemId, payload) {
       }
     }
   } catch {
+    adjustDateCountForScopeTransition(item, backup);
     item.read_at = backup.read_at;
     item.important_at = backup.important_at;
     item.read_later_at = backup.read_later_at;
@@ -1704,6 +1762,14 @@ function marketTagsFromItem(item) {
 }
 
 async function upsertMarketTag(item, tag, direction) {
+  const beforeItem = {
+    date_key: item.date_key,
+    read_at: item.read_at,
+    important_at: item.important_at,
+    read_later_at: item.read_later_at,
+    has_note: item.has_note,
+    has_market_tags: item.has_market_tags,
+  };
   const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/market-tag`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -1721,10 +1787,19 @@ async function upsertMarketTag(item, tag, direction) {
   item.has_market_tags = Number(payload.has_market_tags || 0);
   if ("important_at" in payload && payload.important_at) item.important_at = payload.important_at;
   state.itemsById.set(item.id, item);
+  adjustDateCountForScopeTransition(beforeItem, item);
   rerenderOne(item.id);
 }
 
 async function deleteMarketTag(item, tag) {
+  const beforeItem = {
+    date_key: item.date_key,
+    read_at: item.read_at,
+    important_at: item.important_at,
+    read_later_at: item.read_later_at,
+    has_note: item.has_note,
+    has_market_tags: item.has_market_tags,
+  };
   const params = new URLSearchParams({ tag });
   const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/market-tag?${params.toString()}`, {
     method: "DELETE",
@@ -1740,6 +1815,7 @@ async function deleteMarketTag(item, tag) {
   item.market_tags = tags;
   item.has_market_tags = Number(payload.has_market_tags || 0);
   state.itemsById.set(item.id, item);
+  adjustDateCountForScopeTransition(beforeItem, item);
   rerenderOne(item.id);
 }
 
@@ -1820,6 +1896,14 @@ function openMarketPicker(item, direction) {
 }
 
 async function saveDetailNote(item, noteText) {
+  const beforeItem = {
+    date_key: item.date_key,
+    read_at: item.read_at,
+    important_at: item.important_at,
+    read_later_at: item.read_later_at,
+    has_note: item.has_note,
+    has_market_tags: item.has_market_tags,
+  };
   const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/note`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -1834,6 +1918,7 @@ async function saveDetailNote(item, noteText) {
   if (item.url) state.detailCacheByUrl.set(item.url, cached);
   item.has_note = payload.has_note;
   state.itemsById.set(item.id, item);
+  adjustDateCountForScopeTransition(beforeItem, item);
   rerenderOne(item.id);
   refreshDetailNoteUI(item);
 }
@@ -2289,6 +2374,7 @@ function resetList() {
   state.trendNoteContext = null;
   state.tagAdminOpen = false;
   state.trendComposeOpen = false;
+  state.dateCounts = new Map();
   showTrendsView(false);
   closeDetailOnMobile();
   renderDetail(null);
@@ -2296,12 +2382,18 @@ function resetList() {
 }
 
 function buildDateSectionRow(item) {
+  const dateKey = item.date_key || "unknown";
   const li = document.createElement("li");
   li.className = "date-section";
+  li.dataset.dateKey = dateKey;
   const label = document.createElement("span");
   label.className = "date-section-label";
-  label.textContent = item.date_label || item.date_key || "未知日期";
+  label.textContent = item.date_label || dateKey || "未知日期";
+  const count = document.createElement("span");
+  count.className = "date-section-count";
+  count.textContent = formatDateCount(dateKey);
   li.appendChild(label);
+  li.appendChild(count);
   return li;
 }
 
@@ -2347,6 +2439,7 @@ async function loadFirstPage() {
       state.hasMore = false;
       state.trendDates = Array.isArray(data.dates) ? data.dates : [];
       state.trendRows = Array.isArray(data.rows) ? data.rows : [];
+      state.dateCounts = new Map();
       showTrendsView(true);
       renderTrendsView();
       renderTrendDetail(null);
@@ -2369,6 +2462,7 @@ async function loadFirstPage() {
 
     const data = await fetchNewsPage(1);
     state.total = data.total;
+    setDateCounts(data.date_counts);
     state.pages = data.pages;
     state.page = 1;
     state.hasMore = state.page < state.pages;
@@ -2405,6 +2499,7 @@ async function loadNextPage() {
   state.loading = true;
   try {
     const data = await fetchNewsPage(next);
+    setDateCounts(data.date_counts);
     data.items.forEach((item) => {
       const row = buildItemRow(item);
       appendNewsRow(item, row);

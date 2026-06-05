@@ -4,6 +4,23 @@
 
 ## What's Changed
 
+### 2026-06-06 — feat: 趋势强调色与日期 section 数量联动
+- **文件**
+  - *app.py（+18 −0）*
+    - `/api/news` 新增 `date_counts`
+    - 按当前 `collection + read_filter + source_filter + q` 返回每个 `date_key` 的真实数量
+  - *static/app.js（+68 −2）*
+    - 普通新闻列表日期 section 右侧新增数量显示，覆盖 `feed / important / read_later / notes / market_tags`
+    - 当前集合成员资格发生本地变化时，日期数量实时联动：已读、取消重要、取消稍后阅读、清空想法、删除最后一个板块 tag 都会同步递减
+    - 趋势单元格中“有新闻想法”与“仅趋势想法”的 bullish/bearish chip 统一走强调色
+  - *static/style.css（+25 −2）*
+    - 新增趋势强调色变量，保持 light / dark / system dark 可读
+    - 日期 section 调整为左右布局并补充数量样式
+  - *tests/test_api.py（+57 −0）*
+    - 新增 `date_counts` 覆盖：同日多条、跨日期、`feed unread/all`、`important all`
+    - 验证 `mark-read-by-ids` 只影响 `unread` 计数，不影响 `all` 总数
+- **影响**：趋势页有想法的信号更醒目；新闻列表各集合的日期 section 现在显示真实条数，并在 row 离开当前集合/筛选结果时实时同步
+
 ### 2026-06-06 — fix: 自动到底已读仅标记当前已加载新闻
 - **文件**
   - *app.py（+32 −0）*

@@ -260,6 +260,63 @@ def test_mark_read_by_ids_only_touches_loaded_rows(tmp_path: Path, monkeypatch):
     assert {it["id"] for it in unread_alpha} == {untouched_id}
 
 
+def test_news_date_counts_follow_filter_and_collection(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（4条）
+### [D1 Morning](https://example.com/d1-morning)
+- 发布时间：2026-05-25 09:00:00
+### [D1 Noon](https://example.com/d1-noon)
+- 发布时间：2026-05-25 12:00:00
+### [D2 Morning](https://example.com/d2-morning)
+- 发布时间：2026-05-26 09:00:00
+### [D2 Noon](https://example.com/d2-noon)
+- 发布时间：2026-05-26 12:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    feed_all = client.get("/api/news?per=20&read_filter=all").get_json()
+    assert feed_all["date_counts"] == {"2026-05-26": 2, "2026-05-25": 2}
+
+    items_by_title = {item["title"]: item for item in feed_all["items"]}
+    assert client.patch(f"/api/news/{items_by_title['D1 Noon']['id']}/state", json={"read": True}).status_code == 200
+    assert client.patch(f"/api/news/{items_by_title['D2 Noon']['id']}/state", json={"read": True}).status_code == 200
+    assert client.patch(f"/api/news/{items_by_title['D2 Noon']['id']}/state", json={"important": True}).status_code == 200
+    assert client.patch(f"/api/news/{items_by_title['D2 Morning']['id']}/state", json={"important": True}).status_code == 200
+
+    feed_unread = client.get("/api/news?per=20&read_filter=unread").get_json()
+    assert feed_unread["date_counts"] == {"2026-05-26": 1, "2026-05-25": 1}
+
+    important_all = client.get("/api/news?per=20&collection=important&read_filter=all").get_json()
+    assert important_all["date_counts"] == {"2026-05-26": 2}
+
+    loaded_ids = [
+        items_by_title["D1 Morning"]["id"],
+        items_by_title["D2 Morning"]["id"],
+    ]
+    mark = client.post("/api/news/mark-read-by-ids", json={"item_ids": loaded_ids})
+    assert mark.status_code == 200
+    assert mark.get_json()["marked"] == 2
+
+    feed_unread_after = client.get("/api/news?per=20&read_filter=unread").get_json()
+    assert feed_unread_after["date_counts"] == {}
+
+    feed_all_after = client.get("/api/news?per=20&read_filter=all").get_json()
+    assert feed_all_after["date_counts"] == {"2026-05-26": 2, "2026-05-25": 2}
+
+
 def test_read_later_enqueues_detail_job_and_retry(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"
     daily_dir.mkdir(parents=True)
