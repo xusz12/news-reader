@@ -1736,6 +1736,7 @@ function handleDetailTouchEnd() {
 }
 
 function setDetailNoteEditorOpen(open) {
+  if (open) closeMarketPicker();
   detailNoteEditor.classList.toggle("hidden", !open);
 }
 
@@ -1873,6 +1874,7 @@ function refreshDetailMarketTagsUI(item) {
 
 function openMarketPicker(item, direction) {
   if (!item) return;
+  setDetailNoteEditorOpen(false);
   if (!detailMarketPicker.classList.contains("hidden") && marketPickerDirection === direction) {
     closeMarketPicker();
     return;

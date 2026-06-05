@@ -145,6 +145,14 @@
             <div id="detailMarketPickerTitle" class="detail-market-picker-title">选择板块</div>
             <div id="detailMarketPickerOptions" class="detail-market-picker-options"></div>
           </section>
+          <section id="detailNoteEditor" class="detail-note-editor hidden">
+            <div class="detail-note-editor-title">记录想法</div>
+            <textarea id="detailNoteInput" class="detail-note-input" rows="4" maxlength="5000" placeholder="记录你对这条新闻的看法、判断或后续行动..."></textarea>
+            <div class="detail-note-actions">
+              <button id="detailNoteSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="detailNoteCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
           <div class="detail-scroll-area">
             <section id="detailMarketTagsCard" class="detail-market-tags-card hidden">
               <h4>板块标签</h4>
@@ -153,13 +161,6 @@
             <section id="detailNoteCard" class="detail-note-card hidden">
               <h4>我的想法</h4>
               <p id="detailNoteText" class="detail-note-text"></p>
-            </section>
-            <section id="detailNoteEditor" class="detail-note-editor hidden">
-              <textarea id="detailNoteInput" class="detail-note-input" rows="4" maxlength="5000" placeholder="记录你对这条新闻的看法、判断或后续行动..."></textarea>
-              <div class="detail-note-actions">
-                <button id="detailNoteSaveBtn" class="detail-retry-btn" type="button">保存</button>
-                <button id="detailNoteCancelBtn" class="detail-retry-btn" type="button">取消</button>
-              </div>
             </section>
             <div id="detailSummary" class="detail-summary"></div>
             <section id="detailAiBox" class="detail-ai-box hidden">
