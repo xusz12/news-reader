@@ -127,9 +127,21 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.topbar-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 h1 {
   margin: 0;
   font-size: 20px;
+}
+
+.topbar-subtitle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .topbar-prefs {

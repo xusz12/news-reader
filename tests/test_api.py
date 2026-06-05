@@ -119,6 +119,13 @@ def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
     important_items = client.get("/api/news?collection=important&per=20").get_json()["items"]
     assert [item["title"] for item in important_items] == ["Evening", "Noon", "Morning"]
 
+    for item in feed_items:
+        res = client.patch(f"/api/news/{item['id']}/state", json={"read_later": True})
+        assert res.status_code == 200
+
+    read_later_items = client.get("/api/news?collection=read_later&per=20").get_json()["items"]
+    assert [item["title"] for item in read_later_items] == ["Morning", "Noon", "Evening"]
+
 
 def test_mark_all_read_cross_page_with_filter(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"

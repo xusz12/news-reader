@@ -78,7 +78,7 @@ ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 
 
 
 def news_order_by_sql(collection: str) -> str:
-    return FEED_NEWS_ORDER_BY_SQL if collection == "feed" else NON_FEED_NEWS_ORDER_BY_SQL
+    return FEED_NEWS_ORDER_BY_SQL if collection in ("feed", "read_later") else NON_FEED_NEWS_ORDER_BY_SQL
 
 
 def _source_prefix(source: str | None) -> str:

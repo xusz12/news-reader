@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-06-05 — feat: 新增副标题并调整稍后阅读排序为旧→新
+- **文件**
+  - *app.py（+1 −1）*
+    - `news_order_by_sql`：`read_later` 集合排序改为与 `feed` 一致（日期内旧→新）
+  - *static/index.html（+4 −1）*
+    - topbar 新增副标题「如果是牛市，那么永远不缺机会。」
+  - *static/style.css（+12 −0）*
+    - 新增 `.topbar-brand` / `.topbar-subtitle` 样式
+  - *tests/test_api.py（+7 −0）*
+    - 排序测试扩展：验证 `read_later` 集合日内旧→新
+- **影响**：顶部展示副标题；稍后阅读按时间发展顺序排列
+
 ### 2026-06-05 — feat: 新增 Gemini 保底翻译
 - **文件**
   - *app.py（+11 −2）*
