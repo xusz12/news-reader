@@ -1021,3 +1021,145 @@ def test_market_trend_tag_detail_overview(tmp_path: Path, monkeypatch):
     assert [item["direction"] for item in payload["items"]] == ["bullish", "bearish"]
     assert [note["date_key"] for note in payload["trend_notes"]] == ["2026-06-03", "2026-06-01"]
     assert payload["items"][1]["note"]["note"] == "旧新闻想法"
+
+
+def test_ai_fallback_to_gemini_success(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/fallback",
+                "Fallback title",
+                "Reuters",
+                "Original english body",
+                21,
+                "2026-06-04 17:00:00",
+                "2026-06-04 17:00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
+            VALUES (?, 'pending', 0, ?, ?)
+            """,
+            (
+                "https://example.com/fallback",
+                "2026-06-04 17:01:00",
+                "2026-06-04 17:01:00",
+            ),
+        )
+
+    def fail_primary(**kwargs):
+        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
+
+    def succeed_fallback(**kwargs):
+        return {
+            "model": "gemini-fallback",
+            "key_points_zh": [],
+            "conclusion_zh": "",
+            "body_zh": "这是 Gemini 保底译文。",
+            "raw_json": '{"provider":"gemini-fallback"}',
+        }
+
+    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
+    monkeypatch.setattr(app_module, "generate_gemini_fallback_translation", succeed_fallback)
+
+    assert app_module.process_pending_ai_once() is True
+
+    with app_module.db_conn() as conn:
+        ai_row = conn.execute(
+            "SELECT model, key_points_zh, conclusion_zh, body_zh FROM article_ai WHERE url=?",
+            ("https://example.com/fallback",),
+        ).fetchone()
+        job_row = conn.execute(
+            "SELECT status, last_error FROM ai_jobs WHERE url=?",
+            ("https://example.com/fallback",),
+        ).fetchone()
+
+    assert ai_row["model"] == "gemini-fallback"
+    assert ai_row["body_zh"] == "这是 Gemini 保底译文。"
+    assert ai_row["key_points_zh"] == "[]"
+    assert ai_row["conclusion_zh"] == ""
+    assert job_row["status"] == "success"
+    assert job_row["last_error"] is None
+
+
+def test_ai_fallback_to_gemini_failure_keeps_error(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/fallback-failed",
+                "Fallback failed title",
+                "Reuters",
+                "Original english body",
+                21,
+                "2026-06-04 17:00:00",
+                "2026-06-04 17:00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
+            VALUES (?, 'pending', 0, ?, ?)
+            """,
+            (
+                "https://example.com/fallback-failed",
+                "2026-06-04 17:01:00",
+                "2026-06-04 17:01:00",
+            ),
+        )
+
+    def fail_primary(**kwargs):
+        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
+
+    def fail_fallback(**kwargs):
+        raise app_module.LLMClientError("GEMINI_FALLBACK_FAILED: bridge down")
+
+    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
+    monkeypatch.setattr(app_module, "generate_gemini_fallback_translation", fail_fallback)
+
+    assert app_module.process_pending_ai_once() is True
+
+    with app_module.db_conn() as conn:
+        ai_row = conn.execute(
+            "SELECT url FROM article_ai WHERE url=?",
+            ("https://example.com/fallback-failed",),
+        ).fetchone()
+        job_row = conn.execute(
+            "SELECT status, last_error FROM ai_jobs WHERE url=?",
+            ("https://example.com/fallback-failed",),
+        ).fetchone()
+
+    assert ai_row is None
+    assert job_row["status"] == "failed"
+    assert "INVALID_TOOL_ARGUMENTS_JSON" in job_row["last_error"]
+    assert "GEMINI_FALLBACK_FAILED" in job_row["last_error"]

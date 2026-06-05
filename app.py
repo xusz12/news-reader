@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from llm_client import LLMClientError, generate_article_ai
+from llm_client import LLMClientError, generate_article_ai, generate_gemini_fallback_translation
 from scanner import apply_schema, reindex
 from settings import resolve_daily_news_dir, resolve_db_path
 
@@ -670,7 +670,16 @@ def process_pending_ai_once() -> bool:
             )
             ok = True
         except LLMClientError as exc:
-            error = str(exc)
+            primary_error = str(exc)
+            try:
+                payload = generate_gemini_fallback_translation(
+                    title=(detail["title"] or "").strip(),
+                    source=(detail["source"] or "").strip(),
+                    content=(detail["content"] or "").strip(),
+                )
+                ok = True
+            except LLMClientError as fallback_exc:
+                error = f"{primary_error} | {fallback_exc}"
         except Exception as exc:
             error = f"AI_UNKNOWN_ERROR: {exc}"
 

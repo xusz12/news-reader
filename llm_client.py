@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from typing import Any
 
 
@@ -11,6 +12,10 @@ class LLMClientError(RuntimeError):
 
 
 _CJK_RE = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF]")
+_GEMINI_CHOICE_RE = re.compile(
+    r"Choice A(?P<a>.*?)Choice B(?P<b>.*?)(?:Gemini is AI|$)",
+    re.DOTALL,
+)
 
 
 def _configured_model() -> str:
@@ -124,4 +129,99 @@ def generate_article_ai(*, title: str, source: str, content: str) -> dict[str, A
         "conclusion_zh": conclusion.strip(),
         "body_zh": body_text,
         "raw_json": json.dumps(parsed, ensure_ascii=False),
+    }
+
+
+def _strip_opencli_update_noise(text: str) -> str:
+    head = text.split("\n\n  Update available:", 1)[0]
+    return head.strip()
+
+
+def _extract_gemini_translation(text: str) -> str:
+    cleaned = _strip_opencli_update_noise(text).strip()
+    if cleaned.startswith("💬"):
+        cleaned = cleaned[1:].strip()
+
+    match = _GEMINI_CHOICE_RE.search(cleaned)
+    if match:
+        choice_a = match.group("a").strip()
+        choice_b = match.group("b").strip()
+        if _CJK_RE.search(choice_a):
+            return choice_a
+        if _CJK_RE.search(choice_b):
+            return choice_b
+
+    return cleaned
+
+
+def generate_gemini_fallback_translation(
+    *,
+    title: str,
+    source: str,
+    content: str,
+    timeout: int = 90,
+    max_chars: int = 12000,
+) -> dict[str, Any]:
+    body = (content or "").strip()
+    if not body:
+        raise LLMClientError("GEMINI_FALLBACK_EMPTY_CONTENT")
+
+    truncated = False
+    if len(body) > max_chars:
+        body = body[:max_chars]
+        truncated = True
+
+    prompt = (
+        "把下面英文新闻正文完整翻译成中文，只输出译文，不要总结，不要解释，不要补充标题。\n"
+        f"来源：{source or '未知'}\n"
+        f"标题：{title or '无标题'}\n\n"
+        f"{body}"
+    )
+
+    cmd = [
+        "opencli",
+        "gemini",
+        "ask",
+        prompt,
+        "--new",
+        "true",
+        "--timeout",
+        str(timeout),
+        "-f",
+        "plain",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 15,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LLMClientError("GEMINI_FALLBACK_TIMEOUT") from exc
+    except Exception as exc:
+        raise LLMClientError(f"GEMINI_FALLBACK_FAILED: {exc}") from exc
+
+    output = (proc.stdout or "").strip()
+    error = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        detail = error or output or f"exit={proc.returncode}"
+        raise LLMClientError(f"GEMINI_FALLBACK_FAILED: {detail[:300]}")
+
+    body_zh = _extract_gemini_translation(output)
+    if not body_zh or not _CJK_RE.search(body_zh):
+        raise LLMClientError("GEMINI_FALLBACK_INVALID_OUTPUT")
+
+    raw_payload = {
+        "provider": "gemini-fallback",
+        "truncated": truncated,
+        "raw_output": output[:4000],
+    }
+    return {
+        "model": "gemini-fallback",
+        "key_points_zh": [],
+        "conclusion_zh": "",
+        "body_zh": body_zh.strip(),
+        "raw_json": json.dumps(raw_payload, ensure_ascii=False),
     }

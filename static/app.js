@@ -1752,6 +1752,7 @@ function renderDetail(item) {
   const detailErr = cached?.job?.last_error || item.detail_error || "";
   const ai = cached?.ai || null;
   const aiStatus = cached?.ai_status || item.ai_status || "none";
+  const isGeminiFallback = (ai?.model || "").startsWith("gemini-fallback");
 
   detailAiBox.classList.add("hidden");
   detailAiPoints.innerHTML = "";
@@ -1789,18 +1790,22 @@ function renderDetail(item) {
       } catch {
         keyPoints = [];
       }
-      if (Array.isArray(keyPoints) && keyPoints.length) {
+      if (!isGeminiFallback && Array.isArray(keyPoints) && keyPoints.length) {
         keyPoints.forEach((point) => {
           const li = document.createElement("li");
           li.textContent = point;
           detailAiPoints.appendChild(li);
         });
       }
-      detailAiConclusion.textContent = ai.conclusion_zh || "";
-      detailAiBox.classList.remove("hidden");
+      if (!isGeminiFallback) {
+        detailAiConclusion.textContent = ai.conclusion_zh || "";
+        detailAiBox.classList.remove("hidden");
+      }
 
-      statusEl.textContent = "中文摘要与翻译已生成";
-      statusEl.className = "detail-status ready";
+      statusEl.textContent = isGeminiFallback
+        ? "Gemini 保底翻译，结果可能不稳定"
+        : "中文摘要与翻译已生成";
+      statusEl.className = isGeminiFallback ? "detail-status pending" : "detail-status ready";
       contentEl.textContent = ai.body_zh;
       contentEl.classList.remove("hidden");
       stopDetailPolling();

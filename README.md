@@ -4,6 +4,20 @@
 
 ## What's Changed
 
+### 2026-06-05 — feat: 新增 Gemini 保底翻译
+- **文件**
+  - *app.py（+11 −2）*
+    - `process_pending_ai_once`：DeepSeek 失败后自动调用 Gemini 保底翻译
+  - *llm_client.py（+100 −0）*
+    - 新增 `generate_gemini_fallback_translation()`，通过 `opencli gemini ask` 执行翻译
+    - 新增 `_extract_gemini_translation()` 清理 opencli 噪声与 Choice A/B 选择
+  - *static/app.js（+10 −5）*
+    - Gemini 保底翻译标识：状态栏显示「Gemini 保底翻译，结果可能不稳定」
+    - 保底翻译不显示要点/结论区块
+  - *tests/test_api.py（+142 −0）*
+    - 新增 Gemini 保底成功 + 两级均失败测试
+- **影响**：DeepSeek 不可用时自动切换 Gemini 保底，避免翻译静默失败
+
 ### 2026-06-03 — feat: 增加趋势板块表头下钻总览
 - **文件**
   - *app.py（+99 −0）*
