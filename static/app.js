@@ -23,6 +23,7 @@ let state = {
   tagAdminOpen: false,
   trendComposeOpen: false,
   dateCounts: new Map(),
+  lastNewsCollectionBeforeTrends: "feed",
 };
 
 const mediaIconMap = {
@@ -714,7 +715,10 @@ function updateCollectionButtons() {
       market_tags: "板块",
       trends: "趋势",
     };
-    mobileCollectionTriggerBtn.textContent = state.collection === "trends" ? "新闻流" : (names[state.collection] || "新闻流");
+    const remembered = names[state.lastNewsCollectionBeforeTrends] || "新闻流";
+    mobileCollectionTriggerBtn.textContent = state.collection === "trends"
+      ? remembered
+      : (names[state.collection] || "新闻流");
   }
   if (mobileTrendsTabBtn) {
     mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
@@ -2589,6 +2593,9 @@ resumeAnchorBtn.addEventListener("click", async () => {
 
 async function switchCollection(collection) {
   if (state.collection === collection) return;
+  if (collection === "trends" && state.collection !== "trends") {
+    state.lastNewsCollectionBeforeTrends = state.collection;
+  }
   state.collection = collection;
   closeMobileFilterSheet();
   closeMobileCollectionSheet();
@@ -2625,7 +2632,7 @@ if (navTrendsBtn) {
 if (mobileCollectionTriggerBtn) {
   mobileCollectionTriggerBtn.addEventListener("click", async () => {
     if (state.collection === "trends") {
-      await switchCollection("feed");
+      await switchCollection(state.lastNewsCollectionBeforeTrends || "feed");
       return;
     }
     openMobileCollectionSheet();
