@@ -613,6 +613,19 @@ button.active {
   padding: 12px;
 }
 
+.trend-detail-card-clickable {
+  cursor: pointer;
+}
+
+.trend-detail-card-clickable:hover {
+  border-color: color-mix(in srgb, var(--text) 14%, var(--detail-card-border));
+}
+
+.trend-detail-card-clickable:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 22%, transparent);
+  outline-offset: 2px;
+}
+
 .trend-detail-card-header {
   display: flex;
   align-items: flex-start;
@@ -624,6 +637,20 @@ button.active {
   margin: 0;
   font-size: 14px;
   line-height: 1.45;
+}
+
+.trend-detail-open-btn {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.trend-detail-open-btn:hover {
+  text-decoration: underline;
 }
 
 .trend-detail-title a {
@@ -667,6 +694,16 @@ button.active {
 
 .trend-detail-inline-btn.danger {
   color: #b91c1c;
+}
+
+.trend-detail-inline-link {
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.trend-detail-inline-link:hover {
+  text-decoration: underline;
 }
 
 .trend-detail-note {
@@ -1066,6 +1103,16 @@ html[data-detail-font="large"] {
 .detail-title {
   margin: 0 0 8px;
   font-size: 18px;
+}
+
+.detail-return-btn {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .detail-inline-market-tags {

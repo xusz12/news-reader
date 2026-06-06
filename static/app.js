@@ -24,6 +24,7 @@ let state = {
   trendComposeOpen: false,
   dateCounts: new Map(),
   lastNewsCollectionBeforeTrends: "feed",
+  detailReturnToTrend: false,
 };
 
 const mediaIconMap = {
@@ -114,6 +115,7 @@ const detailNoteEditor = document.getElementById("detailNoteEditor");
 const detailNoteInput = document.getElementById("detailNoteInput");
 const detailNoteSaveBtn = document.getElementById("detailNoteSaveBtn");
 const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
+const detailReturnToTrendBtn = document.getElementById("detailReturnToTrendBtn");
 const detailBullishBtn = document.getElementById("detailBullishBtn");
 const detailBearishBtn = document.getElementById("detailBearishBtn");
 const detailInlineMarketTags = document.getElementById("detailInlineMarketTags");
@@ -1179,6 +1181,8 @@ function renderTrendDetail(payload) {
   closeTagAdminView();
   closeTrendComposerView();
   closeTrendNoteEditor();
+  state.detailReturnToTrend = false;
+  syncDetailReturnButton();
   detailBody.classList.add("hidden");
   if (!payload) {
     detailTrendBody.classList.add("hidden");
@@ -1222,20 +1226,33 @@ function renderTrendDetail(payload) {
 
 function buildTrendNewsCard(item, trendContext = null) {
   const card = document.createElement("article");
-  card.className = "trend-detail-card";
+  card.className = "trend-detail-card trend-detail-card-clickable";
 
   const header = document.createElement("div");
   header.className = "trend-detail-card-header";
 
   const title = document.createElement("h4");
   title.className = "trend-detail-title";
-  const link = document.createElement("a");
-  link.href = item.url || "#";
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
-  link.textContent = item.title || "未命名新闻";
-  title.appendChild(link);
+  const titleBtn = document.createElement("button");
+  titleBtn.type = "button";
+  titleBtn.className = "trend-detail-open-btn";
+  titleBtn.textContent = item.title || "未命名新闻";
+  title.appendChild(titleBtn);
   header.appendChild(title);
+
+  if (item.url) {
+    const actions = document.createElement("div");
+    actions.className = "trend-detail-inline-actions";
+    const sourceLink = document.createElement("a");
+    sourceLink.href = item.url;
+    sourceLink.target = "_blank";
+    sourceLink.rel = "noopener noreferrer";
+    sourceLink.className = "trend-detail-inline-link";
+    sourceLink.textContent = "原文";
+    sourceLink.addEventListener("click", (event) => event.stopPropagation());
+    actions.appendChild(sourceLink);
+    header.appendChild(actions);
+  }
 
   const directionLabel = item.direction === "bullish" ? "看多" : item.direction === "bearish" ? "看空" : "";
   const metaLine = document.createElement("div");
@@ -1253,6 +1270,20 @@ function buildTrendNewsCard(item, trendContext = null) {
   notePreview.className = "trend-detail-note-preview hidden";
   notePreview.textContent = notePreviewText;
   notePreview.classList.toggle("hidden", !notePreviewText);
+
+  const openDetail = () => openItemDetail(item, { fromTrend: true });
+  card.addEventListener("click", openDetail);
+  card.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openDetail();
+  });
+  card.tabIndex = 0;
+  titleBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openDetail();
+  });
 
   card.appendChild(header);
   card.appendChild(metaLine);
@@ -1757,6 +1788,36 @@ function setDetailNoteEditorOpen(open) {
   detailNoteEditor.classList.toggle("hidden", !open);
 }
 
+function canReturnToTrendDetail() {
+  return !!(state.detailReturnToTrend && state.trendSelection?.detailPayload);
+}
+
+function syncDetailReturnButton() {
+  if (!detailReturnToTrendBtn) return;
+  detailReturnToTrendBtn.classList.toggle("hidden", !canReturnToTrendDetail());
+}
+
+function restoreTrendDetailFromDetail() {
+  if (!canReturnToTrendDetail()) return;
+  state.selectedId = null;
+  state.detailReturnToTrend = false;
+  stopDetailPolling();
+  renderTrendDetail(state.trendSelection.detailPayload);
+  openDetailOnMobile();
+}
+
+function openItemDetail(item, { fromTrend = false } = {}) {
+  if (!item) return;
+  state.itemsById.set(item.id, item);
+  state.selectedId = item.id;
+  state.detailReturnToTrend = fromTrend;
+  renderDetail(state.itemsById.get(item.id) || item);
+  loadDetail(item.id);
+  startDetailPolling(item.id);
+  if (!fromTrend) saveReadingCheckpoint(item).catch(() => {});
+  openDetailOnMobile();
+}
+
 function normalizedDetailNote(cached) {
   const text = cached?.note?.note;
   return typeof text === "string" ? text.trim() : "";
@@ -1947,8 +2008,10 @@ async function saveDetailNote(item, noteText) {
 function renderDetail(item) {
   closeTagAdminView();
   if (!item) {
+    state.detailReturnToTrend = false;
     stopDetailPolling();
     closeMarketPicker();
+    syncDetailReturnButton();
     detailTrendBody.classList.add("hidden");
     detailBody.classList.add("hidden");
     detailEmpty.classList.remove("hidden");
@@ -1959,6 +2022,7 @@ function renderDetail(item) {
   detailTrendBody.classList.add("hidden");
   detailEmpty.classList.add("hidden");
   detailBody.classList.remove("hidden");
+  syncDetailReturnButton();
 
   document.getElementById("detailTitle").textContent = item.title || "";
   document.getElementById("detailMeta").textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
@@ -2343,16 +2407,12 @@ function buildItemRow(item) {
   li.addEventListener("click", () => {
     if (state.selectedId === item.id) {
       state.selectedId = null;
+      state.detailReturnToTrend = false;
       stopDetailPolling();
       closeDetailOnMobile();
       renderDetail(null);
     } else {
-      state.selectedId = item.id;
-      renderDetail(state.itemsById.get(item.id));
-      loadDetail(item.id);
-      startDetailPolling(item.id);
-      saveReadingCheckpoint(item).catch(() => {});
-      openDetailOnMobile();
+      openItemDetail(item, { fromTrend: false });
     }
     newsList.querySelectorAll(".news-item").forEach((row) => {
       row.classList.toggle("selected", row.dataset.id === state.selectedId);
@@ -2400,6 +2460,7 @@ function resetList() {
   state.tagAdminOpen = false;
   state.trendComposeOpen = false;
   state.dateCounts = new Map();
+  state.detailReturnToTrend = false;
   showTrendsView(false);
   closeDetailOnMobile();
   renderDetail(null);
@@ -2763,8 +2824,17 @@ refreshBtn.addEventListener("click", async () => {
   }
 });
 
-detailCloseBtn.addEventListener("click", closeDetailOnMobile);
-detailCloseBtn.addEventListener("click", stopDetailPolling);
+detailCloseBtn.addEventListener("click", () => {
+  if (canReturnToTrendDetail()) {
+    restoreTrendDetailFromDetail();
+    return;
+  }
+  closeDetailOnMobile();
+  stopDetailPolling();
+});
+if (detailReturnToTrendBtn) {
+  detailReturnToTrendBtn.addEventListener("click", restoreTrendDetailFromDetail);
+}
 detailPanel.addEventListener("touchstart", handleDetailTouchStart, { passive: true });
 detailPanel.addEventListener("touchmove", handleDetailTouchMove, { passive: false });
 detailPanel.addEventListener("touchend", handleDetailTouchEnd, { passive: true });
