@@ -116,8 +116,7 @@ const detailNoteSaveBtn = document.getElementById("detailNoteSaveBtn");
 const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
 const detailBullishBtn = document.getElementById("detailBullishBtn");
 const detailBearishBtn = document.getElementById("detailBearishBtn");
-const detailMarketTagsCard = document.getElementById("detailMarketTagsCard");
-const detailMarketTagsList = document.getElementById("detailMarketTagsList");
+const detailInlineMarketTags = document.getElementById("detailInlineMarketTags");
 const detailMarketPicker = document.getElementById("detailMarketPicker");
 const detailMarketPickerTitle = document.getElementById("detailMarketPickerTitle");
 const detailMarketPickerOptions = document.getElementById("detailMarketPickerOptions");
@@ -1238,23 +1237,6 @@ function buildTrendNewsCard(item, trendContext = null) {
   title.appendChild(link);
   header.appendChild(title);
 
-  if (trendContext?.tag_key) {
-    const removeBtn = document.createElement("button");
-    removeBtn.type = "button";
-    removeBtn.className = "trend-detail-inline-btn";
-    removeBtn.textContent = "移除板块";
-    removeBtn.addEventListener("click", async () => {
-      removeBtn.disabled = true;
-      try {
-        await deleteMarketTag(item, trendContext.tag_key);
-        await refreshTrendSelectionAfterMutation(state.trendSelection);
-      } finally {
-        removeBtn.disabled = false;
-      }
-    });
-    header.appendChild(removeBtn);
-  }
-
   const directionLabel = item.direction === "bullish" ? "看多" : item.direction === "bearish" ? "看空" : "";
   const metaLine = document.createElement("div");
   metaLine.className = "trend-detail-meta";
@@ -1283,7 +1265,30 @@ function buildTrendNewsCard(item, trendContext = null) {
     item.market_tags.forEach((tag) => {
       const chip = document.createElement("span");
       chip.className = `trend-detail-tag ${tag.direction}`;
-      chip.textContent = tag.tag;
+
+      const label = document.createElement("span");
+      label.textContent = tag.tag;
+      chip.appendChild(label);
+
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "trend-detail-tag-remove";
+      removeBtn.textContent = "×";
+      removeBtn.title = `移除${tag.tag}`;
+      removeBtn.setAttribute("aria-label", `移除${tag.tag}`);
+      removeBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        removeBtn.disabled = true;
+        try {
+          await deleteMarketTag(item, tag.key || tag.tag);
+          await refreshTrendSelectionAfterMutation(state.trendSelection);
+        } finally {
+          removeBtn.disabled = false;
+        }
+      });
+      chip.appendChild(removeBtn);
+
       tags.appendChild(chip);
     });
     card.appendChild(tags);
@@ -1860,7 +1865,7 @@ function closeMarketPicker() {
 
 function refreshDetailMarketTagsUI(item) {
   const tags = marketTagsFromItem(item);
-  detailMarketTagsList.innerHTML = "";
+  detailInlineMarketTags.innerHTML = "";
   tags.forEach((mt) => {
     const chip = document.createElement("span");
     chip.className = `detail-market-tag ${mt.direction}`;
@@ -1879,9 +1884,9 @@ function refreshDetailMarketTagsUI(item) {
     });
 
     chip.appendChild(removeBtn);
-    detailMarketTagsList.appendChild(chip);
+    detailInlineMarketTags.appendChild(chip);
   });
-  detailMarketTagsCard.classList.toggle("hidden", tags.length === 0);
+  detailInlineMarketTags.classList.toggle("hidden", tags.length === 0);
 }
 
 function openMarketPicker(item, direction) {
@@ -2004,8 +2009,8 @@ function renderDetail(item) {
   retranslateBtn.disabled = false;
   retranslateBtn.classList.add("hidden");
   closeMarketPicker();
-  detailMarketTagsCard.classList.add("hidden");
-  detailMarketTagsList.innerHTML = "";
+  detailInlineMarketTags.classList.add("hidden");
+  detailInlineMarketTags.innerHTML = "";
   setDetailNoteEditorOpen(false);
   detailNoteInput.value = "";
 

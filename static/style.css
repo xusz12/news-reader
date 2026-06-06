@@ -693,10 +693,32 @@ button.active {
 .trend-detail-tag {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   padding: 2px 8px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
+}
+
+.trend-detail-tag-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.trend-detail-tag-remove:hover:not(:disabled),
+.trend-detail-tag-remove:focus-visible:not(:disabled) {
+  opacity: 1;
+}
+
+.trend-detail-tag-remove:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .trend-detail-tag.bullish {
@@ -1046,6 +1068,13 @@ html[data-detail-font="large"] {
   font-size: 18px;
 }
 
+.detail-inline-market-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -2px 0 10px;
+}
+
 .detail-meta {
   color: var(--muted);
   font-size: 13px;
@@ -1082,7 +1111,7 @@ html[data-detail-font="large"] {
 
 .detail-note-text {
   margin: 0;
-  color: var(--detail-text);
+  color: var(--row-note-preview-text);
   line-height: 1.52;
   white-space: pre-wrap;
 }
@@ -1099,26 +1128,6 @@ html[data-detail-font="large"] {
   margin-bottom: 8px;
   font-size: 12px;
   color: var(--muted);
-}
-
-.detail-market-tags-card {
-  margin-bottom: 10px;
-  border: 1px solid var(--detail-card-border);
-  background: var(--detail-card-bg);
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-
-.detail-market-tags-card h4 {
-  margin: 0 0 8px;
-  font-size: calc(13px * var(--detail-font-scale));
-  color: var(--detail-text);
-}
-
-.detail-market-tags-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 
 .detail-market-tag {
