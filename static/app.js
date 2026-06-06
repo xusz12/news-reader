@@ -586,6 +586,12 @@ function syncRowUI(li, item) {
     const hasNote = Number(item.has_note || 0) === 1;
     noteBadge.classList.toggle("hidden", !hasNote);
   }
+  const notePreview = li.querySelector(".row-note-preview");
+  if (notePreview) {
+    const previewText = typeof item.note_preview === "string" ? item.note_preview.trim() : "";
+    notePreview.textContent = previewText;
+    notePreview.classList.toggle("hidden", !previewText);
+  }
   const marketTagsWrap = li.querySelector(".market-tags");
   const titleEl = li.querySelector(".title");
   if (marketTagsWrap) {
@@ -1254,16 +1260,18 @@ function buildTrendNewsCard(item, trendContext = null) {
   summary.className = "trend-detail-summary";
   summary.textContent = item.summary || "无摘要";
 
+  const notePreviewText = typeof item.note_preview === "string"
+    ? item.note_preview.trim()
+    : (typeof item.note?.note === "string" ? item.note.note.trim() : "");
+  const notePreview = document.createElement("p");
+  notePreview.className = "trend-detail-note-preview hidden";
+  notePreview.textContent = notePreviewText;
+  notePreview.classList.toggle("hidden", !notePreviewText);
+
   card.appendChild(header);
   card.appendChild(metaLine);
   card.appendChild(summary);
-
-  if (item.note?.note) {
-    const note = document.createElement("div");
-    note.className = "trend-detail-note";
-    note.textContent = item.note.note;
-    card.appendChild(note);
-  }
+  card.appendChild(notePreview);
 
   if (Array.isArray(item.market_tags) && item.market_tags.length) {
     const tags = document.createElement("div");
@@ -1917,8 +1925,10 @@ async function saveDetailNote(item, noteText) {
   const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
   cached.has_note = payload.has_note;
   cached.note = payload.note;
+  cached.note_preview = payload.note_preview || "";
   if (item.url) state.detailCacheByUrl.set(item.url, cached);
   item.has_note = payload.has_note;
+  item.note_preview = payload.note_preview || "";
   state.itemsById.set(item.id, item);
   adjustDateCountForScopeTransition(beforeItem, item);
   rerenderOne(item.id);
@@ -2283,6 +2293,9 @@ function buildItemRow(item) {
   summary.className = "summary";
   summary.textContent = item.summary || "";
 
+  const notePreview = document.createElement("p");
+  notePreview.className = "row-note-preview hidden";
+
   const marketTagsWrap = document.createElement("div");
   marketTagsWrap.className = "market-tags hidden";
 
@@ -2314,6 +2327,7 @@ function buildItemRow(item) {
   li.appendChild(line1);
   li.appendChild(title);
   if (item.summary) li.appendChild(summary);
+  li.appendChild(notePreview);
   li.appendChild(marketTagsWrap);
   li.appendChild(actions);
 

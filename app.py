@@ -207,6 +207,15 @@ def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def build_note_preview(note_text: str | None, limit: int = 120) -> str:
+    if not isinstance(note_text, str):
+        return ""
+    compact = " ".join(note_text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
 def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
     where_sql = "WHERE active=1" if active_only else ""
     rows = conn.execute(
@@ -867,6 +876,7 @@ def api_news():
                    dj.status AS detail_status,
                    dj.last_error AS detail_error,
                    CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+                   an.note AS note_preview_source,
                    CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
                    aj.status AS ai_status,
                    aj.last_error AS ai_error,
@@ -894,6 +904,7 @@ def api_news():
     }
     for item in items:
         tags = market_tags_map.get(item.get("url") or "", [])
+        item["note_preview"] = build_note_preview(item.pop("note_preview_source", None))
         item["market_tags"] = tags
         item["has_market_tags"] = 1 if tags else 0
         item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
@@ -1206,6 +1217,7 @@ def api_market_trends_detail():
         tags = market_tags_map.get(url, [])
         item["note"] = note
         item["has_note"] = 1 if note else 0
+        item["note_preview"] = build_note_preview(note["note"] if note else None)
         item["market_tags"] = tags
         item["has_market_tags"] = 1 if tags else 0
         item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
@@ -1291,6 +1303,7 @@ def api_market_trends_tag_detail():
         tags = market_tags_map.get(url, [])
         item["note"] = note
         item["has_note"] = 1 if note else 0
+        item["note_preview"] = build_note_preview(note["note"] if note else None)
         item["market_tags"] = tags
         item["has_market_tags"] = 1 if tags else 0
         item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
@@ -1918,6 +1931,7 @@ def api_news_note_upsert(item_id: str):
             "item_id": item_id,
             "has_note": 1 if saved else 0,
             "note": (dict(saved) if saved else None),
+            "note_preview": build_note_preview(saved["note"] if saved else None),
         }
     )
 

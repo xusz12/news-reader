@@ -34,6 +34,8 @@
   --note-badge-border: #60a5fa;
   --note-badge-text: #1d4ed8;
   --note-badge-bg: #eff6ff;
+  --row-note-preview-bg: #eff6ff;
+  --row-note-preview-text: #1e40af;
   --trend-bullish-note-bg: #f3d0e6;
   --trend-bullish-note-text: #be185d;
   --trend-bullish-note-border: #db2777;
@@ -76,6 +78,8 @@ html[data-theme="dark"] {
   --note-badge-border: #3b82f6;
   --note-badge-text: #bfdbfe;
   --note-badge-bg: #1e3a8a;
+  --row-note-preview-bg: #172554;
+  --row-note-preview-text: #bfdbfe;
   --trend-bullish-note-bg: #4a1233;
   --trend-bullish-note-text: #f472b6;
   --trend-bullish-note-border: #ec4899;
@@ -115,6 +119,8 @@ html[data-theme="dark"] {
     --note-badge-border: #3b82f6;
     --note-badge-text: #bfdbfe;
     --note-badge-bg: #1e3a8a;
+    --row-note-preview-bg: #172554;
+    --row-note-preview-text: #bfdbfe;
     --trend-bullish-note-bg: #4a1233;
     --trend-bullish-note-text: #f472b6;
     --trend-bullish-note-border: #ec4899;
@@ -905,6 +911,21 @@ button.active {
   color: var(--row-summary);
   font-size: 13px;
   line-height: 1.35;
+}
+
+.row-note-preview,
+.trend-detail-note-preview {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--row-note-preview-bg);
+  color: var(--row-note-preview-text);
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .row-actions {

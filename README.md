@@ -4,6 +4,23 @@
 
 ## What's Changed
 
+### 2026-06-06 — feat: 新闻列表与趋势明细支持想法预览
+- **文件**
+  - *app.py（+14 −0）*
+    - 新增 `build_note_preview()`，统一生成紧凑截断的想法预览文本
+    - `/api/news`、`/api/market-trends/detail`、`/api/market-trends/tag-detail` 新增 `note_preview`
+    - `PUT /api/news/:id/note` 保存响应同步返回最新 `note_preview`
+  - *static/app.js（+29 −2）*
+    - 普通新闻列表 row 新增浅蓝色想法预览
+    - 趋势右侧明细新闻卡片同样显示想法预览
+    - 保存/清空正文想法后，本地同步 `note_preview` 与 row UI
+  - *static/style.css（+16 −0）*
+    - 新增 `row-note-preview / trend-detail-note-preview` 浅蓝样式，限制最多 2 行
+    - 补充 light / dark / system dark 变量
+  - *tests/test_api.py（+3 −0）*
+    - 验证 `note_preview` 在保存、列表展示、清空后保持一致
+- **影响**：用户现在可以直接在各集合新闻 row 和趋势明细新闻卡片中看到简短想法预览，无需先进入正文页
+
 ### 2026-06-06 — feat: 右侧栏想法输入区顶部化
 - **文件**
   - *static/index.html（+9 −7）*

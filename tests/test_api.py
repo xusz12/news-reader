@@ -677,6 +677,7 @@ def test_article_note_save_read_and_clear(tmp_path: Path, monkeypatch):
     assert save_payload["ok"] is True
     assert save_payload["has_note"] == 1
     assert save_payload["note"]["note"] == "这是我的第一条想法。"
+    assert save_payload["note_preview"] == "这是我的第一条想法。"
 
     detail = client.get(f"/api/news/{item_id}/detail")
     assert detail.status_code == 200
@@ -687,6 +688,7 @@ def test_article_note_save_read_and_clear(tmp_path: Path, monkeypatch):
 
     listed = client.get("/api/news?per=20").get_json()["items"][0]
     assert int(listed.get("has_note") or 0) == 1
+    assert listed["note_preview"] == "这是我的第一条想法。"
 
     clear = client.put(f"/api/news/{item_id}/note", json={"note": "   "})
     assert clear.status_code == 200
@@ -694,6 +696,7 @@ def test_article_note_save_read_and_clear(tmp_path: Path, monkeypatch):
     assert clear_payload["ok"] is True
     assert clear_payload["has_note"] == 0
     assert clear_payload["note"] is None
+    assert clear_payload["note_preview"] == ""
 
     detail2 = client.get(f"/api/news/{item_id}/detail").get_json()
     assert detail2["has_note"] == 0
