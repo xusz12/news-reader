@@ -13,6 +13,13 @@
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
       <div class="topbar-prefs">
+        <div class="topbar-bell-wrap">
+          <button id="errorStatsBtn" class="icon-btn" type="button" title="查看当日错误统计" aria-label="查看当日错误统计"></button>
+          <section id="errorStatsPanel" class="error-stats-panel hidden" aria-live="polite">
+            <div class="error-stats-header">当日错误统计</div>
+            <div id="errorStatsBody" class="error-stats-body"></div>
+          </section>
+        </div>
         <label class="pref-label" for="themeModeSelect">外观</label>
         <select id="themeModeSelect" class="pref-select">
           <option value="system">跟随系统</option>

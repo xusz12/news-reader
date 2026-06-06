@@ -1288,3 +1288,50 @@ def test_ai_fallback_to_gemini_failure_keeps_error(tmp_path: Path, monkeypatch):
     assert job_row["status"] == "failed"
     assert "INVALID_TOOL_ARGUMENTS_JSON" in job_row["last_error"]
     assert "GEMINI_FALLBACK_FAILED" in job_row["last_error"]
+
+
+def test_error_stats_today_with_and_without_errors(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    empty = client.get("/api/error-stats?day=2026-06-07")
+    assert empty.status_code == 200
+    assert empty.get_json() == {"ok": True, "day": "2026-06-07", "days": []}
+
+    (daily_dir / "dailyFreshNews_2026-06-07.md").write_text(
+        """## errors
+
+### 1. middle-east
+- 抓取时间：2026-06-07 21:03:38
+- 命令：`opencli ReutersBrowser news https://www.reuters.com/world/middle-east/ --limit 10 --format json`
+- 错误：message: 'TypeError: Failed to fetch'
+
+### 2. china
+- 抓取时间：2026-06-07 10:00:57
+- 命令：`opencli ReutersBrowser news https://www.reuters.com/world/china/ --limit 10 --format json`
+- 错误：message: 'TypeError: Failed to fetch'
+""",
+        encoding="utf-8",
+    )
+
+    payload = client.get("/api/error-stats?day=2026-06-07").get_json()
+    assert payload["ok"] is True
+    assert payload["day"] == "2026-06-07"
+    assert payload["days"] == [
+        {
+            "date": "2026-06-07",
+            "groups": [
+                {"time": "21:03:38", "labels": ["middle-east error"]},
+                {"time": "10:00:57", "labels": ["china error"]},
+            ],
+        }
+    ]

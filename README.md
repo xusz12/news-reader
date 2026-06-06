@@ -4,6 +4,24 @@
 
 ## What's Changed
 
+### 2026-06-07 — feat: 隐藏无摘要并新增错误统计铃铛
+- **文件**
+  - *app.py（+62 −0）*
+    - 新增 `GET /api/error-stats`，只读取当日 `dailyFreshNews_YYYY-MM-DD.md` 的 `## errors` 区块
+    - 后端聚合改为“时间块 → source error 列表”结构，贴近铃铛面板展示
+  - *parser.py（+44 −0）*
+    - 新增 `parse_daily_errors()`，专门解析 `dailyFreshNews` 中的 `errors` 区块
+  - *static/app.js（+94 −1）*
+    - 顶栏新增铃铛按钮交互与错误统计面板渲染
+    - 趋势右侧新闻卡片摘要为空时，彻底隐藏摘要区域，不再显示“无摘要”
+  - *static/index.html（+6 −0）*
+    - 顶栏增加铃铛按钮与错误统计面板容器
+  - *static/style.css（+61 −0）*
+    - 新增铃铛面板、错误分组与空态样式
+  - *tests/test_api.py（+38 −0）*
+    - 覆盖 error stats 的“无文件空态 / 读取 dailyFreshNews errors 成功”两种情况
+- **影响**：应用内不再出现“无摘要”占位；顶栏铃铛可直接查看当日 `dailyFreshNews` 记录下来的采集 error，且展示更适合按某一轮失败时间排查问题
+
 ### 2026-06-06 — feat: 趋势新闻改为打开应用内正文
 - **文件**
   - *static/app.js（+83 −10）*

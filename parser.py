@@ -10,6 +10,8 @@ SECTION_RE = re.compile(r"^##\s+(.+?)(?:（\d+条）)?\s*$")
 ITEM_TITLE_RE = re.compile(r"^###\s+\[(.+?)\]\((https?://.+?)\)\s*$")
 TIME_RE = re.compile(r"^- 发布时间：(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(?::\d{2})?\s*$")
 SUMMARY_RE = re.compile(r"^- 摘要：\s*(.+?)\s*$")
+ERROR_ITEM_RE = re.compile(r"^###\s+(?:\d+\.\s*)?(.+?)\s*$")
+ERROR_TIME_RE = re.compile(r"^- 抓取时间：(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s*$")
 IGNORE_SECTIONS = {"本次无更新的分组", "errors"}
 DAILY_FILE_RE = re.compile(r"dailyFreshNews_(\d{4}-\d{2}-\d{2})\.md$")
 TWITTER_SECTION_RE = re.compile(r"^(Twitter|X)\s*[·•\-]\s*(.+)$", re.IGNORECASE)
@@ -144,3 +146,52 @@ def parse_daily_file(path: Path) -> list[ParsedItem]:
             items[idx].date = date
 
     return items
+
+
+def parse_daily_errors(path: Path) -> list[dict[str, str]]:
+    date = extract_date_from_filename(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    entries: list[dict[str, str]] = []
+    inside_errors = False
+    current_label: str | None = None
+
+    def flush_pending(time_date: str | None, time_text: str | None) -> None:
+        if current_label and time_text:
+            entries.append({
+                "date": time_date or date,
+                "label": current_label,
+                "time": time_text,
+            })
+
+    pending_date: str | None = None
+    pending_time: str | None = None
+
+    for line in lines:
+        sec_m = SECTION_RE.match(line)
+        if sec_m:
+            if inside_errors:
+                flush_pending(pending_date, pending_time)
+                pending_date = None
+                pending_time = None
+            inside_errors = sec_m.group(1).strip().lower() == "errors"
+            current_label = None
+            continue
+
+        if not inside_errors:
+            continue
+
+        item_m = ERROR_ITEM_RE.match(line)
+        if item_m:
+            flush_pending(pending_date, pending_time)
+            current_label = item_m.group(1).strip()
+            pending_date = None
+            pending_time = None
+            continue
+
+        time_m = ERROR_TIME_RE.match(line)
+        if time_m and current_label:
+            pending_date = time_m.group(1)
+            pending_time = time_m.group(2)
+
+    flush_pending(pending_date, pending_time)
+    return entries

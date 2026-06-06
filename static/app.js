@@ -61,6 +61,9 @@ const mobileCollectionCloseBtn = document.getElementById("mobileCollectionCloseB
 const mobileCollectionOptions = document.getElementById("mobileCollectionOptions");
 const themeModeSelect = document.getElementById("themeModeSelect");
 const detailFontSelect = document.getElementById("detailFontSelect");
+const errorStatsBtn = document.getElementById("errorStatsBtn");
+const errorStatsPanel = document.getElementById("errorStatsPanel");
+const errorStatsBody = document.getElementById("errorStatsBody");
 
 const newsList = document.getElementById("newsList");
 const meta = document.getElementById("meta");
@@ -157,6 +160,61 @@ function setHint(text) {
   listHint.textContent = text || "";
 }
 
+function closeErrorStatsPanel() {
+  if (!errorStatsPanel) return;
+  errorStatsPanel.classList.add("hidden");
+}
+
+function renderErrorStats(days) {
+  if (!errorStatsBody) return;
+  errorStatsBody.innerHTML = "";
+  if (!Array.isArray(days) || !days.length) {
+    const empty = document.createElement("p");
+    empty.className = "error-stats-empty";
+    empty.textContent = "当日暂无 error 记录";
+    errorStatsBody.appendChild(empty);
+    return;
+  }
+
+  days.forEach((day) => {
+    const section = document.createElement("section");
+
+    (day.groups || []).forEach((group) => {
+      const label = document.createElement("p");
+      label.className = "error-stats-group";
+      label.textContent = `${day.date} ${group.time}：`;
+      section.appendChild(label);
+
+      const times = document.createElement("ul");
+      times.className = "error-stats-times";
+      (group.labels || []).forEach((labelText) => {
+        const li = document.createElement("li");
+        li.textContent = labelText;
+        times.appendChild(li);
+      });
+      section.appendChild(times);
+    });
+
+    errorStatsBody.appendChild(section);
+  });
+}
+
+async function openErrorStatsPanel() {
+  if (!errorStatsPanel) return;
+  if (errorStatsBody) {
+    errorStatsBody.innerHTML = '<p class="error-stats-empty">读取中...</p>';
+  }
+  errorStatsPanel.classList.remove("hidden");
+  try {
+    const days = await fetchErrorStats();
+    renderErrorStats(days);
+  } catch {
+    if (errorStatsBody) {
+      errorStatsBody.innerHTML = '<p class="error-stats-empty">读取 error 统计失败</p>';
+    }
+  }
+}
+
 function showTrendsView(show) {
   trendsView.classList.toggle("hidden", !show);
   newsList.classList.toggle("hidden", !!show);
@@ -212,6 +270,14 @@ async function fetchMarketTagDefinitions() {
   if (!data.ok) throw new Error(data.error || "market_tags_fetch_failed");
   state.marketTagChoices = Array.isArray(data.tags) ? data.tags : [];
   return state.marketTagChoices;
+}
+
+async function fetchErrorStats() {
+  const res = await fetch("/api/error-stats");
+  if (!res.ok) throw new Error("error_stats_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "error_stats_fetch_failed");
+  return Array.isArray(data.days) ? data.days : [];
 }
 
 async function createMarketTagDefinition(displayName) {
@@ -512,6 +578,9 @@ function iconSvg(name, filled = false) {
   }
   if (name === "trend-down") {
     return `<svg ${common}><path d="M4.5 8.5 9.2 13.2l3.2-3.2 6.8 6.8"/><path d="M15.6 16.8h3.6v-3.6"/></svg>`;
+  }
+  if (name === "bell") {
+    return `<svg ${common}><path d="M6.5 10.2a5.5 5.5 0 1 1 11 0c0 5 2 5.8 2 7.3H4.5c0-1.5 2-2.3 2-7.3"/><path d="M10 19.3a2.2 2.2 0 0 0 4 0"/></svg>`;
   }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
@@ -1261,7 +1330,9 @@ function buildTrendNewsCard(item, trendContext = null) {
 
   const summary = document.createElement("p");
   summary.className = "trend-detail-summary";
-  summary.textContent = item.summary || "无摘要";
+  const summaryText = typeof item.summary === "string" ? item.summary.trim() : "";
+  summary.textContent = summaryText;
+  summary.classList.toggle("hidden", !summaryText);
 
   const notePreviewText = typeof item.note_preview === "string"
     ? item.note_preview.trim()
@@ -2835,6 +2906,23 @@ detailCloseBtn.addEventListener("click", () => {
 if (detailReturnToTrendBtn) {
   detailReturnToTrendBtn.addEventListener("click", restoreTrendDetailFromDetail);
 }
+if (errorStatsBtn) {
+  errorStatsBtn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (!errorStatsPanel?.classList.contains("hidden")) {
+      closeErrorStatsPanel();
+      return;
+    }
+    await openErrorStatsPanel();
+  });
+}
+document.addEventListener("click", (event) => {
+  if (!errorStatsPanel || errorStatsPanel.classList.contains("hidden")) return;
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (errorStatsPanel.contains(target) || errorStatsBtn?.contains(target)) return;
+  closeErrorStatsPanel();
+});
 detailPanel.addEventListener("touchstart", handleDetailTouchStart, { passive: true });
 detailPanel.addEventListener("touchmove", handleDetailTouchMove, { passive: false });
 detailPanel.addEventListener("touchend", handleDetailTouchEnd, { passive: true });
@@ -3102,6 +3190,9 @@ try {
 }
 applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
+if (errorStatsBtn) {
+  applyIcon(errorStatsBtn, "bell", { label: "查看当日错误统计" });
+}
 updateFilterButtons();
 updateBatchActionButton();
 fetchReadingCheckpoint()

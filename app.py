@@ -14,7 +14,8 @@ from urllib.parse import urlparse
 from flask import Flask, jsonify, request, send_from_directory
 
 from llm_client import LLMClientError, generate_article_ai, generate_gemini_fallback_translation
-from scanner import apply_schema, reindex
+from parser import parse_daily_errors
+from scanner import apply_schema, list_daily_files, reindex
 from settings import resolve_daily_news_dir, resolve_db_path
 
 
@@ -214,6 +215,27 @@ def build_note_preview(note_text: str | None, limit: int = 120) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def load_error_stats(day: str) -> list[dict]:
+    target_name = f"dailyFreshNews_{day}.md"
+    target_path = next((path for path in list_daily_files(DAILY_NEWS_DIR) if path.name == target_name), None)
+    if not target_path or not target_path.exists():
+        return []
+
+    grouped: dict[str, list[str]] = {}
+    for entry in parse_daily_errors(target_path):
+        time_key = entry["time"]
+        grouped.setdefault(time_key, []).append(f"{entry['label']} error")
+
+    if not grouped:
+        return []
+
+    ordered = [
+        {"time": time_key, "labels": labels}
+        for time_key, labels in grouped.items()
+    ]
+    return [{"date": day, "groups": ordered}]
 
 
 def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
@@ -1014,6 +1036,15 @@ def api_sources():
         ordered.append({"key": key, "label": labels.get(key, key), "count": counts[key]})
 
     return jsonify({"ok": True, "sources": ordered})
+
+
+@app.get("/api/error-stats")
+def api_error_stats():
+    day = (request.args.get("day") or datetime.now().strftime("%Y-%m-%d")).strip()
+    if len(day) != 10:
+        return jsonify({"ok": False, "error": "invalid_day"}), 400
+    days = load_error_stats(day)
+    return jsonify({"ok": True, "day": day, "days": days})
 
 
 @app.get("/api/market-trends")
