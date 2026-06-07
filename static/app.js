@@ -27,6 +27,7 @@ let state = {
   detailReturnToTrend: false,
   searchMode: false,
   searchSnapshot: null,
+  searchBarExpanded: false,
 };
 
 const mediaIconMap = {
@@ -68,7 +69,7 @@ const errorStatsPanel = document.getElementById("errorStatsPanel");
 const errorStatsBody = document.getElementById("errorStatsBody");
 const globalSearchInput = document.getElementById("globalSearchInput");
 const globalSearchBtn = document.getElementById("globalSearchBtn");
-const globalSearchClearBtn = document.getElementById("globalSearchClearBtn");
+const searchToggleBtn = document.getElementById("searchToggleBtn");
 
 const newsList = document.getElementById("newsList");
 const meta = document.getElementById("meta");
@@ -319,8 +320,12 @@ function syncSearchControls() {
   if (globalSearchInput) {
     globalSearchInput.value = state.searchMode ? state.q : "";
   }
-  if (globalSearchClearBtn) {
-    globalSearchClearBtn.classList.toggle("hidden", !state.searchMode && !state.q);
+  const shouldExpandSearch = state.searchBarExpanded || state.searchMode || !!state.q;
+  document.body.classList.toggle("search-bar-open", shouldExpandSearch);
+  if (searchToggleBtn) {
+    applyIcon(searchToggleBtn, shouldExpandSearch ? "close" : "search", {
+      label: shouldExpandSearch ? "关闭搜索" : "打开搜索",
+    });
   }
 }
 
@@ -329,6 +334,7 @@ function clearSearchState({ restoreSnapshot = false } = {}) {
   state.searchMode = false;
   state.q = "";
   state.searchSnapshot = null;
+  state.searchBarExpanded = false;
   if (restoreSnapshot && snapshot) {
     state.collection = snapshot.collection;
     state.readFilter = snapshot.readFilter;
@@ -359,6 +365,7 @@ async function enterSearchMode(rawQuery) {
   if (!state.searchMode) rememberSearchSnapshot();
   state.searchMode = true;
   state.q = query;
+  state.searchBarExpanded = true;
   closeMobileCollectionSheet();
   closeMobileFilterSheet();
   closeErrorStatsPanel();
@@ -369,6 +376,7 @@ async function enterSearchMode(rawQuery) {
 async function exitSearchMode() {
   if (!state.searchMode) {
     state.q = "";
+    state.searchBarExpanded = false;
     syncSearchControls();
     return;
   }
@@ -649,6 +657,12 @@ function iconSvg(name, filled = false) {
   }
   if (name === "bell") {
     return `<svg ${common}><path d="M6.5 10.2a5.5 5.5 0 1 1 11 0c0 5 2 5.8 2 7.3H4.5c0-1.5 2-2.3 2-7.3"/><path d="M10 19.3a2.2 2.2 0 0 0 4 0"/></svg>`;
+  }
+  if (name === "search") {
+    return `<svg ${common}><circle cx="11" cy="11" r="5.8"/><path d="m16 16 4 4"/></svg>`;
+  }
+  if (name === "close") {
+    return `<svg ${common}><path d="M6 6 18 18"/><path d="M18 6 6 18"/></svg>`;
   }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
@@ -2994,11 +3008,19 @@ if (globalSearchInput) {
   });
 }
 
-if (globalSearchClearBtn) {
-  globalSearchClearBtn.addEventListener("click", async () => {
-    if (!state.searchMode && !(globalSearchInput?.value || "").trim()) return;
-    if (globalSearchInput) globalSearchInput.value = "";
-    await exitSearchMode();
+if (searchToggleBtn) {
+  searchToggleBtn.addEventListener("click", async () => {
+    const isOpen = state.searchBarExpanded || state.searchMode || !!state.q;
+    if (isOpen) {
+      if (globalSearchInput) globalSearchInput.value = "";
+      await exitSearchMode();
+      return;
+    }
+    state.searchBarExpanded = true;
+    syncSearchControls();
+    if (globalSearchInput) {
+      window.setTimeout(() => globalSearchInput.focus(), 0);
+    }
   });
 }
 
@@ -3341,6 +3363,13 @@ document.addEventListener("visibilitychange", () => {
     kickRowStatusPolling();
     scheduleFeedEndAutoReadIfNeeded();
   }
+});
+
+window.addEventListener("resize", () => {
+  if (!isMobileLayout() && !state.searchMode && !state.q) {
+    state.searchBarExpanded = false;
+  }
+  syncSearchControls();
 });
 
 setupLoadObserver();

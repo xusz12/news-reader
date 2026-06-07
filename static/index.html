@@ -8,23 +8,27 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="topbar-brand">
-        <h1>News Reader</h1>
-        <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
+      <div class="topbar-brand-row">
+        <div class="topbar-brand">
+          <h1>News Reader</h1>
+          <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
+        </div>
+        <div class="topbar-brand-actions">
+          <button id="searchToggleBtn" class="icon-btn search-toggle-btn" type="button" title="打开搜索" aria-label="打开搜索"></button>
+          <div class="topbar-bell-wrap">
+            <button id="errorStatsBtn" class="icon-btn" type="button" title="查看当日错误统计" aria-label="查看当日错误统计"></button>
+            <section id="errorStatsPanel" class="error-stats-panel hidden" aria-live="polite">
+              <div class="error-stats-header">当日错误统计</div>
+              <div id="errorStatsBody" class="error-stats-body"></div>
+            </section>
+          </div>
+        </div>
       </div>
       <div class="topbar-search" role="search">
         <input id="globalSearchInput" class="topbar-search-input" type="search" placeholder="搜索标题、原文、AI、想法、板块..." aria-label="全局全文搜索" />
         <button id="globalSearchBtn" class="topbar-search-btn" type="button">搜索</button>
-        <button id="globalSearchClearBtn" class="topbar-search-clear hidden" type="button">关闭</button>
       </div>
       <div class="topbar-prefs">
-        <div class="topbar-bell-wrap">
-          <button id="errorStatsBtn" class="icon-btn" type="button" title="查看当日错误统计" aria-label="查看当日错误统计"></button>
-          <section id="errorStatsPanel" class="error-stats-panel hidden" aria-live="polite">
-            <div class="error-stats-header">当日错误统计</div>
-            <div id="errorStatsBody" class="error-stats-body"></div>
-          </section>
-        </div>
         <label class="pref-label" for="themeModeSelect">外观</label>
         <select id="themeModeSelect" class="pref-select">
           <option value="system">跟随系统</option>
