@@ -620,6 +620,9 @@ function iconSvg(name, filled = false) {
   if (name === "close") {
     return `<svg ${common}><path d="M6 6 18 18"/><path d="M18 6 6 18"/></svg>`;
   }
+  if (name === "help") {
+    return `<svg ${common}><path d="M9.4 9.2a2.8 2.8 0 1 1 4.8 2c-.7.7-1.5 1.1-1.9 1.7-.3.4-.4.8-.4 1.6"/><circle cx="12" cy="17.2" r="0.9" fill="currentColor" stroke="none"/></svg>`;
+  }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
 
@@ -3368,6 +3371,10 @@ applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
 if (errorStatsBtn) {
   applyIcon(errorStatsBtn, "bell", { label: "查看当日错误统计" });
+}
+if (searchPageSubmitBtn) {
+  searchPageSubmitBtn.textContent = "搜索";
+  searchPageSubmitBtn.setAttribute("aria-label", "执行搜索");
 }
 syncSearchPageControls();
 updateFilterButtons();

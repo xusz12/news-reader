@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>News Reader v1.2</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.1" />
+    <link rel="stylesheet" href="/static/style.css?v=1.9.1.1" />
   </head>
   <body>
     <header class="topbar">
@@ -63,12 +63,11 @@
           <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
         </div>
         <section id="searchPageControls" class="search-page-controls hidden" aria-label="搜索条件">
-          <div class="search-page-header">
-            <h2 class="search-page-title">搜索</h2>
-            <p class="search-page-subtitle">独立搜索全部新闻，不继承当前集合与筛选状态。</p>
-          </div>
           <div class="search-page-form" role="search">
             <input id="searchPageInput" class="search-page-input" type="search" placeholder="搜索标题、原文、AI、想法、板块..." aria-label="搜索关键词" />
+            <button id="searchPageSubmitBtn" class="icon-btn search-page-submit" type="button" aria-label="执行搜索"></button>
+          </div>
+          <div class="search-page-filters">
             <select id="searchRangeSelect" class="pref-select search-page-select" aria-label="搜索范围">
               <option value="all">全部新闻</option>
               <option value="important">重要</option>
@@ -82,7 +81,6 @@
               <option value="7d">7 天内</option>
               <option value="30d">30 天内</option>
             </select>
-            <button id="searchPageSubmitBtn" class="search-page-submit" type="button">搜索</button>
           </div>
         </section>
         <div id="meta" class="meta"></div>
@@ -246,6 +244,6 @@
       <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.1"></script>
+    <script src="/static/app.js?v=1.9.1.1"></script>
   </body>
 </html>
