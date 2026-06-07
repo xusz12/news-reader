@@ -4,6 +4,28 @@
 
 ## What's Changed
 
+### 2026-06-07 — feat: 新增独立搜索页与基础筛选
+- **文件**
+  - *app.py（+48 −0）*
+    - 扩展 `GET /api/search`，新增 `range`、`time` 参数
+    - 支持范围 `all / important / notes / market_tags / detail_ready`
+    - 支持时间 `all / today / 7d / 30d`
+    - 搜索结果固定 recent（发布时间新→旧）
+  - *static/app.js（+218 −133）*
+    - 把旧顶栏临时搜索模式改成独立 `search` collection
+    - 搜索页仅保留 `关键词 / 范围 / 时间` 三个条件
+    - 搜索页不再继承或恢复原集合 / 来源 / 已读筛选状态
+    - 搜索结果仍复用新闻 row 与右侧正文详情链路
+  - *static/index.html（+33 −0）*
+    - 桌面左侧栏新增 `搜索` 入口
+    - 手机集合面板新增 `搜索`
+    - 新增搜索页自己的输入框、范围和时间筛选控件
+  - *static/style.css（+81 −0）*
+    - 新增独立搜索页条件区样式，适配桌面与手机布局
+  - *tests/test_api.py（+104 −0）*
+    - 新增 `range/time` 搜索测试，并覆盖搜索忽略 `collection/source_filter/read_filter` 的独立页语义
+- **影响**：搜索现在是 app 内的独立页面，而不是顶栏临时过滤器。搜索页只使用自己的关键词、范围和时间条件；用户离开搜索页时通过主动点击其他集合或趋势页切换，不再恢复“进入搜索前现场”。
+
 ### 2026-06-07 — fix: 修复桌面端搜索框展开布局
 - **文件**
   - *static/index.html（+2 −2）*

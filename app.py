@@ -188,6 +188,30 @@ def _build_news_where_clause(
     return where_sql, args
 
 
+def _build_search_filter_clause(range_value: str, time_value: str) -> tuple[str, list]:
+    where = []
+    args: list = []
+
+    if range_value == "important":
+        where.append("st.important_at IS NOT NULL")
+    elif range_value == "notes":
+        where.append("EXISTS (SELECT 1 FROM article_notes an2 WHERE an2.url = items.url)")
+    elif range_value == "market_tags":
+        where.append("EXISTS (SELECT 1 FROM article_market_tags mt2 WHERE mt2.url = items.url)")
+    elif range_value == "detail_ready":
+        where.append("ad.url IS NOT NULL")
+
+    if time_value == "today":
+        where.append(f"{ITEM_DATE_SQL} = date('now', 'localtime')")
+    elif time_value == "7d":
+        where.append(f"{ITEM_DATE_SQL} >= date('now', 'localtime', '-6 day')")
+    elif time_value == "30d":
+        where.append(f"{ITEM_DATE_SQL} >= date('now', 'localtime', '-29 day')")
+
+    where_sql = (" AND " + " AND ".join(where)) if where else ""
+    return where_sql, args
+
+
 def db_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -989,8 +1013,16 @@ def api_news_status():
 @app.get("/api/search")
 def api_search():
     q = (request.args.get("q") or "").strip()
+    range_value = (request.args.get("range") or "all").strip().lower()
+    time_value = (request.args.get("time") or "all").strip().lower()
     page = max(1, int(request.args.get("page", "1")))
     per = min(100, max(10, int(request.args.get("per", "30"))))
+    valid_ranges = {"all", "important", "notes", "market_tags", "detail_ready"}
+    valid_times = {"all", "today", "7d", "30d"}
+    if range_value not in valid_ranges:
+        return jsonify({"ok": False, "error": "invalid_range"}), 400
+    if time_value not in valid_times:
+        return jsonify({"ok": False, "error": "invalid_time"}), 400
     if not q:
         return jsonify({"items": [], "total": 0, "date_counts": {}, "page": 1, "pages": 1})
 
@@ -1024,12 +1056,14 @@ def api_search():
       )
     )
     """
+    filter_sql, filter_args = _build_search_filter_clause(range_value, time_value)
+    all_args = [*search_args, *filter_args]
 
     conn = db_conn()
     try:
         total = conn.execute(
-            f"SELECT COUNT(DISTINCT items.id) FROM items {join_sql} {where_sql}",
-            search_args,
+            f"SELECT COUNT(DISTINCT items.id) FROM items {join_sql} {where_sql}{filter_sql}",
+            all_args,
         ).fetchone()[0]
 
         date_count_rows = conn.execute(
@@ -1037,11 +1071,11 @@ def api_search():
             SELECT {ITEM_DATE_SQL} AS date_key, COUNT(DISTINCT items.id) AS total
             FROM items
             {join_sql}
-            {where_sql}
+            {where_sql}{filter_sql}
             GROUP BY date_key
             ORDER BY date_key DESC
             """,
-            search_args,
+            all_args,
         ).fetchall()
 
         offset = (page - 1) * per
@@ -1061,11 +1095,11 @@ def api_search():
                    CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready
             FROM items
             {join_sql}
-            {where_sql}
-            ORDER BY {FEED_NEWS_ORDER_BY_SQL}
+            {where_sql}{filter_sql}
+            ORDER BY {NON_FEED_NEWS_ORDER_BY_SQL}
             LIMIT ? OFFSET ?
             """,
-            [*search_args, per, offset],
+            [*all_args, per, offset],
         ).fetchall()
         urls = [r["url"] for r in rows if r["url"]]
         market_tags_map = load_market_tags_map(conn, urls)

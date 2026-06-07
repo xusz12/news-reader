@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -257,6 +258,109 @@ def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
 
     read_later_items = client.get("/api/news?collection=read_later&per=20").get_json()["items"]
     assert [item["title"] for item in read_later_items] == ["Morning", "Noon", "Evening"]
+
+
+def test_search_range_and_time_filters(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "news_index.sqlite3"
+    daily_dir = tmp_path / "DailyNews"
+    daily_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    today = datetime.now().date()
+    d5 = today - timedelta(days=5)
+    d20 = today - timedelta(days=20)
+    d40 = today - timedelta(days=40)
+    ts = f"{today.isoformat()} 12:00:00"
+
+    def make_item(item_id: int, title: str, day) -> tuple:
+        day_text = day.isoformat()
+        published_at = f"{day_text} 09:00:00"
+        return (
+            item_id,
+            "search.md",
+            item_id,
+            published_at,
+            day_text,
+            "09:00",
+            "Reuters",
+            "rss",
+            "Reuters",
+            title,
+            f"summary {title}",
+            f"https://example.com/{item_id}",
+            ts,
+            ts,
+        )
+
+    conn = app_module.db_conn()
+    try:
+        conn.executemany(
+            """
+            INSERT INTO items(
+              id, source_file, item_order, published_at, date, time, source, source_type,
+              source_name, title, summary, url, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                make_item(1, "RangeNeedle A", today),
+                make_item(2, "RangeNeedle B", d5),
+                make_item(3, "RangeNeedle C", d20),
+                make_item(4, "RangeNeedle D", d40),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO item_state(item_id, important_at, updated_at) VALUES (?, ?, ?)",
+            (1, ts, ts),
+        )
+        conn.executemany(
+            "INSERT INTO article_notes(url, note, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            [
+                ("https://example.com/1", "note A", ts, ts),
+                ("https://example.com/2", "note B", ts, ts),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO article_market_tags(url, tag, direction, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("https://example.com/1", "ai", "bullish", ts, ts),
+                ("https://example.com/3", "ai", "bearish", ts, ts),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO article_details(url, title, author, published_at, content, content_length, fetched_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("https://example.com/1", "RangeNeedle A", "r", ts, "body", 4, ts, ts),
+                ("https://example.com/3", "RangeNeedle C", "r", ts, "body", 4, ts, ts),
+                ("https://example.com/4", "RangeNeedle D", "r", ts, "body", 4, ts, ts),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert client.get("/api/search?q=RangeNeedle&range=all&time=all&per=20").get_json()["total"] == 4
+    assert client.get("/api/search?q=RangeNeedle&range=important&time=all&per=20").get_json()["total"] == 1
+    assert client.get("/api/search?q=RangeNeedle&range=notes&time=all&per=20").get_json()["total"] == 2
+    assert client.get("/api/search?q=RangeNeedle&range=market_tags&time=all&per=20").get_json()["total"] == 2
+    assert client.get("/api/search?q=RangeNeedle&range=detail_ready&time=all&per=20").get_json()["total"] == 3
+
+    assert client.get("/api/search?q=RangeNeedle&range=all&time=today&per=20").get_json()["total"] == 1
+    assert client.get("/api/search?q=RangeNeedle&range=all&time=7d&per=20").get_json()["total"] == 2
+    assert client.get("/api/search?q=RangeNeedle&range=all&time=30d&per=20").get_json()["total"] == 3
+
+    ignored = client.get(
+        "/api/search?q=RangeNeedle&range=all&time=all&collection=important&source_filter=bloomberg&read_filter=read&per=20"
+    )
+    assert ignored.status_code == 200
+    assert ignored.get_json()["total"] == 4
 
 
 def test_mark_all_read_cross_page_with_filter(tmp_path: Path, monkeypatch):

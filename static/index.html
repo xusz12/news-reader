@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>News Reader v1.2</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.0.2" />
+    <link rel="stylesheet" href="/static/style.css?v=1.9.1" />
   </head>
   <body>
     <header class="topbar">
@@ -14,7 +14,6 @@
           <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
         </div>
         <div class="topbar-brand-actions">
-          <button id="searchToggleBtn" class="icon-btn search-toggle-btn" type="button" title="打开搜索" aria-label="打开搜索"></button>
           <div class="topbar-bell-wrap">
             <button id="errorStatsBtn" class="icon-btn" type="button" title="查看当日错误统计" aria-label="查看当日错误统计"></button>
             <section id="errorStatsPanel" class="error-stats-panel hidden" aria-live="polite">
@@ -23,10 +22,6 @@
             </section>
           </div>
         </div>
-      </div>
-      <div class="topbar-search" role="search">
-        <input id="globalSearchInput" class="topbar-search-input" type="search" placeholder="搜索标题、原文、AI、想法、板块..." aria-label="全局全文搜索" />
-        <button id="globalSearchBtn" class="topbar-search-btn" type="button">搜索</button>
       </div>
       <div class="topbar-prefs">
         <label class="pref-label" for="themeModeSelect">外观</label>
@@ -47,6 +42,7 @@
     <main id="workspace" class="workspace">
       <aside class="left-nav">
         <h2>集合入口</h2>
+        <button id="navSearchBtn" class="nav-btn">搜索</button>
         <button id="navFeedBtn" class="nav-btn active">新闻流</button>
         <button id="navImportantBtn" class="nav-btn">重要新闻</button>
         <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
@@ -66,6 +62,29 @@
           <button id="refreshBtn" class="icon-btn" type="button"></button>
           <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
         </div>
+        <section id="searchPageControls" class="search-page-controls hidden" aria-label="搜索条件">
+          <div class="search-page-header">
+            <h2 class="search-page-title">搜索</h2>
+            <p class="search-page-subtitle">独立搜索全部新闻，不继承当前集合与筛选状态。</p>
+          </div>
+          <div class="search-page-form" role="search">
+            <input id="searchPageInput" class="search-page-input" type="search" placeholder="搜索标题、原文、AI、想法、板块..." aria-label="搜索关键词" />
+            <select id="searchRangeSelect" class="pref-select search-page-select" aria-label="搜索范围">
+              <option value="all">全部新闻</option>
+              <option value="important">重要</option>
+              <option value="notes">有想法</option>
+              <option value="market_tags">有板块</option>
+              <option value="detail_ready">已抓取正文</option>
+            </select>
+            <select id="searchTimeSelect" class="pref-select search-page-select" aria-label="搜索时间">
+              <option value="all">全部时间</option>
+              <option value="today">今天</option>
+              <option value="7d">7 天内</option>
+              <option value="30d">30 天内</option>
+            </select>
+            <button id="searchPageSubmitBtn" class="search-page-submit" type="button">搜索</button>
+          </div>
+        </section>
         <div id="meta" class="meta"></div>
         <ul id="newsList" class="news-list">
           <li id="listHint" class="list-hint"></li>
@@ -227,6 +246,6 @@
       <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.0.2"></script>
+    <script src="/static/app.js?v=1.9.1"></script>
   </body>
 </html>
