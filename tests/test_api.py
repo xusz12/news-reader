@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 
 
@@ -80,6 +81,137 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     combo = client.get("/api/news?collection=important&read_filter=unread")
     assert combo.status_code == 200
     assert combo.get_json()["total"] == 1
+
+
+def test_global_search_mvp(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-04.md").write_text(
+        """## Reuters · World（2条）
+### [AlphaTitle](https://example.com/alpha)
+- 发布时间：2026-06-04 09:00:00
+### [BetaTitle](https://example.com/beta)
+- 发布时间：2026-06-04 11:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    alpha = next(item for item in items if item["title"] == "AlphaTitle")
+
+    ts = app_module.now_ts()
+    conn = app_module.db_conn()
+    try:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(
+                  url, source, title, author, published_at, content,
+                  content_length, raw_json, fetched_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    alpha["url"],
+                    "Reuters",
+                    "AlphaTitle",
+                    "Reporter",
+                    "2026-06-04 09:00:00",
+                    "AlphaX body-needle full english content for search",
+                    48,
+                    "{}",
+                    ts,
+                    ts,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO article_ai(url, model, key_points_zh, conclusion_zh, body_zh, raw_json, generated_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    alpha["url"],
+                    "deepseek-chat",
+                    json.dumps(["锂电扩产"], ensure_ascii=False),
+                    "中文结论",
+                    "中文正文命中 AlphaX",
+                    "{}",
+                    ts,
+                    ts,
+                ),
+            )
+        
+    finally:
+        conn.close()
+
+    note_res = client.put(f"/api/news/{alpha['id']}/note", json={"note": "我的独特想法 AlphaX"})
+    assert note_res.status_code == 200
+
+    create_tag = client.post("/api/market-tags", json={"display_name": "宏观Beta"})
+    assert create_tag.status_code == 200
+    tag_key = create_tag.get_json()["tag"]["key"]
+    assert client.put(
+        f"/api/news/{alpha['id']}/market-tag",
+        json={"tag": tag_key, "direction": "bullish"},
+    ).status_code == 200
+    assert client.patch(
+        f"/api/market-tags/{tag_key}",
+        json={"display_name": "大宏观"},
+    ).status_code == 200
+
+    title_hit = client.get("/api/search?q=AlphaTitle&per=20")
+    assert title_hit.status_code == 200
+    assert [item["title"] for item in title_hit.get_json()["items"]] == ["AlphaTitle"]
+
+    english_hit = client.get("/api/search?q=body-needle&per=20").get_json()
+    assert english_hit["total"] == 1
+    assert english_hit["items"][0]["title"] == "AlphaTitle"
+
+    ai_body_hit = client.get("/api/search?q=中文正文命中&per=20").get_json()
+    assert ai_body_hit["total"] == 1
+    assert ai_body_hit["items"][0]["title"] == "AlphaTitle"
+
+    ai_points_hit = client.get("/api/search?q=锂电扩产&per=20").get_json()
+    assert ai_points_hit["total"] == 1
+    assert ai_points_hit["items"][0]["title"] == "AlphaTitle"
+
+    note_hit = client.get("/api/search?q=独特想法&per=20").get_json()
+    assert note_hit["total"] == 1
+    assert note_hit["items"][0]["title"] == "AlphaTitle"
+    assert note_hit["items"][0]["note_preview"] == "我的独特想法 AlphaX"
+
+    tag_key_hit = client.get(f"/api/search?q={tag_key}&per=20").get_json()
+    assert tag_key_hit["total"] == 1
+    assert tag_key_hit["items"][0]["title"] == "AlphaTitle"
+
+    tag_label_hit = client.get("/api/search?q=大宏观&per=20").get_json()
+    assert tag_label_hit["total"] == 1
+    assert tag_label_hit["items"][0]["title"] == "AlphaTitle"
+    assert tag_label_hit["items"][0]["market_tags"][0]["tag"] == "大宏观"
+
+    dedup_hit = client.get("/api/search?q=AlphaX&per=20").get_json()
+    assert dedup_hit["total"] == 1
+    assert [item["title"] for item in dedup_hit["items"]] == ["AlphaTitle"]
+
+    empty_hit = client.get("/api/search?q=")
+    assert empty_hit.status_code == 200
+    assert empty_hit.get_json()["items"] == []
+    assert empty_hit.get_json()["total"] == 0
+
+    missing_hit = client.get("/api/search?q=no-such-needle&per=20").get_json()
+    assert missing_hit["total"] == 0
+    assert missing_hit["items"] == []
 
 
 def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):

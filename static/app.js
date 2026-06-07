@@ -25,6 +25,8 @@ let state = {
   dateCounts: new Map(),
   lastNewsCollectionBeforeTrends: "feed",
   detailReturnToTrend: false,
+  searchMode: false,
+  searchSnapshot: null,
 };
 
 const mediaIconMap = {
@@ -64,6 +66,9 @@ const detailFontSelect = document.getElementById("detailFontSelect");
 const errorStatsBtn = document.getElementById("errorStatsBtn");
 const errorStatsPanel = document.getElementById("errorStatsPanel");
 const errorStatsBody = document.getElementById("errorStatsBody");
+const globalSearchInput = document.getElementById("globalSearchInput");
+const globalSearchBtn = document.getElementById("globalSearchBtn");
+const globalSearchClearBtn = document.getElementById("globalSearchClearBtn");
 
 const newsList = document.getElementById("newsList");
 const meta = document.getElementById("meta");
@@ -229,7 +234,7 @@ function updateWorkspaceLayout() {
 }
 
 function updateSourceFilterVisibility() {
-  const visible = state.collection !== "trends";
+  const visible = state.collection !== "trends" && !state.searchMode;
   document.querySelectorAll(".sources-title, #sourceFilters").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
@@ -310,6 +315,67 @@ function clearFeedEndAutoReadTimer() {
   feedEndAutoReadTimer = null;
 }
 
+function syncSearchControls() {
+  if (globalSearchInput) {
+    globalSearchInput.value = state.searchMode ? state.q : "";
+  }
+  if (globalSearchClearBtn) {
+    globalSearchClearBtn.classList.toggle("hidden", !state.searchMode && !state.q);
+  }
+}
+
+function clearSearchState({ restoreSnapshot = false } = {}) {
+  const snapshot = state.searchSnapshot;
+  state.searchMode = false;
+  state.q = "";
+  state.searchSnapshot = null;
+  if (restoreSnapshot && snapshot) {
+    state.collection = snapshot.collection;
+    state.readFilter = snapshot.readFilter;
+    state.feedReadFilter = snapshot.feedReadFilter;
+    state.sourceFilter = snapshot.sourceFilter;
+    state.lastNewsCollectionBeforeTrends = snapshot.lastNewsCollectionBeforeTrends;
+  }
+  syncSearchControls();
+}
+
+function rememberSearchSnapshot() {
+  if (state.searchSnapshot) return;
+  state.searchSnapshot = {
+    collection: state.collection,
+    readFilter: state.readFilter,
+    feedReadFilter: state.feedReadFilter,
+    sourceFilter: state.sourceFilter,
+    lastNewsCollectionBeforeTrends: state.lastNewsCollectionBeforeTrends,
+  };
+}
+
+async function enterSearchMode(rawQuery) {
+  const query = (rawQuery || "").trim();
+  if (!query) {
+    await exitSearchMode();
+    return;
+  }
+  if (!state.searchMode) rememberSearchSnapshot();
+  state.searchMode = true;
+  state.q = query;
+  closeMobileCollectionSheet();
+  closeMobileFilterSheet();
+  closeErrorStatsPanel();
+  syncSearchControls();
+  await loadFirstPage();
+}
+
+async function exitSearchMode() {
+  if (!state.searchMode) {
+    state.q = "";
+    syncSearchControls();
+    return;
+  }
+  clearSearchState({ restoreSnapshot: true });
+  await loadFirstPage();
+}
+
 function feedEndAutoReadKey() {
   return `${state.collection}|${state.q}|${state.sourceFilter}|${state.readFilter}|${state.total}`;
 }
@@ -352,7 +418,7 @@ function updateDateSectionCount(dateKey) {
 }
 
 function itemMatchesCurrentDateCountScope(item) {
-  if (!item || state.collection === "trends") return false;
+  if (!item || state.collection === "trends" || state.searchMode) return false;
   let inCollection = false;
   if (state.collection === "feed") inCollection = true;
   else if (state.collection === "important") inCollection = !!item.important_at;
@@ -393,6 +459,7 @@ function markLoadedRowsReadLocally(itemIds = null) {
 
 function scheduleFeedEndAutoReadIfNeeded() {
   const canSchedule =
+    !state.searchMode &&
     state.collection === "feed" &&
     !state.hasMore &&
     state.total > 0 &&
@@ -414,6 +481,7 @@ function scheduleFeedEndAutoReadIfNeeded() {
   feedEndAutoReadTimer = window.setTimeout(async () => {
     feedEndAutoReadTimer = null;
     const stillValid =
+      !state.searchMode &&
       state.collection === "feed" &&
       !state.hasMore &&
       state.total > 0 &&
@@ -722,7 +790,7 @@ function syncRowUI(li, item) {
 }
 
 function updateFilterButtons() {
-  const showReadFilter = state.collection === "feed";
+  const showReadFilter = state.collection === "feed" && !state.searchMode;
   readFilterToggleBtn.classList.toggle("hidden", !showReadFilter);
   if (!showReadFilter) return;
   const isAll = state.readFilter === "all";
@@ -734,7 +802,7 @@ function updateFilterButtons() {
 }
 
 function updateResumeButton() {
-  const visible = state.collection === "feed" && !!state.readingCheckpoint?.url;
+  const visible = state.collection === "feed" && !state.searchMode && !!state.readingCheckpoint?.url;
   resumeAnchorBtn.classList.toggle("hidden", !visible);
   if (!visible) return;
   const title = state.readingCheckpoint?.title || "回到上次阅读";
@@ -751,6 +819,7 @@ function applyResumeIcon(label = "回到上次阅读") {
 
 function updateBatchActionButton() {
   if (
+    state.searchMode ||
     state.collection === "important" ||
     state.collection === "notes" ||
     state.collection === "market_tags" ||
@@ -794,8 +863,8 @@ function updateCollectionButtons() {
     mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
   }
   if (manageMarketTagsBtn) {
-    manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends");
-    if (state.collection === "trends") {
+    manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends" || state.searchMode);
+    if (state.collection === "trends" && !state.searchMode) {
       applyIcon(manageMarketTagsBtn, "pen", {
         tone: state.tagAdminOpen ? "accent" : "default",
         label: "管理板块",
@@ -806,6 +875,10 @@ function updateCollectionButtons() {
 
 function updateMobileFilterCollectionText() {
   if (!mobileFilterCollection) return;
+  if (state.searchMode) {
+    mobileFilterCollection.textContent = `当前集合：搜索“${state.q}”`;
+    return;
+  }
   const names = {
     feed: "新闻流",
     important: "重要新闻",
@@ -862,7 +935,7 @@ function openMobileCollectionSheet() {
 }
 
 function openMobileFilterSheet() {
-  if (!mobileFilterSheet) return;
+  if (!mobileFilterSheet || state.searchMode) return;
   closeMobileCollectionSheet();
   updateMobileFilterCollectionText();
   renderSourceFilters(latestSourceOptions);
@@ -938,6 +1011,11 @@ async function fetchSources() {
 }
 
 function renderMeta() {
+  if (state.searchMode) {
+    meta.textContent = `搜索 · “${state.q}” · 共 ${state.total} 条`;
+    pageInfo.textContent = `${state.page} / ${state.pages}`;
+    return;
+  }
   const names = {
     feed: "新闻流",
     important: "重要新闻",
@@ -1673,7 +1751,7 @@ async function fetchReadingCheckpoint() {
 }
 
 async function saveReadingCheckpoint(item) {
-  if (!item || state.collection !== "feed" || !item.url) return;
+  if (!item || state.collection !== "feed" || state.searchMode || !item.url) return;
   state.readingCheckpoint = {
     scope: "feed",
     item_id: item.id,
@@ -2326,7 +2404,7 @@ function startDetailPolling(itemId) {
 }
 
 function setupReadObserver() {
-  if (state.collection !== "feed") {
+  if (state.collection !== "feed" || state.searchMode) {
     if (readObserver) {
       readObserver.disconnect();
       readObserver = null;
@@ -2363,7 +2441,7 @@ function setupReadObserver() {
 }
 
 function processFeedAutoReadByScroll() {
-  if (state.collection !== "feed") return;
+  if (state.collection !== "feed" || state.searchMode) return;
   if (document.hidden) return;
   if (!lastScrollDirectionDown) return;
   const listRect = newsList.getBoundingClientRect();
@@ -2509,6 +2587,17 @@ async function fetchNewsPage(page) {
   return res.json();
 }
 
+async function fetchSearchPage(page) {
+  const params = new URLSearchParams({
+    page: String(page),
+    per: String(state.per),
+    q: state.q,
+  });
+  const res = await fetch(`/api/search?${params.toString()}`);
+  if (!res.ok) throw new Error("search_fetch_failed");
+  return res.json();
+}
+
 function resetList() {
   newsList.querySelectorAll(".news-item, .date-section").forEach((node) => node.remove());
   enteredViewport.clear();
@@ -2574,7 +2663,9 @@ function appendNewsRow(item, row) {
 
 async function loadFirstPage() {
   clearFeedEndAutoReadTimer();
-  if (state.collection === "feed") {
+  if (state.searchMode) {
+    state.readFilter = "all";
+  } else if (state.collection === "feed") {
     state.readFilter = state.feedReadFilter;
   } else if (state.readFilter !== "all") {
     state.readFilter = "all";
@@ -2582,6 +2673,31 @@ async function loadFirstPage() {
   state.loading = true;
   try {
     resetList();
+
+    if (state.searchMode) {
+      const data = await fetchSearchPage(1);
+      state.total = data.total;
+      setDateCounts(data.date_counts);
+      state.pages = data.pages;
+      state.page = 1;
+      state.hasMore = state.page < state.pages;
+      data.items.forEach((item) => appendNewsRow(item, buildItemRow(item)));
+      renderMeta();
+      showTrendsView(false);
+      if (state.total === 0) {
+        setHint(`未找到与“${state.q}”相关的新闻`);
+      } else if (state.hasMore) {
+        setHint("继续下滑加载更多");
+      } else {
+        setHint(`已显示与“${state.q}”相关的全部新闻`);
+      }
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      stopRowStatusPolling();
+      return;
+    }
 
     if (state.collection === "trends") {
       try {
@@ -2650,6 +2766,29 @@ async function loadFirstPage() {
 }
 
 async function loadNextPage() {
+  if (state.searchMode) {
+    if (!state.hasMore) return;
+    const next = state.page + 1;
+    state.loading = true;
+    try {
+      const data = await fetchSearchPage(next);
+      setDateCounts(data.date_counts);
+      data.items.forEach((item) => appendNewsRow(item, buildItemRow(item)));
+      state.page = next;
+      state.pages = data.pages;
+      state.total = data.total;
+      state.hasMore = state.page < state.pages;
+      renderMeta();
+      setHint(state.total === 0 ? `未找到与“${state.q}”相关的新闻` : (state.hasMore ? "继续下滑加载更多" : `已显示与“${state.q}”相关的全部新闻`));
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+    } finally {
+      state.loading = false;
+    }
+    return;
+  }
   if (state.collection === "trends") return;
   if (!state.hasMore) return;
   const next = state.page + 1;
@@ -2729,11 +2868,16 @@ resumeAnchorBtn.addEventListener("click", async () => {
 });
 
 async function switchCollection(collection) {
-  if (state.collection === collection) return;
+  if (state.searchMode) {
+    clearSearchState({ restoreSnapshot: false });
+  } else if (state.collection === collection) {
+    return;
+  }
   if (collection === "trends" && state.collection !== "trends") {
     state.lastNewsCollectionBeforeTrends = state.collection;
   }
   state.collection = collection;
+  state.q = "";
   closeMobileFilterSheet();
   closeMobileCollectionSheet();
   await loadFirstPage();
@@ -2778,6 +2922,7 @@ if (mobileCollectionTriggerBtn) {
 
 if (mobileTabFilterBtn) {
   mobileTabFilterBtn.addEventListener("click", () => {
+    if (state.searchMode) return;
     openMobileFilterSheet();
   });
 }
@@ -2832,6 +2977,28 @@ if (mobileCollectionCloseBtn) {
 if (themeModeSelect) {
   themeModeSelect.addEventListener("change", () => {
     applyThemeMode(themeModeSelect.value);
+  });
+}
+
+if (globalSearchBtn) {
+  globalSearchBtn.addEventListener("click", async () => {
+    await enterSearchMode(globalSearchInput?.value || "");
+  });
+}
+
+if (globalSearchInput) {
+  globalSearchInput.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    await enterSearchMode(globalSearchInput.value || "");
+  });
+}
+
+if (globalSearchClearBtn) {
+  globalSearchClearBtn.addEventListener("click", async () => {
+    if (!state.searchMode && !(globalSearchInput?.value || "").trim()) return;
+    if (globalSearchInput) globalSearchInput.value = "";
+    await exitSearchMode();
   });
 }
 
@@ -3193,6 +3360,7 @@ applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
 if (errorStatsBtn) {
   applyIcon(errorStatsBtn, "bell", { label: "查看当日错误统计" });
 }
+syncSearchControls();
 updateFilterButtons();
 updateBatchActionButton();
 fetchReadingCheckpoint()

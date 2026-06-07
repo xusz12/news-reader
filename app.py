@@ -238,6 +238,19 @@ def load_error_stats(day: str) -> list[dict]:
     return [{"date": day, "groups": ordered}]
 
 
+def serialize_news_rows(items: list[dict], market_tags_map: dict[str, list[dict]]) -> list[dict]:
+    for item in items:
+        tags = market_tags_map.get(item.get("url") or "", [])
+        item["note_preview"] = build_note_preview(item.pop("note_preview_source", None))
+        item["market_tags"] = tags
+        item["has_market_tags"] = 1 if tags else 0
+        item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
+        date_key, date_label = derive_date_meta(item.get("published_at"), item.get("date"))
+        item["date_key"] = date_key
+        item["date_label"] = date_label
+    return items
+
+
 def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
     where_sql = "WHERE active=1" if active_only else ""
     rows = conn.execute(
@@ -878,7 +891,7 @@ def api_news():
 
         date_count_rows = conn.execute(
             f"""
-            SELECT {ITEM_DATE_SQL} AS date_key, COUNT(*) AS total
+            SELECT {ITEM_DATE_SQL} AS date_key, COUNT(DISTINCT items.id) AS total
             FROM items
             {join_sql}
             {where_sql}
@@ -891,7 +904,7 @@ def api_news():
         offset = (page - 1) * per
         rows = conn.execute(
             f"""
-            SELECT items.id, items.source_file, items.item_order, items.published_at,
+            SELECT DISTINCT items.id, items.source_file, items.item_order, items.published_at,
                    items.date, items.time, items.source, items.source_type,
                    items.source_name, items.title, items.summary, items.url,
                    st.read_at, st.important_at, st.read_later_at,
@@ -924,15 +937,7 @@ def api_news():
         for row in date_count_rows
         if row["date_key"]
     }
-    for item in items:
-        tags = market_tags_map.get(item.get("url") or "", [])
-        item["note_preview"] = build_note_preview(item.pop("note_preview_source", None))
-        item["market_tags"] = tags
-        item["has_market_tags"] = 1 if tags else 0
-        item["source_key"] = derive_source_key(item.get("url"), item.get("source_type"), item.get("source"))
-        date_key, date_label = derive_date_meta(item.get("published_at"), item.get("date"))
-        item["date_key"] = date_key
-        item["date_label"] = date_label
+    items = serialize_news_rows(items, market_tags_map)
     pages = max(1, math.ceil(total / per)) if total else 1
     return jsonify(
         {
@@ -979,6 +984,98 @@ def api_news_status():
     finally:
         conn.close()
     return jsonify({"ok": True, "items": [dict(r) for r in rows]})
+
+
+@app.get("/api/search")
+def api_search():
+    q = (request.args.get("q") or "").strip()
+    page = max(1, int(request.args.get("page", "1")))
+    per = min(100, max(10, int(request.args.get("per", "30"))))
+    if not q:
+        return jsonify({"items": [], "total": 0, "date_counts": {}, "page": 1, "pages": 1})
+
+    like = f"%{q}%"
+    search_args = [like] * 9 + [like, like]
+    join_sql = """
+    LEFT JOIN item_state st ON st.item_id = items.id
+    LEFT JOIN detail_jobs dj ON dj.url = items.url
+    LEFT JOIN article_details ad ON ad.url = items.url
+    LEFT JOIN article_notes an ON an.url = items.url
+    LEFT JOIN ai_jobs aj ON aj.url = items.url
+    LEFT JOIN article_ai aa ON aa.url = items.url
+    """
+    where_sql = """
+    WHERE (
+      items.title LIKE ? OR
+      COALESCE(items.summary, '') LIKE ? OR
+      COALESCE(items.source, '') LIKE ? OR
+      COALESCE(items.source_name, '') LIKE ? OR
+      COALESCE(ad.content, '') LIKE ? OR
+      COALESCE(aa.body_zh, '') LIKE ? OR
+      COALESCE(aa.key_points_zh, '') LIKE ? OR
+      COALESCE(aa.conclusion_zh, '') LIKE ? OR
+      COALESCE(an.note, '') LIKE ? OR
+      EXISTS (
+        SELECT 1
+        FROM article_market_tags mt
+        LEFT JOIN market_tag_definitions mtd ON mtd.key = mt.tag
+        WHERE mt.url = items.url
+          AND (mt.tag LIKE ? OR COALESCE(mtd.display_name, '') LIKE ?)
+      )
+    )
+    """
+
+    conn = db_conn()
+    try:
+        total = conn.execute(
+            f"SELECT COUNT(DISTINCT items.id) FROM items {join_sql} {where_sql}",
+            search_args,
+        ).fetchone()[0]
+
+        date_count_rows = conn.execute(
+            f"""
+            SELECT {ITEM_DATE_SQL} AS date_key, COUNT(DISTINCT items.id) AS total
+            FROM items
+            {join_sql}
+            {where_sql}
+            GROUP BY date_key
+            ORDER BY date_key DESC
+            """,
+            search_args,
+        ).fetchall()
+
+        offset = (page - 1) * per
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT items.id, items.source_file, items.item_order, items.published_at,
+                   items.date, items.time, items.source, items.source_type,
+                   items.source_name, items.title, items.summary, items.url,
+                   st.read_at, st.important_at, st.read_later_at,
+                   dj.status AS detail_status,
+                   dj.last_error AS detail_error,
+                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+                   an.note AS note_preview_source,
+                   CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
+                   aj.status AS ai_status,
+                   aj.last_error AS ai_error,
+                   CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready
+            FROM items
+            {join_sql}
+            {where_sql}
+            ORDER BY {FEED_NEWS_ORDER_BY_SQL}
+            LIMIT ? OFFSET ?
+            """,
+            [*search_args, per, offset],
+        ).fetchall()
+        urls = [r["url"] for r in rows if r["url"]]
+        market_tags_map = load_market_tags_map(conn, urls)
+    finally:
+        conn.close()
+
+    items = serialize_news_rows([dict(r) for r in rows], market_tags_map)
+    date_counts = {row["date_key"]: row["total"] for row in date_count_rows if row["date_key"]}
+    pages = max(1, math.ceil(total / per)) if total else 1
+    return jsonify({"items": items, "total": total, "date_counts": date_counts, "page": page, "pages": pages})
 
 
 @app.get("/api/sources")
