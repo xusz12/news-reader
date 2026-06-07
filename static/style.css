@@ -187,12 +187,16 @@ h1 {
 }
 
 .topbar-search {
-  width: 100%;
-  max-width: 720px;
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  width: min(460px, calc(100vw - 640px));
+  min-width: 320px;
   display: none;
   align-items: center;
   gap: 8px;
-  order: 3;
+  z-index: 21;
 }
 
 body.search-bar-open .topbar-search {
@@ -1544,9 +1548,15 @@ html[data-detail-font="large"] {
   }
 
   .topbar-search {
+    position: static;
+    left: auto;
+    top: auto;
+    transform: none;
     width: 100%;
+    min-width: 0;
     max-width: none;
     order: 0;
+    z-index: auto;
   }
 
   .topbar-prefs {
