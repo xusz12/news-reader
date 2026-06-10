@@ -260,6 +260,93 @@ def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
     assert [item["title"] for item in read_later_items] == ["Morning", "Noon", "Evening"]
 
 
+def test_feed_unread_cursor_paging_survives_auto_read_shrink(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+
+    reuters_items = []
+    for idx in range(31):
+        minute = idx % 60
+        reuters_items.append(
+            "\n".join(
+                [
+                    f"### [Reuters {idx + 1}](https://www.reuters.com/world/test-{idx + 1})",
+                    f"- 发布时间：2026-06-02 09:{minute:02d}:00",
+                ]
+            )
+        )
+
+    bloomberg_items = []
+    for idx in range(5):
+        minute = idx % 60
+        bloomberg_items.append(
+            "\n".join(
+                [
+                    f"### [Bloomberg {idx + 1}](https://www.bloomberg.com/news/test-{idx + 1})",
+                    f"- 发布时间：2026-06-02 18:{minute:02d}:00",
+                ]
+            )
+        )
+
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        "## Reuters · World（31条）\n"
+        + "\n".join(reuters_items)
+        + "\n\n## Bloomberg · Markets（5条）\n"
+        + "\n".join(bloomberg_items)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    page1 = client.get("/api/news?collection=feed&read_filter=unread&source_filter=reuters&page=1&per=30")
+    assert page1.status_code == 200
+    page1_data = page1.get_json()
+    assert page1_data["total"] == 31
+    assert page1_data["has_more"] is True
+    assert page1_data["next_cursor"] is not None
+    assert len(page1_data["items"]) == 30
+    assert page1_data["items"][0]["title"] == "Reuters 1"
+    assert page1_data["items"][-1]["title"] == "Reuters 30"
+
+    for item in page1_data["items"][:10]:
+        res = client.patch(f"/api/news/{item['id']}/state", json={"read": True})
+        assert res.status_code == 200
+
+    cursor = page1_data["next_cursor"]
+    page2 = client.get(
+        "/api/news?collection=feed&read_filter=unread&source_filter=reuters&page=2&per=30"
+        f"&cursor_date={cursor['date_key']}&cursor_published_at={cursor['published_at']}&cursor_id={cursor['id']}"
+    )
+    assert page2.status_code == 200
+    page2_data = page2.get_json()
+    assert [item["title"] for item in page2_data["items"]] == ["Reuters 31"]
+    assert page2_data["has_more"] is False
+    assert page2_data["next_cursor"] is None
+
+    loaded_ids = [str(item["id"]) for item in page1_data["items"]] + [str(item["id"]) for item in page2_data["items"]]
+    mark_loaded = client.post("/api/news/mark-read-by-ids", json={"item_ids": loaded_ids})
+    assert mark_loaded.status_code == 200
+    assert mark_loaded.get_json()["marked"] == 31
+
+    reuters_unread = client.get("/api/news?collection=feed&read_filter=unread&source_filter=reuters&page=1&per=30")
+    assert reuters_unread.status_code == 200
+    assert reuters_unread.get_json()["total"] == 0
+
+    bloomberg_unread = client.get("/api/news?collection=feed&read_filter=unread&source_filter=bloomberg&page=1&per=30")
+    assert bloomberg_unread.status_code == 200
+    assert bloomberg_unread.get_json()["total"] == 5
+
+
 def test_search_range_and_time_filters(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "news_index.sqlite3"
     daily_dir = tmp_path / "DailyNews"

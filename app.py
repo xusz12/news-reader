@@ -82,6 +82,45 @@ def news_order_by_sql(collection: str) -> str:
     return FEED_NEWS_ORDER_BY_SQL if collection in ("feed", "read_later") else NON_FEED_NEWS_ORDER_BY_SQL
 
 
+def use_feed_unread_cursor_paging(collection: str, read_filter: str) -> bool:
+    return collection == "feed" and read_filter == "unread"
+
+
+def parse_feed_unread_cursor(args) -> dict | None:
+    cursor_date = (args.get("cursor_date") or "").strip()
+    cursor_published_at = (args.get("cursor_published_at") or "").strip()
+    cursor_id = (args.get("cursor_id") or "").strip()
+    if not (cursor_date or cursor_published_at or cursor_id):
+        return None
+    if not (cursor_date and cursor_published_at and cursor_id):
+        raise ValueError("invalid_cursor")
+    return {
+        "date_key": cursor_date,
+        "published_at": cursor_published_at,
+        "id": cursor_id,
+    }
+
+
+def build_feed_unread_cursor_clause(cursor: dict | None) -> tuple[str, list]:
+    if not cursor:
+        return "", []
+    clause = f"""
+    AND (
+      {ITEM_DATE_SQL} < ? OR
+      ({ITEM_DATE_SQL} = ? AND items.published_at > ?) OR
+      ({ITEM_DATE_SQL} = ? AND items.published_at = ? AND items.id > ?)
+    )
+    """
+    return clause, [
+        cursor["date_key"],
+        cursor["date_key"],
+        cursor["published_at"],
+        cursor["date_key"],
+        cursor["published_at"],
+        cursor["id"],
+    ]
+
+
 def _source_prefix(source: str | None) -> str:
     if not source:
         return ""
@@ -897,6 +936,11 @@ def api_news():
     source_filter = (request.args.get("source_filter") or "all").strip().lower()
     page = max(1, int(request.args.get("page", "1")))
     per = min(100, max(10, int(request.args.get("per", "30"))))
+    cursor_mode = use_feed_unread_cursor_paging(collection, read_filter)
+    try:
+        cursor = parse_feed_unread_cursor(request.args) if cursor_mode else None
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid_cursor"}), 400
     join_sql = """
     LEFT JOIN item_state st ON st.item_id = items.id
     LEFT JOIN detail_jobs dj ON dj.url = items.url
@@ -925,31 +969,59 @@ def api_news():
             args,
         ).fetchall()
 
-        offset = (page - 1) * per
-        rows = conn.execute(
-            f"""
-            SELECT DISTINCT items.id, items.source_file, items.item_order, items.published_at,
-                   items.date, items.time, items.source, items.source_type,
-                   items.source_name, items.title, items.summary, items.url,
-                   st.read_at, st.important_at, st.read_later_at,
-                   dj.status AS detail_status,
-                   dj.last_error AS detail_error,
-                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
-                   an.note AS note_preview_source,
-                   CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
-                   aj.status AS ai_status,
-                   aj.last_error AS ai_error,
-                   CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready
-            FROM items
-            {join_sql}
-            LEFT JOIN ai_jobs aj ON aj.url = items.url
-            LEFT JOIN article_ai aa ON aa.url = items.url
-            {where_sql}
-            ORDER BY {order_by_sql}
-            LIMIT ? OFFSET ?
-            """,
-            [*args, per, offset],
-        ).fetchall()
+        base_select_sql = f"""
+        SELECT DISTINCT items.id, items.source_file, items.item_order, items.published_at,
+               items.date, items.time, items.source, items.source_type,
+               items.source_name, items.title, items.summary, items.url,
+               st.read_at, st.important_at, st.read_later_at,
+               dj.status AS detail_status,
+               dj.last_error AS detail_error,
+               CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+               an.note AS note_preview_source,
+               CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
+               aj.status AS ai_status,
+               aj.last_error AS ai_error,
+               CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
+               {ITEM_DATE_SQL} AS date_key
+        FROM items
+        {join_sql}
+        LEFT JOIN ai_jobs aj ON aj.url = items.url
+        LEFT JOIN article_ai aa ON aa.url = items.url
+        {where_sql}
+        """
+
+        has_more = False
+        next_cursor = None
+        if cursor_mode:
+            cursor_clause, cursor_args = build_feed_unread_cursor_clause(cursor)
+            raw_rows = conn.execute(
+                f"""
+                {base_select_sql}
+                {cursor_clause}
+                ORDER BY {order_by_sql}
+                LIMIT ?
+                """,
+                [*args, *cursor_args, per + 1],
+            ).fetchall()
+            has_more = len(raw_rows) > per
+            rows = raw_rows[:per]
+            if rows and has_more:
+                last = rows[-1]
+                next_cursor = {
+                    "date_key": last["date_key"],
+                    "published_at": last["published_at"],
+                    "id": str(last["id"]),
+                }
+        else:
+            offset = (page - 1) * per
+            rows = conn.execute(
+                f"""
+                {base_select_sql}
+                ORDER BY {order_by_sql}
+                LIMIT ? OFFSET ?
+                """,
+                [*args, per, offset],
+            ).fetchall()
         urls = [r["url"] for r in rows if r["url"]]
         market_tags_map = load_market_tags_map(conn, urls)
     finally:
@@ -963,6 +1035,8 @@ def api_news():
     }
     items = serialize_news_rows(items, market_tags_map)
     pages = max(1, math.ceil(total / per)) if total else 1
+    if cursor_mode:
+        pages = max(page, pages)
     return jsonify(
         {
             "items": items,
@@ -970,6 +1044,8 @@ def api_news():
             "date_counts": date_counts,
             "page": page,
             "pages": pages,
+            "has_more": has_more if cursor_mode else page < pages,
+            "next_cursor": next_cursor if cursor_mode else None,
         }
     )
 

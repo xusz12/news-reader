@@ -27,6 +27,7 @@ let state = {
   detailReturnToTrend: false,
   searchRange: "all",
   searchTime: "all",
+  feedUnreadCursor: null,
 };
 
 const mediaIconMap = {
@@ -2575,6 +2576,11 @@ async function fetchNewsPage(page) {
     collection: state.collection,
     source_filter: state.sourceFilter,
   });
+  if (state.collection === "feed" && state.readFilter === "unread" && state.feedUnreadCursor) {
+    params.set("cursor_date", state.feedUnreadCursor.date_key);
+    params.set("cursor_published_at", state.feedUnreadCursor.published_at);
+    params.set("cursor_id", String(state.feedUnreadCursor.id));
+  }
   const res = await fetch(`/api/news?${params.toString()}`);
   if (!res.ok) throw new Error("news_fetch_failed");
   return res.json();
@@ -2616,11 +2622,16 @@ function resetList() {
   state.trendComposeOpen = false;
   state.dateCounts = new Map();
   state.detailReturnToTrend = false;
+  state.feedUnreadCursor = null;
   showTrendsView(false);
   syncSearchPageControls();
   closeDetailOnMobile();
   renderDetail(null);
   lastRenderedDateKey = null;
+}
+
+function isFeedUnreadCursorMode() {
+  return state.collection === "feed" && state.readFilter === "unread";
 }
 
 function buildDateSectionRow(item) {
@@ -2734,7 +2745,8 @@ async function loadFirstPage() {
     setDateCounts(data.date_counts);
     state.pages = data.pages;
     state.page = 1;
-    state.hasMore = state.page < state.pages;
+    state.feedUnreadCursor = isFeedUnreadCursorMode() ? (data.next_cursor || null) : null;
+    state.hasMore = isFeedUnreadCursorMode() ? !!data.has_more : state.page < state.pages;
 
     data.items.forEach((item) => appendNewsRow(item, buildItemRow(item)));
     renderMeta();
@@ -2801,7 +2813,8 @@ async function loadNextPage() {
     state.page = next;
     state.pages = data.pages;
     state.total = data.total;
-    state.hasMore = state.page < state.pages;
+    state.feedUnreadCursor = isFeedUnreadCursorMode() ? (data.next_cursor || null) : null;
+    state.hasMore = isFeedUnreadCursorMode() ? !!data.has_more : state.page < state.pages;
     renderMeta();
     setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
     scheduleFeedEndAutoReadIfNeeded();

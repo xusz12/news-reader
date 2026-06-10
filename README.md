@@ -4,6 +4,22 @@
 
 ## What's Changed
 
+### 2026-06-10 — fix: 修复仅未读新闻流分页漏读
+- **文件**
+  - *app.py（+103 −5）*
+    - 为 `collection=feed & read_filter=unread` 新增 cursor/anchor 分页路径
+    - cursor 基于 `date DESC + published_at ASC + id ASC` 的 feed 稳定排序
+    - 下一页改为按 anchor 条件取“当前位置之后”的未读新闻，不再依赖动态未读集合上的 `OFFSET`
+    - 返回 `has_more` 与 `next_cursor`，只在目标场景启用，非目标集合继续保留原分页逻辑
+  - *static/app.js（+15 −0）*
+    - 新增 `state.feedUnreadCursor`
+    - `feed + unread` 模式下，`loadFirstPage/loadNextPage` 改为消费后端 cursor
+    - 切换集合、切换已读筛选、切换来源或刷新列表时重置 cursor
+  - *tests/test_api.py（+74 −0）*
+    - 新增回归测试：加载第一页后先把部分 row 标已读，再请求下一页，断言后续未读不会被跳过
+    - 覆盖 `source_filter` 场景，确认已加载 row 批量已读后刷新不会再冒出之前漏掉的未读
+- **影响**：`新闻流 + 仅未读` 现在不会因为“滚过即已读”导致未读结果集动态收缩、进而让后续 `OFFSET` 分页漏项；滚过顶部逐条已读、到底 5 秒后仅标当前已加载 row 已读的原语义保持不变。
+
 ### 2026-06-07 — fix: 调整搜索页视觉布局
 - **文件**
   - *static/index.html（+5 −4）*
