@@ -64,7 +64,7 @@ DEFAULT_MARKET_TAG_CHOICES = [
 MARKET_DIRECTIONS = {"bullish", "bearish"}
 
 FEED_NEWS_ORDER_BY_SQL = """
-COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) DESC,
+COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) ASC,
 items.published_at ASC,
 items.id ASC
 """
@@ -106,7 +106,7 @@ def build_feed_unread_cursor_clause(cursor: dict | None) -> tuple[str, list]:
         return "", []
     clause = f"""
     AND (
-      {ITEM_DATE_SQL} < ? OR
+      {ITEM_DATE_SQL} > ? OR
       ({ITEM_DATE_SQL} = ? AND items.published_at > ?) OR
       ({ITEM_DATE_SQL} = ? AND items.published_at = ? AND items.id > ?)
     )

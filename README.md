@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-06-10 — fix: 调整新闻流与稍后阅读为全局旧到新排序
+- **文件**
+  - *app.py（+2 −2）*
+    - `feed` 排序改为日期 `旧 → 新`、同日内 `旧 → 新`
+    - `read_later` 同步改为日期 `旧 → 新`、同日内 `旧 → 新`
+    - `feed + unread` 的 cursor/anchor 比较方向同步改成适配新排序的“严格晚于当前 cursor”
+  - *tests/test_api.py（+47 −3）*
+    - 更新 `feed` 跨日期排序回归测试为旧→新预期
+    - 新增 `read_later` 跨日期旧→新回归测试
+    - 更新 reading checkpoint locate 预期，确保“回到上次阅读”仍符合新的 feed 顺序
+- **影响**：`feed` 和 `read_later` 现在都按全局时间线从旧到新阅读，跨日期时不再把前日新闻放到今日新闻之后；`important / notes / market_tags / search / trends` 排序保持不变。
+
 ### 2026-06-10 — fix: 修复仅未读新闻流分页漏读
 - **文件**
   - *app.py（+103 −5）*

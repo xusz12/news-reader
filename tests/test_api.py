@@ -260,6 +260,45 @@ def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
     assert [item["title"] for item in read_later_items] == ["Morning", "Noon", "Evening"]
 
 
+def test_read_later_cross_date_order_matches_feed_old_to_new(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（4条）
+### [D2-later](https://example.com/d2-later)
+- 发布时间：2026-06-02 18:00:00
+### [D1-middle](https://example.com/d1-middle)
+- 发布时间：2026-06-03 12:00:00
+### [D1-early](https://example.com/d1-early)
+- 发布时间：2026-06-03 08:00:00
+### [D2-early](https://example.com/d2-early)
+- 发布时间：2026-06-02 06:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    assert client.post("/api/reindex", json={}).status_code == 200
+    feed_items = client.get("/api/news?per=20").get_json()["items"]
+    assert [item["title"] for item in feed_items] == ["D2-early", "D2-later", "D1-early", "D1-middle"]
+
+    for item in feed_items:
+        res = client.patch(f"/api/news/{item['id']}/state", json={"read_later": True})
+        assert res.status_code == 200
+
+    read_later_items = client.get("/api/news?collection=read_later&per=20").get_json()["items"]
+    assert [item["title"] for item in read_later_items] == ["D2-early", "D2-later", "D1-early", "D1-middle"]
+
+
 def test_feed_unread_cursor_paging_survives_auto_read_shrink(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -810,7 +849,7 @@ def test_sources_and_source_filter(tmp_path: Path, monkeypatch):
     assert u_items[0]["url"].startswith("https://example.org/")
 
 
-def test_news_section_order_date_desc_and_intra_date_asc(tmp_path: Path, monkeypatch):
+def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
@@ -841,8 +880,8 @@ def test_news_section_order_date_desc_and_intra_date_asc(tmp_path: Path, monkeyp
     assert res.status_code == 200
     items = res.get_json()["items"]
     titles = [x["title"] for x in items]
-    # section 间日期新->旧；同一日期内时间旧->新
-    assert titles == ["D1-early", "D1-middle", "D2-early", "D2-later"]
+    # section 间日期旧->新；同一日期内时间旧->新
+    assert titles == ["D2-early", "D2-later", "D1-early", "D1-middle"]
 
 
 def test_reading_checkpoint_save_get_and_locate(tmp_path: Path, monkeypatch):
@@ -892,7 +931,7 @@ def test_reading_checkpoint_save_get_and_locate(tmp_path: Path, monkeypatch):
     assert payload["url"] == "https://example.com/d"
     # 使用当前后端排序规则定位到目标并返回分页位置
     assert payload["page"] == 1
-    assert payload["offset"] == 3
+    assert payload["offset"] == 1
 
 
 def test_reading_checkpoint_locate_not_found(tmp_path: Path, monkeypatch):
