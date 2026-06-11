@@ -4,6 +4,20 @@
 
 ## What's Changed
 
+### 2026-06-12 — improve: 收敛 v1.9.5.2 设置页 LLM 配置
+- **文件**
+  - *app.py（+）*、*settings.py（+）*
+    - `/api/settings` 只保留 DeepSeek API 状态与翻译 / 总结模型配置
+    - 兼容忽略旧配置中的 `llm.chat` / `providers.openai` 历史字段，不因旧配置报错
+    - `chat_providers` 退场，现阶段不再把 DeepSeek / ChatGPT 作为 chatPage 的 API provider 暴露
+  - *static/index.html（+）*、*static/app.js（+）*
+    - 设置页 `LLM API 管理` 仅保留 DeepSeek key 管理入口
+    - `模型与功能路由` 区收敛为 DeepSeek 翻译 / 总结模型配置，并明确文案“不用于 chatPage”
+    - chatPage 保留占位，但不再展示可配置 API provider
+  - *tests/test_api.py（+）*
+    - 覆盖旧配置兼容、DeepSeek-only 设置保存、chat API 退场与设置页收敛
+- **影响**：设置页现在只呈现仍会继续保留的 DeepSeek 配置；API chat provider 已从当前版本的设置与正文详情中退场，后续 chatPage 将另走 `codex exec` 方向。
+
 ### 2026-06-11 — feat: 新增 v1.9.5.1 设置页 API Key 管理
 - **文件**
   - *secret_store.py（新文件）*、*app.py（+）*、*llm_client.py（+）*

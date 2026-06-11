@@ -1718,13 +1718,9 @@ def test_detail_endpoint_includes_chat_providers(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "news_index.sqlite3"
     monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
     import app as app_module
 
     importlib.reload(app_module)
-    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
     app_module.ensure_db()
     client = app_module.app.test_client()
     assert client.post("/api/reindex", json={}).status_code == 200
@@ -1733,8 +1729,7 @@ def test_detail_endpoint_includes_chat_providers(tmp_path: Path, monkeypatch):
     payload = client.get(f"/api/news/{item['id']}/detail").get_json()
 
     assert payload["ok"] is True
-    assert payload["chat_providers"]["deepseek"]["available"] is True
-    assert payload["chat_providers"]["openai"]["available"] is False
+    assert payload["chat_providers"] == {}
 
 
 def test_news_chat_requires_ready_detail(tmp_path: Path, monkeypatch):
@@ -1750,8 +1745,6 @@ def test_news_chat_requires_ready_detail(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "news_index.sqlite3"
     monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test")
-
     import app as app_module
 
     importlib.reload(app_module)
@@ -1764,11 +1757,11 @@ def test_news_chat_requires_ready_detail(tmp_path: Path, monkeypatch):
         f"/api/news/{item['id']}/chat",
         json={"provider": "deepseek", "messages": [{"role": "user", "content": "这是什么意思？"}]},
     )
-    assert res.status_code == 409
-    assert res.get_json()["error"] == "detail_not_ready"
+    assert res.status_code == 410
+    assert res.get_json()["error"] == "chat_disabled"
 
 
-def test_news_chat_routes_to_deepseek_and_openai(tmp_path: Path, monkeypatch):
+def test_news_chat_is_disabled_even_when_detail_ready(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
@@ -1781,9 +1774,6 @@ def test_news_chat_routes_to_deepseek_and_openai(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "news_index.sqlite3"
     monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test")
-    monkeypatch.setenv("OPENAI_API_KEY", "openai-test")
-
     import app as app_module
 
     importlib.reload(app_module)
@@ -1817,44 +1807,20 @@ def test_news_chat_routes_to_deepseek_and_openai(tmp_path: Path, monkeypatch):
                 ),
             )
 
-    captured = {}
-
-    def fake_deepseek(**kwargs):
-        captured["deepseek"] = kwargs
-        return {"provider": "deepseek", "model": "deepseek-chat", "answer": "DeepSeek 回答"}
-
-    def fake_openai(**kwargs):
-        captured["openai"] = kwargs
-        return {"provider": "openai", "model": "gpt-4.1-mini", "answer": "OpenAI 回答"}
-
-    monkeypatch.setattr(app_module, "ask_deepseek_news_chat", fake_deepseek)
-    monkeypatch.setattr(app_module, "ask_openai_news_chat", fake_openai)
-
     transcript = [
         {"role": "user", "content": "先总结一下"},
         {"role": "assistant", "content": "上一轮回答"},
         {"role": "user", "content": "那最新影响呢？"},
     ]
-    deepseek_res = client.post(
-        f"/api/news/{item['id']}/chat",
-        json={"provider": "deepseek", "messages": transcript},
-    )
-    assert deepseek_res.status_code == 200
-    assert deepseek_res.get_json()["answer"] == "DeepSeek 回答"
-    assert captured["deepseek"]["title"] == "Chat Ready"
-    assert captured["deepseek"]["content"] == "Full english body for chat route tests."
-    assert captured["deepseek"]["messages"] == transcript
-
-    openai_res = client.post(
+    res = client.post(
         f"/api/news/{item['id']}/chat",
         json={"provider": "openai", "messages": transcript},
     )
-    assert openai_res.status_code == 200
-    assert openai_res.get_json()["answer"] == "OpenAI 回答"
-    assert captured["openai"]["messages"] == transcript
+    assert res.status_code == 410
+    assert res.get_json()["error"] == "chat_disabled"
 
 
-def test_news_chat_missing_key_and_busy(tmp_path: Path, monkeypatch):
+def test_news_chat_disabled_before_provider_checks(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
@@ -1867,13 +1833,9 @@ def test_news_chat_missing_key_and_busy(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "news_index.sqlite3"
     monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
     import app as app_module
 
     importlib.reload(app_module)
-    monkeypatch.setattr(app_module, "has_secret", lambda name: name == "DEEPSEEK_API_KEY")
     app_module.ensure_db()
     client = app_module.app.test_client()
     assert client.post("/api/reindex", json={}).status_code == 200
@@ -1908,21 +1870,8 @@ def test_news_chat_missing_key_and_busy(tmp_path: Path, monkeypatch):
         f"/api/news/{item['id']}/chat",
         json={"provider": "openai", "messages": [{"role": "user", "content": "最新进展？"}]},
     )
-    assert missing_key_res.status_code == 400
-    assert missing_key_res.get_json()["error"] == "missing_openai_api_key"
-
-    lock = app_module.CHAT_PROVIDER_LOCKS["deepseek"]
-    assert lock.acquire(blocking=False) is True
-    try:
-        busy_res = client.post(
-            f"/api/news/{item['id']}/chat",
-            json={"provider": "deepseek", "messages": [{"role": "user", "content": "最新进展？"}]},
-        )
-    finally:
-        lock.release()
-
-    assert busy_res.status_code == 409
-    assert busy_res.get_json()["error"] == "provider_busy"
+    assert missing_key_res.status_code == 410
+    assert missing_key_res.get_json()["error"] == "chat_disabled"
 
 
 def test_release_notes_api_returns_items(tmp_path: Path, monkeypatch):
@@ -1955,7 +1904,6 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
     monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
 
     import app as app_module
@@ -1968,12 +1916,8 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     assert initial.status_code == 200
     data = initial.get_json()
     assert data["ok"] is True
-    assert data["api_status"]["openai"]["configured"] is True
     assert data["api_status"]["deepseek"]["configured"] is True
-    assert data["llm"]["chat"]["default_provider"] == "deepseek"
-    assert data["llm"]["chat"]["providers"]["openai"]["model"] == ""
     dumped = json.dumps(data, ensure_ascii=False)
-    assert "sk-openai-test" not in dumped
     assert "sk-deepseek-test" not in dumped
 
     save_res = client.put(
@@ -1981,24 +1925,15 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
         json={
             "llm": {
                 "translation": {"provider": "deepseek", "model": "deepseek-reasoner"},
-                "chat": {
-                    "default_provider": "openai",
-                    "providers": {
-                        "deepseek": {"model": "deepseek-chat-v2"},
-                        "openai": {"model": "gpt-4.1"},
-                    },
-                },
             }
         },
     )
     assert save_res.status_code == 200
     saved = save_res.get_json()
     assert saved["llm"]["translation"]["model"] == "deepseek-reasoner"
-    assert saved["llm"]["chat"]["default_provider"] == "openai"
-    assert saved["llm"]["chat"]["providers"]["openai"]["model"] == "gpt-4.1"
     assert settings_path.exists() is True
     saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert saved_file["llm"]["chat"]["providers"]["deepseek"]["model"] == "deepseek-chat-v2"
+    assert saved_file["llm"]["translation"]["model"] == "deepseek-reasoner"
 
 
 def test_settings_secret_api_save_and_delete(tmp_path: Path, monkeypatch):
@@ -2026,22 +1961,21 @@ def test_settings_secret_api_save_and_delete(tmp_path: Path, monkeypatch):
 
     initial = client.get("/api/settings").get_json()
     assert initial["api_status"]["deepseek"]["configured"] is False
-    assert initial["api_status"]["openai"]["configured"] is False
 
-    save_res = client.put("/api/settings/secrets/openai", json={"key": "sk-test-openai"})
+    save_res = client.put("/api/settings/secrets/deepseek", json={"key": "sk-test-deepseek"})
     assert save_res.status_code == 200
     saved_payload = save_res.get_json()
-    assert saved_payload["api_status"]["openai"]["configured"] is True
-    assert "OPENAI_API_KEY" in saved
+    assert saved_payload["api_status"]["deepseek"]["configured"] is True
+    assert "DEEPSEEK_API_KEY" in saved
     dumped = json.dumps(saved_payload, ensure_ascii=False)
-    assert "sk-test-openai" not in dumped
+    assert "sk-test-deepseek" not in dumped
     assert settings_path.exists() is False
 
-    delete_res = client.delete("/api/settings/secrets/openai")
+    delete_res = client.delete("/api/settings/secrets/deepseek")
     assert delete_res.status_code == 200
     deleted_payload = delete_res.get_json()
-    assert deleted_payload["api_status"]["openai"]["configured"] is False
-    assert "OPENAI_API_KEY" not in saved
+    assert deleted_payload["api_status"]["deepseek"]["configured"] is False
+    assert "DEEPSEEK_API_KEY" not in saved
 
 
 def test_settings_secret_api_rejects_invalid_provider_and_empty_key(tmp_path: Path, monkeypatch):
@@ -2111,7 +2045,6 @@ def test_saved_models_are_used_by_chat_and_translation(tmp_path: Path, monkeypat
     monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
     monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
 
     import app as app_module
@@ -2125,13 +2058,6 @@ def test_saved_models_are_used_by_chat_and_translation(tmp_path: Path, monkeypat
         json={
             "llm": {
                 "translation": {"provider": "deepseek", "model": "deepseek-translator-x"},
-                "chat": {
-                    "default_provider": "openai",
-                    "providers": {
-                        "deepseek": {"model": "deepseek-chat-x"},
-                        "openai": {"model": "gpt-4.1-mini-x"},
-                    },
-                },
             }
         },
     ).status_code == 200
@@ -2181,19 +2107,46 @@ def test_saved_models_are_used_by_chat_and_translation(tmp_path: Path, monkeypat
             "raw_json": "{}",
         }
 
-    def fake_openai_chat(**kwargs):
-        captured["chat_model"] = kwargs["model"]
-        return {"provider": "openai", "model": kwargs["model"], "answer": "回答"}
-
     monkeypatch.setattr(app_module, "generate_article_ai", fake_generate_article_ai)
-    monkeypatch.setattr(app_module, "ask_openai_news_chat", fake_openai_chat)
 
     assert app_module.process_pending_ai_once() is True
     assert captured["translation_model"] == "deepseek-translator-x"
 
-    chat_res = client.post(
-        f"/api/news/{item['id']}/chat",
-        json={"provider": "openai", "messages": [{"role": "user", "content": "最新进展？"}]},
+
+def test_settings_api_ignores_legacy_chat_fields(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "translation": {"provider": "deepseek", "model": "deepseek-legacy"},
+                    "chat": {
+                        "default_provider": "openai",
+                        "providers": {
+                            "deepseek": {"model": "deepseek-chat-legacy"},
+                            "openai": {"model": "gpt-4.1-legacy"},
+                        },
+                    },
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
     )
-    assert chat_res.status_code == 200
-    assert captured["chat_model"] == "gpt-4.1-mini-x"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    payload = client.get("/api/settings").get_json()
+    assert payload["ok"] is True
+    assert payload["llm"]["translation"]["model"] == "deepseek-legacy"
+    assert "chat" not in payload["llm"]

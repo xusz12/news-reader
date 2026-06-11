@@ -366,20 +366,6 @@ def current_runtime_settings() -> dict:
                 merged["llm"]["translation"]["provider"] = provider
             if isinstance(model, str):
                 merged["llm"]["translation"]["model"] = model
-        chat = llm.get("chat")
-        if isinstance(chat, dict):
-            default_provider = (chat.get("default_provider") or "").strip().lower()
-            if default_provider in {"deepseek", "openai"}:
-                merged["llm"]["chat"]["default_provider"] = default_provider
-            providers = chat.get("providers")
-            if isinstance(providers, dict):
-                for name in ("deepseek", "openai"):
-                    provider_payload = providers.get(name)
-                    if not isinstance(provider_payload, dict):
-                        continue
-                    model = provider_payload.get("model")
-                    if isinstance(model, str):
-                        merged["llm"]["chat"]["providers"][name]["model"] = model.strip()
     return merged
 
 
@@ -417,10 +403,9 @@ def serialize_runtime_settings() -> dict:
     return {
         "api_status": {
             "deepseek": {"configured": provider_has_configured_key("deepseek")},
-            "openai": {"configured": provider_has_configured_key("openai")},
         },
         "llm": settings["llm"],
-        "restart_notice": "模型路由通常对新请求立即生效；API key 保存或删除后，建议重启 Flask 再使用。",
+        "restart_notice": "翻译 / 总结模型的新请求通常立即生效；API key 保存或删除后，建议重启 Flask 再使用。",
     }
 
 
@@ -432,8 +417,7 @@ def validate_runtime_settings(payload: object) -> dict:
         raise ValueError("invalid_llm_settings")
 
     translation = llm.get("translation")
-    chat = llm.get("chat")
-    if not isinstance(translation, dict) or not isinstance(chat, dict):
+    if not isinstance(translation, dict):
         raise ValueError("invalid_llm_settings")
 
     translation_provider = (translation.get("provider") or "").strip().lower()
@@ -443,52 +427,19 @@ def validate_runtime_settings(payload: object) -> dict:
     if len(translation_model) > 120:
         raise ValueError("invalid_translation_model")
 
-    default_provider = (chat.get("default_provider") or "").strip().lower()
-    if default_provider not in {"deepseek", "openai"}:
-        raise ValueError("invalid_chat_default_provider")
-    providers = chat.get("providers")
-    if not isinstance(providers, dict):
-        raise ValueError("invalid_chat_provider_settings")
-
     normalized = {
         "llm": {
             "translation": {
                 "provider": "deepseek",
                 "model": translation_model,
             },
-            "chat": {
-                "default_provider": default_provider,
-                "providers": {
-                    "deepseek": {"model": ""},
-                    "openai": {"model": ""},
-                },
-            },
         }
     }
-    for name in ("deepseek", "openai"):
-        provider_payload = providers.get(name)
-        if not isinstance(provider_payload, dict):
-            raise ValueError("invalid_chat_provider_settings")
-        model = (provider_payload.get("model") or "").strip()
-        if len(model) > 120:
-            raise ValueError("invalid_chat_model")
-        normalized["llm"]["chat"]["providers"][name]["model"] = model
     return normalized
 
 
 def chat_provider_catalog() -> dict[str, dict]:
-    return {
-        "deepseek": {
-            "label": "DeepSeek",
-            "available": provider_has_configured_key("deepseek"),
-            "note": "基于新闻正文与已有知识回答，不保证实时联网。",
-        },
-        "openai": {
-            "label": "ChatGPT",
-            "available": provider_has_configured_key("openai"),
-            "note": "可尝试结合联网搜索补充最新公开信息。",
-        },
-    }
+    return {}
 
 
 def normalize_chat_messages(raw_messages: object, *, max_messages: int = 20, max_chars: int = 4000) -> list[dict[str, str]]:
@@ -2294,83 +2245,7 @@ def api_news_detail(item_id: str):
 
 @app.post("/api/news/<item_id>/chat")
 def api_news_chat(item_id: str):
-    body = request.get_json(silent=True) or {}
-    provider = (body.get("provider") or "").strip().lower()
-    if provider not in CHAT_PROVIDER_LOCKS:
-        return jsonify({"ok": False, "error": "invalid_provider"}), 400
-
-    try:
-        messages = normalize_chat_messages(body.get("messages"))
-    except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-
-    llm_settings = current_runtime_settings()["llm"]
-
-    conn = db_conn()
-    try:
-        item = conn.execute(
-            "SELECT id, title, url, source, published_at FROM items WHERE id=?",
-            (item_id,),
-        ).fetchone()
-        if not item:
-            return jsonify({"ok": False, "error": "item_not_found"}), 404
-        url = (item["url"] or "").strip()
-        if not url:
-            return jsonify({"ok": False, "error": "missing_url"}), 400
-        detail = conn.execute(
-            """
-            SELECT title, source, published_at, content
-            FROM article_details
-            WHERE url=?
-            """,
-            (url,),
-        ).fetchone()
-    finally:
-        conn.close()
-
-    if not detail or not (detail["content"] or "").strip():
-        return jsonify({"ok": False, "error": "detail_not_ready"}), 409
-
-    provider_meta = chat_provider_catalog().get(provider) or {}
-    if not provider_meta.get("available"):
-        missing_error = "missing_openai_api_key" if provider == "openai" else "missing_deepseek_api_key"
-        return jsonify({"ok": False, "error": missing_error}), 400
-
-    lock = CHAT_PROVIDER_LOCKS[provider]
-    if not lock.acquire(blocking=False):
-        return jsonify({"ok": False, "error": "provider_busy"}), 409
-
-    try:
-        common_kwargs = {
-            "title": (detail["title"] or item["title"] or "").strip(),
-            "source": (detail["source"] or item["source"] or "").strip(),
-            "published_at": (detail["published_at"] or item["published_at"] or "").strip(),
-            "content": (detail["content"] or "").strip(),
-            "messages": messages,
-        }
-        if provider == "openai":
-            payload = ask_openai_news_chat(
-                **common_kwargs,
-                model=llm_settings["chat"]["providers"]["openai"]["model"],
-            )
-        else:
-            payload = ask_deepseek_news_chat(
-                **common_kwargs,
-                model=llm_settings["chat"]["providers"]["deepseek"]["model"],
-            )
-    except LLMClientError as exc:
-        error = str(exc)
-        if error == "MISSING_OPENAI_API_KEY":
-            return jsonify({"ok": False, "error": "missing_openai_api_key"}), 400
-        if error == "MISSING_DEEPSEEK_API_KEY":
-            return jsonify({"ok": False, "error": "missing_deepseek_api_key"}), 400
-        if "TIMEOUT" in error:
-            return jsonify({"ok": False, "error": "provider_timeout", "detail": error}), 504
-        return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
-    finally:
-        lock.release()
-
-    return jsonify({"ok": True, **payload})
+    return jsonify({"ok": False, "error": "chat_disabled"}), 410
 
 
 @app.get("/api/market-tags")

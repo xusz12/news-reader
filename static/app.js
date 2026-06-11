@@ -29,7 +29,7 @@ let state = {
   searchTime: "all",
   feedUnreadCursor: null,
   detailView: "detail",
-  detailChatProvider: "deepseek",
+  detailChatProvider: "openai",
   detailChatMessages: [],
   detailChatStatus: "",
   detailChatSending: false,
@@ -132,7 +132,6 @@ const detailChatBody = document.getElementById("detailChatBody");
 const detailAskBtn = document.getElementById("detailAskBtn");
 const detailChatBackBtn = document.getElementById("detailChatBackBtn");
 const detailChatMeta = document.getElementById("detailChatMeta");
-const detailChatProviderSelect = document.getElementById("detailChatProviderSelect");
 const detailChatCapability = document.getElementById("detailChatCapability");
 const detailChatStatus = document.getElementById("detailChatStatus");
 const detailChatMessages = document.getElementById("detailChatMessages");
@@ -145,9 +144,6 @@ const settingsStatus = document.getElementById("settingsStatus");
 const settingsApiStatus = document.getElementById("settingsApiStatus");
 const settingsTranslationProvider = document.getElementById("settingsTranslationProvider");
 const settingsTranslationModel = document.getElementById("settingsTranslationModel");
-const settingsChatDefaultProvider = document.getElementById("settingsChatDefaultProvider");
-const settingsChatDeepseekModel = document.getElementById("settingsChatDeepseekModel");
-const settingsChatOpenaiModel = document.getElementById("settingsChatOpenaiModel");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
 const settingsRestartHint = document.getElementById("settingsRestartHint");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
@@ -571,18 +567,14 @@ async function deleteApiSecret(provider) {
 }
 
 function currentChatDefaultProvider() {
-  const provider = state.runtimeSettings?.llm?.chat?.default_provider;
-  return provider === "openai" ? "openai" : "deepseek";
+  return "openai";
 }
 
 function renderSettingsApiStatus() {
   if (!settingsApiStatus) return;
   settingsApiStatus.innerHTML = "";
   const apiStatus = state.runtimeSettings?.api_status || {};
-  [
-    ["deepseek", "DeepSeek"],
-    ["openai", "ChatGPT"],
-  ].forEach(([key, label]) => {
+  [["deepseek", "DeepSeek"]].forEach(([key, label]) => {
     const row = document.createElement("div");
     row.className = "settings-api-item";
     const top = document.createElement("div");
@@ -732,9 +724,6 @@ function populateSettingsForm() {
   if (!llm) return;
   settingsTranslationProvider.value = llm.translation?.provider || "deepseek";
   settingsTranslationModel.value = llm.translation?.model || "";
-  settingsChatDefaultProvider.value = llm.chat?.default_provider || "deepseek";
-  settingsChatDeepseekModel.value = llm.chat?.providers?.deepseek?.model || "";
-  settingsChatOpenaiModel.value = llm.chat?.providers?.openai?.model || "";
   settingsRestartHint.textContent = state.runtimeSettings?.restart_notice || "";
 }
 
@@ -751,7 +740,7 @@ function renderSettingsOverlay() {
     ? "读取中..."
     : state.settingsSaving
       ? "保存中..."
-      : state.settingsMessage || "模型路由保存到本机配置文件；API key 仅存 macOS Keychain，页面只显示是否已配置。";
+      : state.settingsMessage || "翻译 / 总结模型保存到本机配置文件；DeepSeek API key 仅存 macOS Keychain，页面只显示是否已配置。";
   const tone = state.settingsLoading || state.settingsSaving ? "pending" : (state.settingsMessageTone || "muted");
   settingsStatus.textContent = statusText;
   settingsStatus.className = `detail-status ${tone}`;
@@ -768,7 +757,6 @@ async function openSettingsOverlay() {
     const [runtimeSettings, releaseNotes] = await Promise.all([fetchRuntimeSettings(), fetchReleaseNotes()]);
     state.runtimeSettings = runtimeSettings;
     state.releaseNotes = releaseNotes;
-    state.detailChatProvider = currentChatDefaultProvider();
   } catch {
     state.settingsMessage = "读取设置失败，请稍后重试。";
     state.settingsMessageTone = "failed";
@@ -793,13 +781,6 @@ async function saveRuntimeSettings() {
           provider: settingsTranslationProvider.value || "deepseek",
           model: (settingsTranslationModel.value || "").trim(),
         },
-        chat: {
-          default_provider: settingsChatDefaultProvider.value || "deepseek",
-          providers: {
-            deepseek: { model: (settingsChatDeepseekModel.value || "").trim() },
-            openai: { model: (settingsChatOpenaiModel.value || "").trim() },
-          },
-        },
       },
     };
     const res = await fetch("/api/settings", {
@@ -810,8 +791,7 @@ async function saveRuntimeSettings() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
     state.runtimeSettings = data;
-    state.detailChatProvider = currentChatDefaultProvider();
-    state.settingsMessage = "保存成功。新请求通常立即生效；如需与 worker 完全一致，可重启 Flask。";
+    state.settingsMessage = "保存成功。翻译 / 总结新请求通常立即生效；如需与 worker 完全一致，可重启 Flask。";
     state.settingsMessageTone = "ready";
   } catch {
     state.settingsMessage = "保存失败，请检查输入后重试。";
@@ -2315,11 +2295,11 @@ function resolveDetailChatProvider(item) {
   if (providers[state.detailChatProvider]?.available) return state.detailChatProvider;
   if (providers.openai?.available) return "openai";
   if (providers.deepseek?.available) return "deepseek";
-  return state.detailChatProvider || "deepseek";
+  return state.detailChatProvider || "openai";
 }
 
 function chatCapabilityText(provider, meta) {
-  if (!meta) return "";
+  if (!meta) return "当前 chatPage 的 API 问答入口已下线；后续会改走 codex exec 方向。";
   if (provider === "openai") {
     return meta.available
       ? "ChatGPT：可尝试联网搜索补充最新公开信息；会区分正文事实、外部补充和推断。"
@@ -2334,30 +2314,20 @@ function renderDetailChat(item) {
   if (!item) return;
   const providers = chatProvidersFromItem(item);
   const provider = resolveDetailChatProvider(item);
+  const availableProviders = Object.entries(providers).filter(([, meta]) => meta?.available);
+  const chatEnabled = availableProviders.length > 0;
   state.detailChatProvider = provider;
 
   detailChatMeta.textContent = `${item.title || ""} · ${item.source || "未知来源"}`;
-  detailChatProviderSelect.innerHTML = "";
-  [
-    ["deepseek", providers.deepseek],
-    ["openai", providers.openai],
-  ].forEach(([key, meta]) => {
-    if (!meta) return;
-    const option = document.createElement("option");
-    option.value = key;
-    option.textContent = meta.label || key;
-    option.disabled = !meta.available;
-    if (!meta.available) option.textContent += "（未配置）";
-    detailChatProviderSelect.appendChild(option);
-  });
-  detailChatProviderSelect.value = provider;
   detailChatCapability.textContent = chatCapabilityText(provider, providers[provider]);
-  detailChatProviderSelect.disabled = state.detailChatSending;
-  detailChatInput.disabled = state.detailChatSending;
-  detailChatSendBtn.disabled = state.detailChatSending;
+  detailChatInput.disabled = state.detailChatSending || !chatEnabled;
+  detailChatSendBtn.disabled = state.detailChatSending || !chatEnabled;
+  detailChatInput.placeholder = chatEnabled
+    ? "围绕这条新闻继续追问，例如：这件事对相关公司/板块意味着什么？"
+    : "当前 API chat 已停用，后续将改走 codex exec。";
 
   const chatReady = !!(state.detailChatMessages && state.detailChatMessages.length);
-  const statusText = state.detailChatStatus || (chatReady ? "" : "这次对话不会保存；切换新闻或切换模型后会清空。");
+  const statusText = state.detailChatStatus || (chatReady ? "" : (chatEnabled ? "这次对话不会保存；切换新闻后会清空。" : "当前版本不再提供 API chat provider。"));
   detailChatStatus.textContent = statusText;
   detailChatStatus.className = `detail-status ${state.detailChatSending ? "pending" : statusText ? "muted" : "hidden"}`;
 
@@ -2365,7 +2335,9 @@ function renderDetailChat(item) {
   if (!chatReady) {
     const empty = document.createElement("div");
     empty.className = "detail-chat-empty";
-    empty.textContent = "可以追问这条新闻的背景、影响、最新进展判断或相关公司/板块含义。";
+    empty.textContent = chatEnabled
+      ? "可以追问这条新闻的背景、影响、最新进展判断或相关公司/板块含义。"
+      : "这个区域暂时保留占位，后续 chatPage 会改走 codex exec。";
     detailChatMessages.appendChild(empty);
     return;
   }
@@ -2404,6 +2376,11 @@ async function sendDetailChatMessage() {
   if (!state.selectedId || state.detailChatSending) return;
   const item = state.itemsById.get(state.selectedId);
   if (!item) return;
+  if (!Object.keys(chatProvidersFromItem(item)).length) {
+    state.detailChatStatus = "当前 API chat 已下线，后续会改走 codex exec。";
+    renderDetailChat(item);
+    return;
+  }
   const content = (detailChatInput.value || "").trim().slice(0, DETAIL_CHAT_MAX_LEN);
   if (!content) return;
 
@@ -2426,6 +2403,7 @@ async function sendDetailChatMessage() {
       provider_busy: "该模型当前正忙，请稍后重试。",
       provider_timeout: "请求超时，请稍后重试。",
       provider_failed: "模型调用失败，请稍后重试。",
+      chat_disabled: "当前 API chat 已下线，后续会改走 codex exec。",
     };
     state.detailChatStatus = labelMap[code] || "发送失败，请稍后重试。";
   } finally {
@@ -3782,17 +3760,6 @@ if (detailChatBackBtn) {
     if (!item) return;
     state.detailView = "detail";
     renderDetail(item);
-  });
-}
-
-if (detailChatProviderSelect) {
-  detailChatProviderSelect.addEventListener("change", () => {
-    state.detailChatProvider = detailChatProviderSelect.value || "openai";
-    state.detailChatMessages = [];
-    state.detailChatStatus = "已切换模型，临时对话已清空。";
-    if (detailChatInput) detailChatInput.value = "";
-    const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
-    if (item) renderDetailChat(item);
   });
 }
 

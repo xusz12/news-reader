@@ -17,13 +17,6 @@ DEFAULT_APP_SETTINGS = {
             "provider": "deepseek",
             "model": "",
         },
-        "chat": {
-            "default_provider": "deepseek",
-            "providers": {
-                "deepseek": {"model": ""},
-                "openai": {"model": ""},
-            },
-        },
     }
 }
 
@@ -70,20 +63,6 @@ def load_app_settings() -> dict:
         if isinstance(model, str):
             base["llm"]["translation"]["model"] = model.strip()
 
-    chat = llm.get("chat")
-    if isinstance(chat, dict):
-        default_provider = chat.get("default_provider")
-        if isinstance(default_provider, str) and default_provider.strip():
-            base["llm"]["chat"]["default_provider"] = default_provider.strip()
-        providers = chat.get("providers")
-        if isinstance(providers, dict):
-            for name in ("deepseek", "openai"):
-                provider_payload = providers.get(name)
-                if not isinstance(provider_payload, dict):
-                    continue
-                model = provider_payload.get("model")
-                if isinstance(model, str):
-                    base["llm"]["chat"]["providers"][name]["model"] = model.strip()
     return base
 
 
