@@ -13,7 +13,13 @@ from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from llm_client import LLMClientError, generate_article_ai, generate_gemini_fallback_translation
+from llm_client import (
+    LLMClientError,
+    ask_deepseek_news_chat,
+    ask_openai_news_chat,
+    generate_article_ai,
+    generate_gemini_fallback_translation,
+)
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
 from settings import resolve_daily_news_dir, resolve_db_path
@@ -28,6 +34,10 @@ DB_PATH = resolve_db_path()
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 
 DETAIL_LOCK = threading.Lock()
+CHAT_PROVIDER_LOCKS = {
+    "deepseek": threading.Lock(),
+    "openai": threading.Lock(),
+}
 WORKER_THREAD: threading.Thread | None = None
 WORKER_STOP = threading.Event()
 
@@ -278,6 +288,45 @@ def build_note_preview(note_text: str | None, limit: int = 120) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def chat_provider_catalog() -> dict[str, dict]:
+    return {
+        "deepseek": {
+            "label": "DeepSeek",
+            "available": bool((os.getenv("DEEPSEEK_API_KEY") or "").strip()),
+            "note": "基于新闻正文与已有知识回答，不保证实时联网。",
+        },
+        "openai": {
+            "label": "ChatGPT",
+            "available": bool((os.getenv("OPENAI_API_KEY") or "").strip()),
+            "note": "可尝试结合联网搜索补充最新公开信息。",
+        },
+    }
+
+
+def normalize_chat_messages(raw_messages: object, *, max_messages: int = 20, max_chars: int = 4000) -> list[dict[str, str]]:
+    if not isinstance(raw_messages, list) or not raw_messages:
+        raise ValueError("invalid_messages")
+    if len(raw_messages) > max_messages:
+        raise ValueError("too_many_messages")
+    normalized: list[dict[str, str]] = []
+    for entry in raw_messages:
+        if not isinstance(entry, dict):
+            raise ValueError("invalid_messages")
+        role = (entry.get("role") or "").strip().lower()
+        content = entry.get("content")
+        if role not in {"user", "assistant"}:
+            raise ValueError("invalid_message_role")
+        if not isinstance(content, str):
+            raise ValueError("invalid_message_content")
+        text = content.strip()
+        if not text:
+            raise ValueError("empty_message_content")
+        if len(text) > max_chars:
+            raise ValueError("message_too_long")
+        normalized.append({"role": role, "content": text})
+    return normalized
 
 
 def load_error_stats(day: str) -> list[dict]:
@@ -2004,8 +2053,82 @@ def api_news_detail(item_id: str):
             "market_tags": market_tags,
             "has_market_tags": 1 if market_tags else 0,
             "market_tag_choices": market_tag_choices,
+            "chat_providers": chat_provider_catalog(),
         }
     )
+
+
+@app.post("/api/news/<item_id>/chat")
+def api_news_chat(item_id: str):
+    body = request.get_json(silent=True) or {}
+    provider = (body.get("provider") or "").strip().lower()
+    if provider not in CHAT_PROVIDER_LOCKS:
+        return jsonify({"ok": False, "error": "invalid_provider"}), 400
+
+    try:
+        messages = normalize_chat_messages(body.get("messages"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    conn = db_conn()
+    try:
+        item = conn.execute(
+            "SELECT id, title, url, source, published_at FROM items WHERE id=?",
+            (item_id,),
+        ).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        detail = conn.execute(
+            """
+            SELECT title, source, published_at, content
+            FROM article_details
+            WHERE url=?
+            """,
+            (url,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not detail or not (detail["content"] or "").strip():
+        return jsonify({"ok": False, "error": "detail_not_ready"}), 409
+
+    provider_meta = chat_provider_catalog().get(provider) or {}
+    if not provider_meta.get("available"):
+        missing_error = "missing_openai_api_key" if provider == "openai" else "missing_deepseek_api_key"
+        return jsonify({"ok": False, "error": missing_error}), 400
+
+    lock = CHAT_PROVIDER_LOCKS[provider]
+    if not lock.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "provider_busy"}), 409
+
+    try:
+        common_kwargs = {
+            "title": (detail["title"] or item["title"] or "").strip(),
+            "source": (detail["source"] or item["source"] or "").strip(),
+            "published_at": (detail["published_at"] or item["published_at"] or "").strip(),
+            "content": (detail["content"] or "").strip(),
+            "messages": messages,
+        }
+        if provider == "openai":
+            payload = ask_openai_news_chat(**common_kwargs)
+        else:
+            payload = ask_deepseek_news_chat(**common_kwargs)
+    except LLMClientError as exc:
+        error = str(exc)
+        if error == "MISSING_OPENAI_API_KEY":
+            return jsonify({"ok": False, "error": "missing_openai_api_key"}), 400
+        if error == "MISSING_DEEPSEEK_API_KEY":
+            return jsonify({"ok": False, "error": "missing_deepseek_api_key"}), 400
+        if "TIMEOUT" in error:
+            return jsonify({"ok": False, "error": "provider_timeout", "detail": error}), 504
+        return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
+    finally:
+        lock.release()
+
+    return jsonify({"ok": True, **payload})
 
 
 @app.get("/api/market-tags")

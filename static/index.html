@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>News Reader v1.2</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.1.1" />
+    <link rel="stylesheet" href="/static/style.css?v=1.9.3" />
   </head>
   <body>
     <header class="topbar">
@@ -168,6 +168,7 @@
           <div id="detailMeta" class="detail-meta"></div>
           <div class="detail-actions">
             <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
+            <button id="detailAskBtn" class="detail-retry-btn hidden" type="button">提问</button>
             <button id="detailRetryBtn" class="detail-retry-btn hidden" type="button">重试详情抓取</button>
             <button id="detailRetranslateBtn" class="detail-retry-btn hidden" type="button">重新翻译</button>
             <span class="detail-action-spacer" aria-hidden="true"></span>
@@ -207,6 +208,25 @@
             </details>
           </div>
         </div>
+        <div id="detailChatBody" class="detail-body hidden">
+          <button id="detailChatBackBtn" class="detail-return-btn" type="button">返回正文</button>
+          <h3 class="detail-title">新闻提问</h3>
+          <div id="detailChatMeta" class="detail-meta"></div>
+          <div class="detail-chat-toolbar">
+            <label class="detail-chat-provider-label" for="detailChatProviderSelect">模型</label>
+            <select id="detailChatProviderSelect" class="pref-select detail-chat-provider-select"></select>
+            <button id="detailChatArchiveBtn" class="detail-retry-btn" type="button" disabled>归档（预留）</button>
+          </div>
+          <div id="detailChatCapability" class="detail-summary detail-chat-capability"></div>
+          <div id="detailChatStatus" class="detail-status muted">选择一条有正文的新闻后开始提问</div>
+          <div id="detailChatMessages" class="detail-chat-messages"></div>
+          <div class="detail-chat-composer">
+            <textarea id="detailChatInput" class="detail-note-input detail-chat-input" rows="4" maxlength="4000" placeholder="围绕这条新闻继续追问，例如：这件事对相关公司/板块意味着什么？"></textarea>
+            <div class="detail-note-actions">
+              <button id="detailChatSendBtn" class="detail-retry-btn" type="button">发送</button>
+            </div>
+          </div>
+        </div>
       </aside>
     </main>
 
@@ -244,6 +264,6 @@
       <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.1.1"></script>
+    <script src="/static/app.js?v=1.9.3"></script>
   </body>
 </html>

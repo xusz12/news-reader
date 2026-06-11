@@ -28,6 +28,11 @@ let state = {
   searchRange: "all",
   searchTime: "all",
   feedUnreadCursor: null,
+  detailView: "detail",
+  detailChatProvider: "deepseek",
+  detailChatMessages: [],
+  detailChatStatus: "",
+  detailChatSending: false,
 };
 
 const mediaIconMap = {
@@ -114,6 +119,16 @@ const detailTagCreateInput = document.getElementById("detailTagCreateInput");
 const detailTagCreateBtn = document.getElementById("detailTagCreateBtn");
 const detailTagAdminList = document.getElementById("detailTagAdminList");
 const detailBody = document.getElementById("detailBody");
+const detailChatBody = document.getElementById("detailChatBody");
+const detailAskBtn = document.getElementById("detailAskBtn");
+const detailChatBackBtn = document.getElementById("detailChatBackBtn");
+const detailChatMeta = document.getElementById("detailChatMeta");
+const detailChatProviderSelect = document.getElementById("detailChatProviderSelect");
+const detailChatCapability = document.getElementById("detailChatCapability");
+const detailChatStatus = document.getElementById("detailChatStatus");
+const detailChatMessages = document.getElementById("detailChatMessages");
+const detailChatInput = document.getElementById("detailChatInput");
+const detailChatSendBtn = document.getElementById("detailChatSendBtn");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
 const detailAiBox = document.getElementById("detailAiBox");
 const detailAiPoints = document.getElementById("detailAiPoints");
@@ -164,6 +179,7 @@ const DETAIL_SWIPE_CLOSE_PX = 72;
 const DETAIL_SWIPE_EDGE_PX = 40;
 const DETAIL_SWIPE_AXIS_RATIO = 1.5;
 const NOTE_MAX_LEN = 5000;
+const DETAIL_CHAT_MAX_LEN = 4000;
 
 function setHint(text) {
   listHint.textContent = text || "";
@@ -1951,6 +1967,7 @@ function restoreTrendDetailFromDetail() {
 
 function openItemDetail(item, { fromTrend = false } = {}) {
   if (!item) return;
+  if (state.selectedId !== item.id) resetDetailChatState();
   state.itemsById.set(item.id, item);
   state.selectedId = item.id;
   state.detailReturnToTrend = fromTrend;
@@ -1964,6 +1981,140 @@ function openItemDetail(item, { fromTrend = false } = {}) {
 function normalizedDetailNote(cached) {
   const text = cached?.note?.note;
   return typeof text === "string" ? text.trim() : "";
+}
+
+function resetDetailChatState({ keepProvider = false } = {}) {
+  state.detailView = "detail";
+  state.detailChatMessages = [];
+  state.detailChatStatus = "";
+  state.detailChatSending = false;
+  if (!keepProvider) state.detailChatProvider = "deepseek";
+  if (detailChatInput) detailChatInput.value = "";
+}
+
+function chatProvidersFromItem(item) {
+  const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
+  return cached?.chat_providers || {};
+}
+
+function resolveDetailChatProvider(item) {
+  const providers = chatProvidersFromItem(item);
+  if (providers[state.detailChatProvider]?.available) return state.detailChatProvider;
+  if (providers.openai?.available) return "openai";
+  if (providers.deepseek?.available) return "deepseek";
+  return state.detailChatProvider || "deepseek";
+}
+
+function chatCapabilityText(provider, meta) {
+  if (!meta) return "";
+  if (provider === "openai") {
+    return meta.available
+      ? "ChatGPT：可尝试联网搜索补充最新公开信息；会区分正文事实、外部补充和推断。"
+      : "ChatGPT：当前未配置 OPENAI_API_KEY，已禁用。";
+  }
+  return meta.available
+    ? "DeepSeek：基于新闻正文与已有知识回答，不保证实时联网或最新进展。"
+    : "DeepSeek：当前未配置 DEEPSEEK_API_KEY，已禁用。";
+}
+
+function renderDetailChat(item) {
+  if (!item) return;
+  const providers = chatProvidersFromItem(item);
+  const provider = resolveDetailChatProvider(item);
+  state.detailChatProvider = provider;
+
+  detailChatMeta.textContent = `${item.title || ""} · ${item.source || "未知来源"}`;
+  detailChatProviderSelect.innerHTML = "";
+  [
+    ["deepseek", providers.deepseek],
+    ["openai", providers.openai],
+  ].forEach(([key, meta]) => {
+    if (!meta) return;
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = meta.label || key;
+    option.disabled = !meta.available;
+    if (!meta.available) option.textContent += "（未配置）";
+    detailChatProviderSelect.appendChild(option);
+  });
+  detailChatProviderSelect.value = provider;
+  detailChatCapability.textContent = chatCapabilityText(provider, providers[provider]);
+  detailChatProviderSelect.disabled = state.detailChatSending;
+  detailChatInput.disabled = state.detailChatSending;
+  detailChatSendBtn.disabled = state.detailChatSending;
+
+  const chatReady = !!(state.detailChatMessages && state.detailChatMessages.length);
+  const statusText = state.detailChatStatus || (chatReady ? "" : "这次对话不会保存；切换新闻或切换模型后会清空。");
+  detailChatStatus.textContent = statusText;
+  detailChatStatus.className = `detail-status ${state.detailChatSending ? "pending" : statusText ? "muted" : "hidden"}`;
+
+  detailChatMessages.innerHTML = "";
+  if (!chatReady) {
+    const empty = document.createElement("div");
+    empty.className = "detail-chat-empty";
+    empty.textContent = "可以追问这条新闻的背景、影响、最新进展判断或相关公司/板块含义。";
+    detailChatMessages.appendChild(empty);
+    return;
+  }
+  state.detailChatMessages.forEach((message) => {
+    const card = document.createElement("div");
+    card.className = `detail-chat-message ${message.role}`;
+    const role = document.createElement("div");
+    role.className = "detail-chat-role";
+    role.textContent = message.role === "user" ? "你" : "助手";
+    const text = document.createElement("div");
+    text.className = "detail-chat-text";
+    text.textContent = message.content || "";
+    card.appendChild(role);
+    card.appendChild(text);
+    detailChatMessages.appendChild(card);
+  });
+  detailChatMessages.scrollTop = detailChatMessages.scrollHeight;
+}
+
+async function requestNewsChat(item, provider, messages) {
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, messages }),
+  });
+  const payload = await res.json().catch(() => ({ ok: false, error: "chat_request_failed" }));
+  if (!res.ok || !payload.ok) throw new Error(payload.error || "chat_request_failed");
+  return payload;
+}
+
+async function sendDetailChatMessage() {
+  if (!state.selectedId || state.detailChatSending) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item) return;
+  const content = (detailChatInput.value || "").trim().slice(0, DETAIL_CHAT_MAX_LEN);
+  if (!content) return;
+
+  state.detailChatMessages = [...state.detailChatMessages, { role: "user", content }];
+  state.detailChatSending = true;
+  state.detailChatStatus = "正在生成回答...";
+  detailChatInput.value = "";
+  renderDetailChat(item);
+
+  try {
+    const payload = await requestNewsChat(item, state.detailChatProvider, state.detailChatMessages);
+    state.detailChatMessages = [...state.detailChatMessages, { role: "assistant", content: payload.answer || "" }];
+    state.detailChatStatus = `${payload.provider === "openai" ? "ChatGPT" : "DeepSeek"} · ${payload.model || ""}`.trim();
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "chat_request_failed";
+    const labelMap = {
+      detail_not_ready: "正文还没准备好，暂时不能提问。",
+      missing_openai_api_key: "ChatGPT 当前未配置 OPENAI_API_KEY。",
+      missing_deepseek_api_key: "DeepSeek 当前未配置 DEEPSEEK_API_KEY。",
+      provider_busy: "该模型当前正忙，请稍后重试。",
+      provider_timeout: "请求超时，请稍后重试。",
+      provider_failed: "模型调用失败，请稍后重试。",
+    };
+    state.detailChatStatus = labelMap[code] || "发送失败，请稍后重试。";
+  } finally {
+    state.detailChatSending = false;
+    renderDetailChat(item);
+  }
 }
 
 function normalizeMarketTags(raw) {
@@ -2151,12 +2302,14 @@ async function saveDetailNote(item, noteText) {
 function renderDetail(item) {
   closeTagAdminView();
   if (!item) {
+    resetDetailChatState({ keepProvider: true });
     state.detailReturnToTrend = false;
     stopDetailPolling();
     closeMarketPicker();
     syncDetailReturnButton();
     detailTrendBody.classList.add("hidden");
     detailBody.classList.add("hidden");
+    detailChatBody.classList.add("hidden");
     detailEmpty.classList.remove("hidden");
     detailEmpty.textContent = state.collection === "trends" ? "选择一个趋势单元格查看新闻明细" : "选择一条新闻查看摘要与正文";
     updateWorkspaceLayout();
@@ -2184,6 +2337,7 @@ function renderDetail(item) {
   const contentEl = document.getElementById("detailContent");
   const retryBtn = document.getElementById("detailRetryBtn");
   const retranslateBtn = document.getElementById("detailRetranslateBtn");
+  const askBtn = document.getElementById("detailAskBtn");
 
   if (item.url) {
     link.href = item.url;
@@ -2311,6 +2465,18 @@ function renderDetail(item) {
     retryBtn.classList.remove("hidden");
   }
 
+  const chatReady = !!(detail && detail.content);
+  askBtn.classList.toggle("hidden", !chatReady);
+  if (!chatReady && state.detailView === "chat") {
+    state.detailView = "detail";
+    state.detailChatStatus = "正文还没准备好，暂时不能提问。";
+  }
+  detailBody.classList.toggle("hidden", state.detailView === "chat");
+  detailChatBody.classList.toggle("hidden", state.detailView !== "chat");
+  if (state.detailView === "chat" && chatReady) {
+    renderDetailChat(item);
+  }
+
   const importantBtn = document.getElementById("detailImportantBtn");
   applyIcon(importantBtn, "important", {
     filled: !!item.important_at,
@@ -2349,6 +2515,9 @@ async function loadDetail(itemId) {
   if (payload.ai_job && payload.ai_job.last_error) item.ai_error = payload.ai_job.last_error;
   state.itemsById.set(item.id, item);
   rerenderOne(item.id);
+  if (state.selectedId === itemId) {
+    renderDetail(item);
+  }
 
   // 在“稍后再看”集合中，用户打开且详情已可读后自动取消稍后标记。
   // 仅清 read_later，不影响已抓取详情/AI缓存与其它状态。
@@ -2623,6 +2792,7 @@ function resetList() {
   state.dateCounts = new Map();
   state.detailReturnToTrend = false;
   state.feedUnreadCursor = null;
+  resetDetailChatState();
   showTrendsView(false);
   syncSearchPageControls();
   closeDetailOnMobile();
@@ -3253,6 +3423,53 @@ if (trendNoteComposeSaveBtn) {
 
 const detailRetryBtn = document.getElementById("detailRetryBtn");
 const detailRetranslateBtn = document.getElementById("detailRetranslateBtn");
+if (detailAskBtn) {
+  detailAskBtn.addEventListener("click", () => {
+    if (!state.selectedId) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (!item) return;
+    state.detailView = "chat";
+    renderDetail(item);
+    detailChatInput.focus();
+  });
+}
+
+if (detailChatBackBtn) {
+  detailChatBackBtn.addEventListener("click", () => {
+    if (!state.selectedId) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (!item) return;
+    state.detailView = "detail";
+    renderDetail(item);
+  });
+}
+
+if (detailChatProviderSelect) {
+  detailChatProviderSelect.addEventListener("change", () => {
+    state.detailChatProvider = detailChatProviderSelect.value || "deepseek";
+    state.detailChatMessages = [];
+    state.detailChatStatus = "已切换模型，临时对话已清空。";
+    if (detailChatInput) detailChatInput.value = "";
+    const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+    if (item) renderDetailChat(item);
+  });
+}
+
+if (detailChatSendBtn) {
+  detailChatSendBtn.addEventListener("click", () => {
+    sendDetailChatMessage();
+  });
+}
+
+if (detailChatInput) {
+  detailChatInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      sendDetailChatMessage();
+    }
+  });
+}
+
 detailRetryBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;
   detailRetryBtn.disabled = true;

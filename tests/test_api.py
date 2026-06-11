@@ -1697,3 +1697,221 @@ def test_error_stats_today_with_and_without_errors(tmp_path: Path, monkeypatch):
             ],
         }
     ]
+
+
+def test_detail_endpoint_includes_chat_providers(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Detail](https://example.com/chat-detail)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    payload = client.get(f"/api/news/{item['id']}/detail").get_json()
+
+    assert payload["ok"] is True
+    assert payload["chat_providers"]["deepseek"]["available"] is True
+    assert payload["chat_providers"]["openai"]["available"] is False
+
+
+def test_news_chat_requires_ready_detail(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Pending](https://example.com/chat-pending)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    res = client.post(
+        f"/api/news/{item['id']}/chat",
+        json={"provider": "deepseek", "messages": [{"role": "user", "content": "这是什么意思？"}]},
+    )
+    assert res.status_code == 409
+    assert res.get_json()["error"] == "detail_not_ready"
+
+
+def test_news_chat_routes_to_deepseek_and_openai(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Ready](https://example.com/chat-ready)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(
+                  url, source, title, author, published_at, content,
+                  content_length, raw_json, fetched_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["url"],
+                    "Reuters",
+                    "Chat Ready",
+                    "Reporter",
+                    "2026-06-11 09:00:00",
+                    "Full english body for chat route tests.",
+                    37,
+                    "{}",
+                    ts,
+                    ts,
+                ),
+            )
+
+    captured = {}
+
+    def fake_deepseek(**kwargs):
+        captured["deepseek"] = kwargs
+        return {"provider": "deepseek", "model": "deepseek-chat", "answer": "DeepSeek 回答"}
+
+    def fake_openai(**kwargs):
+        captured["openai"] = kwargs
+        return {"provider": "openai", "model": "gpt-4.1-mini", "answer": "OpenAI 回答"}
+
+    monkeypatch.setattr(app_module, "ask_deepseek_news_chat", fake_deepseek)
+    monkeypatch.setattr(app_module, "ask_openai_news_chat", fake_openai)
+
+    transcript = [
+        {"role": "user", "content": "先总结一下"},
+        {"role": "assistant", "content": "上一轮回答"},
+        {"role": "user", "content": "那最新影响呢？"},
+    ]
+    deepseek_res = client.post(
+        f"/api/news/{item['id']}/chat",
+        json={"provider": "deepseek", "messages": transcript},
+    )
+    assert deepseek_res.status_code == 200
+    assert deepseek_res.get_json()["answer"] == "DeepSeek 回答"
+    assert captured["deepseek"]["title"] == "Chat Ready"
+    assert captured["deepseek"]["content"] == "Full english body for chat route tests."
+    assert captured["deepseek"]["messages"] == transcript
+
+    openai_res = client.post(
+        f"/api/news/{item['id']}/chat",
+        json={"provider": "openai", "messages": transcript},
+    )
+    assert openai_res.status_code == 200
+    assert openai_res.get_json()["answer"] == "OpenAI 回答"
+    assert captured["openai"]["messages"] == transcript
+
+
+def test_news_chat_missing_key_and_busy(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Config](https://example.com/chat-config)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(
+                  url, source, title, author, published_at, content,
+                  content_length, raw_json, fetched_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["url"],
+                    "Reuters",
+                    "Chat Config",
+                    "Reporter",
+                    "2026-06-11 09:00:00",
+                    "Ready detail body",
+                    17,
+                    "{}",
+                    ts,
+                    ts,
+                ),
+            )
+
+    missing_key_res = client.post(
+        f"/api/news/{item['id']}/chat",
+        json={"provider": "openai", "messages": [{"role": "user", "content": "最新进展？"}]},
+    )
+    assert missing_key_res.status_code == 400
+    assert missing_key_res.get_json()["error"] == "missing_openai_api_key"
+
+    lock = app_module.CHAT_PROVIDER_LOCKS["deepseek"]
+    assert lock.acquire(blocking=False) is True
+    try:
+        busy_res = client.post(
+            f"/api/news/{item['id']}/chat",
+            json={"provider": "deepseek", "messages": [{"role": "user", "content": "最新进展？"}]},
+        )
+    finally:
+        lock.release()
+
+    assert busy_res.status_code == 409
+    assert busy_res.get_json()["error"] == "provider_busy"

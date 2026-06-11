@@ -4,6 +4,24 @@
 
 ## What's Changed
 
+### 2026-06-11 — feat: 新增 v1.9.3 右栏新闻提问 MVP
+- **文件**
+  - *app.py（+117 −0）*
+    - `GET /api/news/:id/detail` 新增 `chat_providers`，返回 `DeepSeek / ChatGPT` 可用性与能力提示
+    - 新增无状态 `POST /api/news/:id/chat`
+    - 仅在正文已就绪时允许提问；支持 `provider_busy / detail_not_ready / missing_*_api_key / provider_timeout / provider_failed` 等清晰错误
+  - *llm_client.py（+141 −0）*
+    - 新增 `ask_deepseek_news_chat()` 与 `ask_openai_news_chat()`
+    - DeepSeek 走稳定 API 对话；ChatGPT 走 OpenAI Responses API，并启用 `web_search`
+    - Prompt 明确要求区分“正文事实 / 外部补充 / 推断”，且最新进展无法确认时必须直说
+  - *static/index.html（+22 −2）*、*static/app.js（+175 −0）*、*static/style.css（+58 −0）*
+    - 详情右栏新增 `提问` 入口与 panel 内 chatPage 子视图，不新开页面
+    - 支持切换 `DeepSeek / ChatGPT`，并明确显示两者能力差异
+    - 对话仅存在当前前端内存；切换新闻或切换模型即清空，并预留禁用态 `归档（预留）`
+  - *tests/test_api.py（+178 −0）*
+    - 覆盖 provider 可用性透出、正文未就绪拒绝提问、DeepSeek/OpenAI 路由透传、缺 key 与 busy 冲突分支
+- **影响**：用户现在可以在右侧正文详情里直接围绕当前新闻发问。`ChatGPT` 可尝试联网补充最新公开信息；`DeepSeek` 则只承诺基于正文与已有知识回答，不承诺实时搜索。
+
 ### 2026-06-10 — fix: 调整新闻流与稍后阅读为全局旧到新排序
 - **文件**
   - *app.py（+2 −2）*

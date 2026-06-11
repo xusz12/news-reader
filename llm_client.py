@@ -23,6 +23,11 @@ def _configured_model() -> str:
     return value or "deepseek-chat"
 
 
+def _configured_openai_chat_model() -> str:
+    value = (os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "").strip()
+    return value or "gpt-4.1-mini"
+
+
 def _build_messages(*, title: str, source: str, content: str) -> list[dict[str, str]]:
     system = (
         "你是专业新闻编辑与翻译。"
@@ -129,6 +134,178 @@ def generate_article_ai(*, title: str, source: str, content: str) -> dict[str, A
         "conclusion_zh": conclusion.strip(),
         "body_zh": body_text,
         "raw_json": json.dumps(parsed, ensure_ascii=False),
+    }
+
+
+def build_news_chat_transcript(
+    *,
+    title: str,
+    source: str,
+    published_at: str,
+    content: str,
+    messages: list[dict[str, str]],
+) -> str:
+    body = (content or "").strip()
+    if len(body) > 12000:
+        body = body[:12000]
+    transcript_lines = []
+    for msg in messages:
+        role = (msg.get("role") or "").strip().lower()
+        text = (msg.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not text:
+            continue
+        speaker = "用户" if role == "user" else "助手"
+        transcript_lines.append(f"{speaker}：{text}")
+    transcript = "\n".join(transcript_lines)
+    return (
+        "下面是一篇新闻正文，请把它作为背景材料和引用锚点，帮助理解用户问题。\n\n"
+        f"标题：{title or '无标题'}\n"
+        f"来源：{source or '未知来源'}\n"
+        f"时间：{published_at or '未知时间'}\n"
+        "正文：\n"
+        "<<<NEWS>>>\n"
+        f"{body}\n"
+        "<<<END>>>\n\n"
+        "以下是当前对话记录：\n"
+        f"{transcript or '（暂无）'}"
+    )
+
+
+def _news_chat_system_prompt(*, allow_web_search: bool) -> str:
+    capability_line = (
+        "你可以结合公开知识、背景信息以及你可获得的联网搜索结果来回答。"
+        if allow_web_search
+        else "你可以结合公开知识和背景信息来回答，但不要假装自己进行了实时联网搜索。"
+    )
+    return (
+        "你是新闻阅读助手。\n"
+        f"{capability_line}\n"
+        "回答要求：\n"
+        "1. 只用中文回答；\n"
+        "2. 新闻正文是背景材料和引用锚点，不是回答边界；\n"
+        "3. 必须尽量区分：正文事实、正文之外的补充信息、你自己的推断；\n"
+        "4. 如果用户问的是最新进展，但你无法确认，请明确说无法确认；\n"
+        "5. 回答尽量精炼，优先短要点，不要泛泛扩展。"
+    )
+
+
+def _extract_chat_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        return "\n".join(parts).strip()
+    return ""
+
+
+def ask_deepseek_news_chat(
+    *,
+    title: str,
+    source: str,
+    published_at: str,
+    content: str,
+    messages: list[dict[str, str]],
+    timeout: int = 90,
+) -> dict[str, Any]:
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
+
+    try:
+        from openai import OpenAI
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
+
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
+    payload_messages = [
+        {"role": "system", "content": _news_chat_system_prompt(allow_web_search=False)},
+        {
+            "role": "user",
+            "content": build_news_chat_transcript(
+                title=title,
+                source=source,
+                published_at=published_at,
+                content=content,
+                messages=messages,
+            ),
+        },
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model=_configured_model(),
+            messages=payload_messages,
+            temperature=0.2,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        raise LLMClientError(f"DEEPSEEK_CHAT_FAILED: {exc}") from exc
+
+    choices = getattr(resp, "choices", None) or []
+    if not choices:
+        raise LLMClientError("DEEPSEEK_CHAT_EMPTY_CHOICES")
+    message = choices[0].message
+    text = _extract_chat_text(getattr(message, "content", ""))
+    if not text or not _CJK_RE.search(text):
+        raise LLMClientError("DEEPSEEK_CHAT_INVALID_OUTPUT")
+    return {
+        "provider": "deepseek",
+        "model": getattr(resp, "model", None) or _configured_model(),
+        "answer": text,
+    }
+
+
+def ask_openai_news_chat(
+    *,
+    title: str,
+    source: str,
+    published_at: str,
+    content: str,
+    messages: list[dict[str, str]],
+    timeout: int = 90,
+) -> dict[str, Any]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise LLMClientError("MISSING_OPENAI_API_KEY")
+
+    try:
+        from openai import OpenAI
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
+
+    client = OpenAI(api_key=api_key)
+    transcript = build_news_chat_transcript(
+        title=title,
+        source=source,
+        published_at=published_at,
+        content=content,
+        messages=messages,
+    )
+
+    try:
+        resp = client.responses.create(
+            model=_configured_openai_chat_model(),
+            instructions=_news_chat_system_prompt(allow_web_search=True),
+            input=transcript,
+            tools=[{"type": "web_search"}],
+            temperature=0.2,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        raise LLMClientError(f"OPENAI_CHAT_FAILED: {exc}") from exc
+
+    text = (getattr(resp, "output_text", None) or "").strip()
+    if not text or not _CJK_RE.search(text):
+        raise LLMClientError("OPENAI_CHAT_INVALID_OUTPUT")
+    return {
+        "provider": "openai",
+        "model": getattr(resp, "model", None) or _configured_openai_chat_model(),
+        "answer": text,
     }
 
 
