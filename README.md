@@ -4,6 +4,23 @@
 
 ## What's Changed
 
+### 2026-06-11 — feat: 新增 v1.9.4 设置页 MVP
+- **文件**
+  - *app.py（+189 −0）*、*settings.py（+74 −0）*、*llm_client.py（+16 −2）*
+    - 新增 `GET/PUT /api/settings`，以本机轻量配置文件保存 LLM 路由设置
+    - 新增 `GET /api/release-notes`，稳健解析 README `What's Changed` 为版本记录
+    - 设置页只返回 API key `configured` 布尔状态，不回显明文
+    - 翻译 / 总结支持配置 DeepSeek model；chat 支持默认 provider 与 OpenAI/DeepSeek 各自 model
+    - 新配置会被 chat 与翻译链路消费；新请求通常立即生效，worker 完全一致时仍建议重启 Flask
+  - *static/index.html（+67 −1）*、*static/app.js（+255 −0）*、*static/style.css（+257 −0）*
+    - 顶栏新增 `setting` 按钮，桌面/手机统一从这里打开设置页
+    - 设置页采用 overlay 方式打开，关闭后不污染当前新闻流、搜索、趋势或正文状态
+    - 页面内新增三块：`Release Notes`、`LLM API 状态`、`模型与功能路由配置`
+    - `Release Notes` 目前按 README 展示版本分组，并区分 `NEW / IMPROVE / FIX`
+  - *tests/test_api.py（+177 −0）*
+    - 覆盖 release notes 接口、设置读写与无 key 泄露、chat/翻译模型路由实际生效
+- **影响**：用户现在可以从顶栏直接打开设置页，查看版本发布记录、确认 DeepSeek/ChatGPT key 是否已配置，并调整翻译/总结与 chat 的默认模型/路由，而不需要修改前端代码或暴露 API key 明文。
+
 ### 2026-06-11 — feat: 新增 v1.9.3 右栏新闻提问 MVP
 - **文件**
   - *app.py（+117 −0）*

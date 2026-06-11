@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import threading
@@ -22,7 +23,7 @@ from llm_client import (
 )
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
-from settings import resolve_daily_news_dir, resolve_db_path
+from settings import default_app_settings, load_app_settings, resolve_daily_news_dir, resolve_db_path, save_app_settings
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -30,6 +31,7 @@ SCHEMA_PATH = BASE_DIR / "schema.sql"
 STATIC_DIR = BASE_DIR / "static"
 DAILY_NEWS_DIR = resolve_daily_news_dir()
 DB_PATH = resolve_db_path()
+README_PATH = BASE_DIR / "README.md"
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 
@@ -86,6 +88,8 @@ items.id DESC
 """
 
 ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10))"
+RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
+VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 
 
 def news_order_by_sql(collection: str) -> str:
@@ -288,6 +292,154 @@ def build_note_preview(note_text: str | None, limit: int = 120) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def categorize_release_note(title: str) -> str:
+    lowered = title.lower()
+    if "fix:" in lowered or lowered.startswith("fix"):
+        return "FIX"
+    if "feat:" in lowered or lowered.startswith("feat"):
+        return "NEW"
+    return "IMPROVE"
+
+
+def parse_release_notes() -> list[dict]:
+    if not README_PATH.exists():
+        return []
+    lines = README_PATH.read_text(encoding="utf-8").splitlines()
+    notes: list[dict] = []
+    in_changes = False
+    current: dict | None = None
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        if not in_changes:
+            if line.strip() == "## What's Changed":
+                in_changes = True
+            continue
+        if line.startswith("## ") and line.strip() != "## What's Changed":
+            break
+        match = RELEASE_NOTE_HEADING_RE.match(line)
+        if match:
+            if current:
+                notes.append(current)
+            title = match.group("title").strip()
+            version_match = VERSION_RE.search(title)
+            current = {
+                "date": match.group("date"),
+                "title": title,
+                "version": version_match.group(0) if version_match else "",
+                "category": categorize_release_note(title),
+                "lines": [],
+            }
+            continue
+        if current is None:
+            continue
+        if not line.strip():
+            continue
+        cleaned = line.strip()
+        if cleaned.startswith("- "):
+            cleaned = cleaned[2:].strip()
+        cleaned = cleaned.replace("**", "")
+        current["lines"].append(cleaned)
+
+    if current:
+        notes.append(current)
+    return notes
+
+
+def current_runtime_settings() -> dict:
+    raw = load_app_settings()
+    merged = default_app_settings()
+    llm = raw.get("llm") if isinstance(raw, dict) else {}
+    if isinstance(llm, dict):
+        translation = llm.get("translation")
+        if isinstance(translation, dict):
+            provider = (translation.get("provider") or "").strip().lower()
+            model = (translation.get("model") or "").strip()
+            if provider in {"deepseek"}:
+                merged["llm"]["translation"]["provider"] = provider
+            if isinstance(model, str):
+                merged["llm"]["translation"]["model"] = model
+        chat = llm.get("chat")
+        if isinstance(chat, dict):
+            default_provider = (chat.get("default_provider") or "").strip().lower()
+            if default_provider in {"deepseek", "openai"}:
+                merged["llm"]["chat"]["default_provider"] = default_provider
+            providers = chat.get("providers")
+            if isinstance(providers, dict):
+                for name in ("deepseek", "openai"):
+                    provider_payload = providers.get(name)
+                    if not isinstance(provider_payload, dict):
+                        continue
+                    model = provider_payload.get("model")
+                    if isinstance(model, str):
+                        merged["llm"]["chat"]["providers"][name]["model"] = model.strip()
+    return merged
+
+
+def serialize_runtime_settings() -> dict:
+    settings = current_runtime_settings()
+    return {
+        "api_status": {
+            "deepseek": {"configured": bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())},
+            "openai": {"configured": bool((os.getenv("OPENAI_API_KEY") or "").strip())},
+        },
+        "llm": settings["llm"],
+        "restart_notice": "新请求通常会立即使用新配置；如需确保 worker 与长连接状态完全一致，建议重启 Flask。",
+    }
+
+
+def validate_runtime_settings(payload: object) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("invalid_payload")
+    llm = payload.get("llm")
+    if not isinstance(llm, dict):
+        raise ValueError("invalid_llm_settings")
+
+    translation = llm.get("translation")
+    chat = llm.get("chat")
+    if not isinstance(translation, dict) or not isinstance(chat, dict):
+        raise ValueError("invalid_llm_settings")
+
+    translation_provider = (translation.get("provider") or "").strip().lower()
+    translation_model = (translation.get("model") or "").strip()
+    if translation_provider != "deepseek":
+        raise ValueError("unsupported_translation_provider")
+    if len(translation_model) > 120:
+        raise ValueError("invalid_translation_model")
+
+    default_provider = (chat.get("default_provider") or "").strip().lower()
+    if default_provider not in {"deepseek", "openai"}:
+        raise ValueError("invalid_chat_default_provider")
+    providers = chat.get("providers")
+    if not isinstance(providers, dict):
+        raise ValueError("invalid_chat_provider_settings")
+
+    normalized = {
+        "llm": {
+            "translation": {
+                "provider": "deepseek",
+                "model": translation_model,
+            },
+            "chat": {
+                "default_provider": default_provider,
+                "providers": {
+                    "deepseek": {"model": ""},
+                    "openai": {"model": ""},
+                },
+            },
+        }
+    }
+    for name in ("deepseek", "openai"):
+        provider_payload = providers.get(name)
+        if not isinstance(provider_payload, dict):
+            raise ValueError("invalid_chat_provider_settings")
+        model = (provider_payload.get("model") or "").strip()
+        if len(model) > 120:
+            raise ValueError("invalid_chat_model")
+        normalized["llm"]["chat"]["providers"][name]["model"] = model
+    return normalized
 
 
 def chat_provider_catalog() -> dict[str, dict]:
@@ -873,10 +1025,12 @@ def process_pending_ai_once() -> bool:
         payload: dict = {}
         error = ""
         try:
+            llm_settings = current_runtime_settings()["llm"]
             payload = generate_article_ai(
                 title=(detail["title"] or "").strip(),
                 source=(detail["source"] or "").strip(),
                 content=(detail["content"] or "").strip(),
+                model=llm_settings["translation"]["model"],
             )
             ok = True
         except LLMClientError as exc:
@@ -1301,6 +1455,27 @@ def api_error_stats():
         return jsonify({"ok": False, "error": "invalid_day"}), 400
     days = load_error_stats(day)
     return jsonify({"ok": True, "day": day, "days": days})
+
+
+@app.get("/api/release-notes")
+def api_release_notes():
+    return jsonify({"ok": True, "items": parse_release_notes()})
+
+
+@app.get("/api/settings")
+def api_settings():
+    return jsonify({"ok": True, **serialize_runtime_settings()})
+
+
+@app.put("/api/settings")
+def api_settings_update():
+    body = request.get_json(silent=True) or {}
+    try:
+        normalized = validate_runtime_settings(body)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    save_app_settings(normalized)
+    return jsonify({"ok": True, **serialize_runtime_settings()})
 
 
 @app.get("/api/market-trends")
@@ -2070,6 +2245,8 @@ def api_news_chat(item_id: str):
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
+    llm_settings = current_runtime_settings()["llm"]
+
     conn = db_conn()
     try:
         item = conn.execute(
@@ -2113,9 +2290,15 @@ def api_news_chat(item_id: str):
             "messages": messages,
         }
         if provider == "openai":
-            payload = ask_openai_news_chat(**common_kwargs)
+            payload = ask_openai_news_chat(
+                **common_kwargs,
+                model=llm_settings["chat"]["providers"]["openai"]["model"],
+            )
         else:
-            payload = ask_deepseek_news_chat(**common_kwargs)
+            payload = ask_deepseek_news_chat(
+                **common_kwargs,
+                model=llm_settings["chat"]["providers"]["deepseek"]["model"],
+            )
     except LLMClientError as exc:
         error = str(exc)
         if error == "MISSING_OPENAI_API_KEY":

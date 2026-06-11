@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>News Reader v1.2</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.3" />
+    <link rel="stylesheet" href="/static/style.css?v=1.9.4" />
   </head>
   <body>
     <header class="topbar">
@@ -14,6 +14,7 @@
           <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
         </div>
         <div class="topbar-brand-actions">
+          <button id="settingsBtn" class="icon-btn" type="button" title="打开设置" aria-label="打开设置"></button>
           <div class="topbar-bell-wrap">
             <button id="errorStatsBtn" class="icon-btn" type="button" title="查看当日错误统计" aria-label="查看当日错误统计"></button>
             <section id="errorStatsPanel" class="error-stats-panel hidden" aria-live="polite">
@@ -230,6 +231,68 @@
       </aside>
     </main>
 
+    <div id="settingsOverlay" class="settings-overlay hidden" aria-hidden="true">
+      <button id="settingsBackdrop" class="settings-backdrop" type="button" aria-label="关闭设置"></button>
+      <section id="settingsPanel" class="settings-panel" aria-label="设置页">
+        <div class="settings-header">
+          <div>
+            <div class="settings-eyebrow">Settings</div>
+            <h2 class="settings-title">设置页</h2>
+            <p class="settings-subtitle">集中查看 LLM 状态、模型路由与版本发布记录。</p>
+          </div>
+          <button id="settingsCloseBtn" class="detail-retry-btn" type="button">关闭</button>
+        </div>
+        <div id="settingsStatus" class="detail-status muted">读取中...</div>
+        <div class="settings-grid">
+          <section class="settings-card">
+            <h3 class="settings-card-title">LLM API 状态</h3>
+            <div id="settingsApiStatus" class="settings-api-status"></div>
+          </section>
+          <section class="settings-card">
+            <h3 class="settings-card-title">模型与功能路由</h3>
+            <div class="settings-form">
+              <div class="settings-field">
+                <label for="settingsTranslationProvider">翻译 / 总结 provider</label>
+                <select id="settingsTranslationProvider" class="pref-select">
+                  <option value="deepseek">DeepSeek</option>
+                </select>
+              </div>
+              <div class="settings-field">
+                <label for="settingsTranslationModel">翻译 / 总结 model</label>
+                <input id="settingsTranslationModel" class="settings-input" type="text" maxlength="120" placeholder="默认：deepseek-chat 或环境变量" />
+              </div>
+              <div class="settings-field">
+                <label for="settingsChatDefaultProvider">chat 默认 provider</label>
+                <select id="settingsChatDefaultProvider" class="pref-select">
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openai">ChatGPT</option>
+                </select>
+              </div>
+              <div class="settings-field">
+                <label for="settingsChatDeepseekModel">chat DeepSeek model</label>
+                <input id="settingsChatDeepseekModel" class="settings-input" type="text" maxlength="120" placeholder="默认：deepseek-chat 或环境变量" />
+              </div>
+              <div class="settings-field">
+                <label for="settingsChatOpenaiModel">chat ChatGPT model</label>
+                <input id="settingsChatOpenaiModel" class="settings-input" type="text" maxlength="120" placeholder="默认：gpt-4.1-mini 或环境变量" />
+              </div>
+              <div class="settings-actions">
+                <button id="settingsSaveBtn" class="detail-retry-btn" type="button">保存设置</button>
+              </div>
+            </div>
+            <p id="settingsRestartHint" class="settings-hint"></p>
+          </section>
+        </div>
+        <section class="settings-card settings-release-card">
+          <div class="settings-release-header">
+            <h3 class="settings-card-title">Release Notes</h3>
+            <span class="settings-release-note">数据源：README / What's Changed</span>
+          </div>
+          <div id="settingsReleaseNotes" class="settings-release-list"></div>
+        </section>
+      </section>
+    </div>
+
     <div id="mobileFilterSheet" class="mobile-filter-sheet hidden" aria-hidden="true">
       <button id="mobileFilterBackdrop" class="mobile-filter-backdrop" type="button" aria-label="关闭筛选面板"></button>
       <section class="mobile-filter-panel" aria-label="筛选与来源">
@@ -264,6 +327,6 @@
       <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.3"></script>
+    <script src="/static/app.js?v=1.9.4"></script>
   </body>
 </html>

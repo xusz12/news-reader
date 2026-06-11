@@ -1915,3 +1915,180 @@ def test_news_chat_missing_key_and_busy(tmp_path: Path, monkeypatch):
 
     assert busy_res.status_code == 409
     assert busy_res.get_json()["error"] == "provider_busy"
+
+
+def test_release_notes_api_returns_items(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(tmp_path / "app_settings.json"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    payload = client.get("/api/release-notes").get_json()
+    assert payload["ok"] is True
+    assert payload["items"]
+    first = payload["items"][0]
+    assert "date" in first and "title" in first and "category" in first
+    assert first["category"] in {"NEW", "IMPROVE", "FIX"}
+
+
+def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    initial = client.get("/api/settings")
+    assert initial.status_code == 200
+    data = initial.get_json()
+    assert data["ok"] is True
+    assert data["api_status"]["openai"]["configured"] is True
+    assert data["api_status"]["deepseek"]["configured"] is True
+    dumped = json.dumps(data, ensure_ascii=False)
+    assert "sk-openai-test" not in dumped
+    assert "sk-deepseek-test" not in dumped
+
+    save_res = client.put(
+        "/api/settings",
+        json={
+            "llm": {
+                "translation": {"provider": "deepseek", "model": "deepseek-reasoner"},
+                "chat": {
+                    "default_provider": "openai",
+                    "providers": {
+                        "deepseek": {"model": "deepseek-chat-v2"},
+                        "openai": {"model": "gpt-4.1"},
+                    },
+                },
+            }
+        },
+    )
+    assert save_res.status_code == 200
+    saved = save_res.get_json()
+    assert saved["llm"]["translation"]["model"] == "deepseek-reasoner"
+    assert saved["llm"]["chat"]["default_provider"] == "openai"
+    assert saved["llm"]["chat"]["providers"]["openai"]["model"] == "gpt-4.1"
+    assert settings_path.exists() is True
+    saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert saved_file["llm"]["chat"]["providers"]["deepseek"]["model"] == "deepseek-chat-v2"
+
+
+def test_saved_models_are_used_by_chat_and_translation(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Settings Route](https://example.com/settings-route)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    assert client.put(
+        "/api/settings",
+        json={
+            "llm": {
+                "translation": {"provider": "deepseek", "model": "deepseek-translator-x"},
+                "chat": {
+                    "default_provider": "openai",
+                    "providers": {
+                        "deepseek": {"model": "deepseek-chat-x"},
+                        "openai": {"model": "gpt-4.1-mini-x"},
+                    },
+                },
+            }
+        },
+    ).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(
+                  url, source, title, author, published_at, content,
+                  content_length, raw_json, fetched_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["url"],
+                    "Reuters",
+                    "Settings Route",
+                    "Reporter",
+                    "2026-06-11 09:00:00",
+                    "Body for settings route tests.",
+                    30,
+                    "{}",
+                    ts,
+                    ts,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
+                VALUES (?, 'pending', 0, ?, ?)
+                """,
+                (item["url"], ts, ts),
+            )
+
+    captured = {}
+
+    def fake_generate_article_ai(**kwargs):
+        captured["translation_model"] = kwargs["model"]
+        return {
+            "model": kwargs["model"],
+            "key_points_zh": ["要点一", "要点二", "要点三"],
+            "conclusion_zh": "结论",
+            "body_zh": "中文正文",
+            "raw_json": "{}",
+        }
+
+    def fake_openai_chat(**kwargs):
+        captured["chat_model"] = kwargs["model"]
+        return {"provider": "openai", "model": kwargs["model"], "answer": "回答"}
+
+    monkeypatch.setattr(app_module, "generate_article_ai", fake_generate_article_ai)
+    monkeypatch.setattr(app_module, "ask_openai_news_chat", fake_openai_chat)
+
+    assert app_module.process_pending_ai_once() is True
+    assert captured["translation_model"] == "deepseek-translator-x"
+
+    chat_res = client.post(
+        f"/api/news/{item['id']}/chat",
+        json={"provider": "openai", "messages": [{"role": "user", "content": "最新进展？"}]},
+    )
+    assert chat_res.status_code == 200
+    assert captured["chat_model"] == "gpt-4.1-mini-x"

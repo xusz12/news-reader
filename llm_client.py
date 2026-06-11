@@ -49,7 +49,7 @@ def _build_messages(*, title: str, source: str, content: str) -> list[dict[str, 
     ]
 
 
-def generate_article_ai(*, title: str, source: str, content: str) -> dict[str, Any]:
+def generate_article_ai(*, title: str, source: str, content: str, model: str | None = None) -> dict[str, Any]:
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
@@ -60,7 +60,7 @@ def generate_article_ai(*, title: str, source: str, content: str) -> dict[str, A
         raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
 
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
-    model_name = _configured_model()
+    model_name = (model or "").strip() or _configured_model()
     tools = [
         {
             "type": "function",
@@ -210,6 +210,7 @@ def ask_deepseek_news_chat(
     published_at: str,
     content: str,
     messages: list[dict[str, str]],
+    model: str | None = None,
     timeout: int = 90,
 ) -> dict[str, Any]:
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -222,6 +223,7 @@ def ask_deepseek_news_chat(
         raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
 
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
+    model_name = (model or "").strip() or _configured_model()
     payload_messages = [
         {"role": "system", "content": _news_chat_system_prompt(allow_web_search=False)},
         {
@@ -238,7 +240,7 @@ def ask_deepseek_news_chat(
 
     try:
         resp = client.chat.completions.create(
-            model=_configured_model(),
+            model=model_name,
             messages=payload_messages,
             temperature=0.2,
             timeout=timeout,
@@ -255,7 +257,7 @@ def ask_deepseek_news_chat(
         raise LLMClientError("DEEPSEEK_CHAT_INVALID_OUTPUT")
     return {
         "provider": "deepseek",
-        "model": getattr(resp, "model", None) or _configured_model(),
+        "model": getattr(resp, "model", None) or model_name,
         "answer": text,
     }
 
@@ -267,6 +269,7 @@ def ask_openai_news_chat(
     published_at: str,
     content: str,
     messages: list[dict[str, str]],
+    model: str | None = None,
     timeout: int = 90,
 ) -> dict[str, Any]:
     api_key = os.getenv("OPENAI_API_KEY")
@@ -278,6 +281,7 @@ def ask_openai_news_chat(
     except Exception as exc:  # pragma: no cover - env-specific
         raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
 
+    model_name = (model or "").strip() or _configured_openai_chat_model()
     client = OpenAI(api_key=api_key)
     transcript = build_news_chat_transcript(
         title=title,
@@ -289,7 +293,7 @@ def ask_openai_news_chat(
 
     try:
         resp = client.responses.create(
-            model=_configured_openai_chat_model(),
+            model=model_name,
             instructions=_news_chat_system_prompt(allow_web_search=True),
             input=transcript,
             tools=[{"type": "web_search"}],
@@ -304,7 +308,7 @@ def ask_openai_news_chat(
         raise LLMClientError("OPENAI_CHAT_INVALID_OUTPUT")
     return {
         "provider": "openai",
-        "model": getattr(resp, "model", None) or _configured_openai_chat_model(),
+        "model": getattr(resp, "model", None) or model_name,
         "answer": text,
     }
 

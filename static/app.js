@@ -33,6 +33,13 @@ let state = {
   detailChatMessages: [],
   detailChatStatus: "",
   detailChatSending: false,
+  settingsOpen: false,
+  settingsLoading: false,
+  settingsSaving: false,
+  runtimeSettings: null,
+  releaseNotes: [],
+  settingsMessage: "",
+  settingsMessageTone: "muted",
 };
 
 const mediaIconMap = {
@@ -70,6 +77,7 @@ const mobileCollectionCloseBtn = document.getElementById("mobileCollectionCloseB
 const mobileCollectionOptions = document.getElementById("mobileCollectionOptions");
 const themeModeSelect = document.getElementById("themeModeSelect");
 const detailFontSelect = document.getElementById("detailFontSelect");
+const settingsBtn = document.getElementById("settingsBtn");
 const errorStatsBtn = document.getElementById("errorStatsBtn");
 const errorStatsPanel = document.getElementById("errorStatsPanel");
 const errorStatsBody = document.getElementById("errorStatsBody");
@@ -129,6 +137,19 @@ const detailChatStatus = document.getElementById("detailChatStatus");
 const detailChatMessages = document.getElementById("detailChatMessages");
 const detailChatInput = document.getElementById("detailChatInput");
 const detailChatSendBtn = document.getElementById("detailChatSendBtn");
+const settingsOverlay = document.getElementById("settingsOverlay");
+const settingsBackdrop = document.getElementById("settingsBackdrop");
+const settingsCloseBtn = document.getElementById("settingsCloseBtn");
+const settingsStatus = document.getElementById("settingsStatus");
+const settingsApiStatus = document.getElementById("settingsApiStatus");
+const settingsTranslationProvider = document.getElementById("settingsTranslationProvider");
+const settingsTranslationModel = document.getElementById("settingsTranslationModel");
+const settingsChatDefaultProvider = document.getElementById("settingsChatDefaultProvider");
+const settingsChatDeepseekModel = document.getElementById("settingsChatDeepseekModel");
+const settingsChatOpenaiModel = document.getElementById("settingsChatOpenaiModel");
+const settingsSaveBtn = document.getElementById("settingsSaveBtn");
+const settingsRestartHint = document.getElementById("settingsRestartHint");
+const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
 const detailAiBox = document.getElementById("detailAiBox");
 const detailAiPoints = document.getElementById("detailAiPoints");
@@ -512,6 +533,196 @@ function applyDetailFontMode(mode) {
   } catch {}
 }
 
+async function fetchRuntimeSettings() {
+  const res = await fetch("/api/settings");
+  if (!res.ok) throw new Error("settings_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "settings_fetch_failed");
+  return data;
+}
+
+async function fetchReleaseNotes() {
+  const res = await fetch("/api/release-notes");
+  if (!res.ok) throw new Error("release_notes_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "release_notes_fetch_failed");
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+function currentChatDefaultProvider() {
+  const provider = state.runtimeSettings?.llm?.chat?.default_provider;
+  return provider === "openai" ? "openai" : "deepseek";
+}
+
+function renderSettingsApiStatus() {
+  if (!settingsApiStatus) return;
+  settingsApiStatus.innerHTML = "";
+  const apiStatus = state.runtimeSettings?.api_status || {};
+  [
+    ["deepseek", "DeepSeek"],
+    ["openai", "ChatGPT"],
+  ].forEach(([key, label]) => {
+    const row = document.createElement("div");
+    row.className = "settings-api-item";
+    const name = document.createElement("div");
+    name.className = "settings-api-name";
+    name.textContent = label;
+    const badge = document.createElement("span");
+    const configured = !!apiStatus[key]?.configured;
+    badge.className = `settings-api-badge ${configured ? "ok" : "muted"}`;
+    badge.textContent = configured ? "已配置" : "未配置";
+    row.appendChild(name);
+    row.appendChild(badge);
+    settingsApiStatus.appendChild(row);
+  });
+}
+
+function renderReleaseNotes() {
+  if (!settingsReleaseNotes) return;
+  settingsReleaseNotes.innerHTML = "";
+  if (!state.releaseNotes.length) {
+    const empty = document.createElement("div");
+    empty.className = "detail-status muted";
+    empty.textContent = "暂时没有可展示的 Release Notes";
+    settingsReleaseNotes.appendChild(empty);
+    return;
+  }
+  state.releaseNotes.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "settings-release-item";
+    const top = document.createElement("div");
+    top.className = "settings-release-top";
+    const head = document.createElement("div");
+    const version = document.createElement("div");
+    version.className = "settings-release-version";
+    version.textContent = item.version || item.date || "未命名版本";
+    const title = document.createElement("div");
+    title.className = "settings-release-title";
+    title.textContent = item.title || "";
+    head.appendChild(version);
+    head.appendChild(title);
+    const meta = document.createElement("div");
+    meta.className = "settings-release-meta";
+    const badge = document.createElement("span");
+    const category = (item.category || "IMPROVE").toUpperCase();
+    badge.className = `settings-release-badge ${category.toLowerCase()}`;
+    badge.textContent = category;
+    const date = document.createElement("span");
+    date.className = "settings-release-date";
+    date.textContent = item.date || "";
+    meta.appendChild(badge);
+    meta.appendChild(date);
+    top.appendChild(head);
+    top.appendChild(meta);
+    card.appendChild(top);
+
+    const list = document.createElement("ul");
+    list.className = "settings-release-lines";
+    (item.lines || []).slice(0, 12).forEach((line) => {
+      const li = document.createElement("li");
+      li.textContent = line;
+      list.appendChild(li);
+    });
+    card.appendChild(list);
+    settingsReleaseNotes.appendChild(card);
+  });
+}
+
+function populateSettingsForm() {
+  const llm = state.runtimeSettings?.llm;
+  if (!llm) return;
+  settingsTranslationProvider.value = llm.translation?.provider || "deepseek";
+  settingsTranslationModel.value = llm.translation?.model || "";
+  settingsChatDefaultProvider.value = llm.chat?.default_provider || "deepseek";
+  settingsChatDeepseekModel.value = llm.chat?.providers?.deepseek?.model || "";
+  settingsChatOpenaiModel.value = llm.chat?.providers?.openai?.model || "";
+  settingsRestartHint.textContent = state.runtimeSettings?.restart_notice || "";
+}
+
+function renderSettingsOverlay() {
+  if (!settingsOverlay) return;
+  settingsOverlay.classList.toggle("hidden", !state.settingsOpen);
+  settingsOverlay.setAttribute("aria-hidden", state.settingsOpen ? "false" : "true");
+  if (!state.settingsOpen) return;
+  renderSettingsApiStatus();
+  renderReleaseNotes();
+  populateSettingsForm();
+  settingsSaveBtn.disabled = state.settingsSaving;
+  const statusText = state.settingsLoading
+    ? "读取中..."
+    : state.settingsSaving
+      ? "保存中..."
+      : state.settingsMessage || "设置保存到本机配置文件；API key 只展示是否已配置，不回显明文。";
+  const tone = state.settingsLoading || state.settingsSaving ? "pending" : (state.settingsMessageTone || "muted");
+  settingsStatus.textContent = statusText;
+  settingsStatus.className = `detail-status ${tone}`;
+}
+
+async function openSettingsOverlay() {
+  state.settingsOpen = true;
+  state.settingsLoading = true;
+  state.settingsMessage = "";
+  state.settingsMessageTone = "muted";
+  renderSettingsOverlay();
+  closeErrorStatsPanel();
+  try {
+    const [runtimeSettings, releaseNotes] = await Promise.all([fetchRuntimeSettings(), fetchReleaseNotes()]);
+    state.runtimeSettings = runtimeSettings;
+    state.releaseNotes = releaseNotes;
+    state.detailChatProvider = currentChatDefaultProvider();
+  } catch {
+    state.settingsMessage = "读取设置失败，请稍后重试。";
+    state.settingsMessageTone = "failed";
+  } finally {
+    state.settingsLoading = false;
+    renderSettingsOverlay();
+  }
+}
+
+function closeSettingsOverlay() {
+  state.settingsOpen = false;
+  renderSettingsOverlay();
+}
+
+async function saveRuntimeSettings() {
+  state.settingsSaving = true;
+  renderSettingsOverlay();
+  try {
+    const payload = {
+      llm: {
+        translation: {
+          provider: settingsTranslationProvider.value || "deepseek",
+          model: (settingsTranslationModel.value || "").trim(),
+        },
+        chat: {
+          default_provider: settingsChatDefaultProvider.value || "deepseek",
+          providers: {
+            deepseek: { model: (settingsChatDeepseekModel.value || "").trim() },
+            openai: { model: (settingsChatOpenaiModel.value || "").trim() },
+          },
+        },
+      },
+    };
+    const res = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
+    state.runtimeSettings = data;
+    state.detailChatProvider = currentChatDefaultProvider();
+    state.settingsMessage = "保存成功。新请求通常立即生效；如需与 worker 完全一致，可重启 Flask。";
+    state.settingsMessageTone = "ready";
+  } catch {
+    state.settingsMessage = "保存失败，请检查输入后重试。";
+    state.settingsMessageTone = "failed";
+  } finally {
+    state.settingsSaving = false;
+    renderSettingsOverlay();
+  }
+}
+
 function stopDetailPolling() {
   if (detailPollTimer) {
     window.clearInterval(detailPollTimer);
@@ -630,6 +841,9 @@ function iconSvg(name, filled = false) {
   }
   if (name === "bell") {
     return `<svg ${common}><path d="M6.5 10.2a5.5 5.5 0 1 1 11 0c0 5 2 5.8 2 7.3H4.5c0-1.5 2-2.3 2-7.3"/><path d="M10 19.3a2.2 2.2 0 0 0 4 0"/></svg>`;
+  }
+  if (name === "settings") {
+    return `<svg ${common}><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.9 1.9 0 0 1-2.7 2.7l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.9 1.9 0 1 1-3.8 0v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.9 1.9 0 1 1-2.7-2.7l.1-.1A1 1 0 0 0 6 15a1 1 0 0 0-.9-.6H5a1.9 1.9 0 1 1 0-3.8h.2A1 1 0 0 0 6 10a1 1 0 0 0-.2-1.1l-.1-.1a1.9 1.9 0 1 1 2.7-2.7l.1.1A1 1 0 0 0 9.6 6a1 1 0 0 0 .6-.9V5a1.9 1.9 0 1 1 3.8 0v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.9 1.9 0 1 1 2.7 2.7l-.1.1A1 1 0 0 0 18 10a1 1 0 0 0 .9.6h.2a1.9 1.9 0 1 1 0 3.8h-.2a1 1 0 0 0-.9.6Z"/></svg>`;
   }
   if (name === "search") {
     return `<svg ${common}><circle cx="11" cy="11" r="5.8"/><path d="m16 16 4 4"/></svg>`;
@@ -1988,7 +2202,7 @@ function resetDetailChatState({ keepProvider = false } = {}) {
   state.detailChatMessages = [];
   state.detailChatStatus = "";
   state.detailChatSending = false;
-  if (!keepProvider) state.detailChatProvider = "deepseek";
+  if (!keepProvider) state.detailChatProvider = currentChatDefaultProvider();
   if (detailChatInput) detailChatInput.value = "";
 }
 
@@ -3165,6 +3379,30 @@ if (themeModeSelect) {
   });
 }
 
+if (settingsBtn) {
+  settingsBtn.addEventListener("click", async () => {
+    if (state.settingsOpen) {
+      closeSettingsOverlay();
+      return;
+    }
+    await openSettingsOverlay();
+  });
+}
+
+if (settingsBackdrop) {
+  settingsBackdrop.addEventListener("click", closeSettingsOverlay);
+}
+
+if (settingsCloseBtn) {
+  settingsCloseBtn.addEventListener("click", closeSettingsOverlay);
+}
+
+if (settingsSaveBtn) {
+  settingsSaveBtn.addEventListener("click", async () => {
+    await saveRuntimeSettings();
+  });
+}
+
 if (searchPageSubmitBtn) {
   searchPageSubmitBtn.addEventListener("click", async () => {
     await runSearchFromPage();
@@ -3585,6 +3823,12 @@ window.addEventListener("resize", () => {
   syncSearchPageControls();
 });
 
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.settingsOpen) {
+    closeSettingsOverlay();
+  }
+});
+
 setupLoadObserver();
 renderDetail(null);
 try {
@@ -3599,6 +3843,9 @@ try {
 }
 applyResumeIcon();
 applyIcon(refreshBtn, "refresh", { label: "刷新索引" });
+if (settingsBtn) {
+  applyIcon(settingsBtn, "settings", { label: "打开设置" });
+}
 if (errorStatsBtn) {
   applyIcon(errorStatsBtn, "bell", { label: "查看当日错误统计" });
 }
@@ -3613,6 +3860,12 @@ fetchReadingCheckpoint()
   .then((cp) => {
     state.readingCheckpoint = cp;
     updateResumeButton();
+  })
+  .catch(() => {});
+fetchRuntimeSettings()
+  .then((data) => {
+    state.runtimeSettings = data;
+    state.detailChatProvider = currentChatDefaultProvider();
   })
   .catch(() => {});
 autoReindexAndLoad();
