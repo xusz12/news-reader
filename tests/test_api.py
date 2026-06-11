@@ -24,6 +24,7 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
     app_module.ensure_db()
     client = app_module.app.test_client()
 
@@ -104,6 +105,7 @@ def test_global_search_mvp(tmp_path: Path, monkeypatch):
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: name == "DEEPSEEK_API_KEY")
     app_module.ensure_db()
     client = app_module.app.test_client()
     assert client.post("/api/reindex", json={}).status_code == 200
@@ -237,6 +239,7 @@ def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
     app_module.ensure_db()
     client = app_module.app.test_client()
 
@@ -284,6 +287,7 @@ def test_read_later_cross_date_order_matches_feed_old_to_new(tmp_path: Path, mon
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: name == "DEEPSEEK_API_KEY")
     app_module.ensure_db()
     client = app_module.app.test_client()
 
@@ -343,6 +347,7 @@ def test_feed_unread_cursor_paging_survives_auto_read_shrink(tmp_path: Path, mon
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
     app_module.ensure_db()
     client = app_module.app.test_client()
     assert client.post("/api/reindex", json={}).status_code == 200
@@ -397,6 +402,7 @@ def test_search_range_and_time_filters(tmp_path: Path, monkeypatch):
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: name == "DEEPSEEK_API_KEY")
     app_module.ensure_db()
     client = app_module.app.test_client()
 
@@ -1718,6 +1724,7 @@ def test_detail_endpoint_includes_chat_providers(tmp_path: Path, monkeypatch):
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
     app_module.ensure_db()
     client = app_module.app.test_client()
     assert client.post("/api/reindex", json={}).status_code == 200
@@ -1866,6 +1873,7 @@ def test_news_chat_missing_key_and_busy(tmp_path: Path, monkeypatch):
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: name == "DEEPSEEK_API_KEY")
     app_module.ensure_db()
     client = app_module.app.test_client()
     assert client.post("/api/reindex", json={}).status_code == 200
@@ -1962,6 +1970,8 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     assert data["ok"] is True
     assert data["api_status"]["openai"]["configured"] is True
     assert data["api_status"]["deepseek"]["configured"] is True
+    assert data["llm"]["chat"]["default_provider"] == "deepseek"
+    assert data["llm"]["chat"]["providers"]["openai"]["model"] == ""
     dumped = json.dumps(data, ensure_ascii=False)
     assert "sk-openai-test" not in dumped
     assert "sk-deepseek-test" not in dumped
@@ -1989,6 +1999,101 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     assert settings_path.exists() is True
     saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved_file["llm"]["chat"]["providers"]["deepseek"]["model"] == "deepseek-chat-v2"
+
+
+def test_settings_secret_api_save_and_delete(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    saved = {}
+
+    monkeypatch.setattr(app_module, "has_secret", lambda name: name in saved)
+    monkeypatch.setattr(app_module, "write_secret", lambda name, value: saved.__setitem__(name, value))
+    monkeypatch.setattr(app_module, "delete_secret", lambda name: saved.pop(name, None))
+
+    initial = client.get("/api/settings").get_json()
+    assert initial["api_status"]["deepseek"]["configured"] is False
+    assert initial["api_status"]["openai"]["configured"] is False
+
+    save_res = client.put("/api/settings/secrets/openai", json={"key": "sk-test-openai"})
+    assert save_res.status_code == 200
+    saved_payload = save_res.get_json()
+    assert saved_payload["api_status"]["openai"]["configured"] is True
+    assert "OPENAI_API_KEY" in saved
+    dumped = json.dumps(saved_payload, ensure_ascii=False)
+    assert "sk-test-openai" not in dumped
+    assert settings_path.exists() is False
+
+    delete_res = client.delete("/api/settings/secrets/openai")
+    assert delete_res.status_code == 200
+    deleted_payload = delete_res.get_json()
+    assert deleted_payload["api_status"]["openai"]["configured"] is False
+    assert "OPENAI_API_KEY" not in saved
+
+
+def test_settings_secret_api_rejects_invalid_provider_and_empty_key(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    bad_provider = client.put("/api/settings/secrets/unknown", json={"key": "x"})
+    assert bad_provider.status_code == 400
+    assert bad_provider.get_json()["error"] == "unsupported_provider"
+
+    empty_key = client.put("/api/settings/secrets/deepseek", json={"key": "   "})
+    assert empty_key.status_code == 400
+    assert empty_key.get_json()["error"] == "empty_key"
+
+
+def test_settings_secret_api_keychain_failure_does_not_leak_key(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    def raise_failure(name, value):
+        raise app_module.SecretStoreError("write_failed")
+
+    monkeypatch.setattr(app_module, "write_secret", raise_failure)
+
+    res = client.put("/api/settings/secrets/deepseek", json={"key": "sk-sensitive-value"})
+    assert res.status_code == 500
+    payload = res.get_json()
+    assert payload["error"] == "write_failed"
+    dumped = json.dumps(payload, ensure_ascii=False)
+    assert "sk-sensitive-value" not in dumped
 
 
 def test_saved_models_are_used_by_chat_and_translation(tmp_path: Path, monkeypatch):

@@ -36,6 +36,7 @@ let state = {
   settingsOpen: false,
   settingsLoading: false,
   settingsSaving: false,
+  settingsSecretBusyProvider: "",
   runtimeSettings: null,
   releaseNotes: [],
   settingsMessage: "",
@@ -549,6 +550,26 @@ async function fetchReleaseNotes() {
   return Array.isArray(data.items) ? data.items : [];
 }
 
+async function saveApiSecret(provider, key) {
+  const res = await fetch(`/api/settings/secrets/${provider}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) throw new Error(data.error || "settings_secret_save_failed");
+  return data;
+}
+
+async function deleteApiSecret(provider) {
+  const res = await fetch(`/api/settings/secrets/${provider}`, {
+    method: "DELETE",
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) throw new Error(data.error || "settings_secret_delete_failed");
+  return data;
+}
+
 function currentChatDefaultProvider() {
   const provider = state.runtimeSettings?.llm?.chat?.default_provider;
   return provider === "openai" ? "openai" : "deepseek";
@@ -564,6 +585,8 @@ function renderSettingsApiStatus() {
   ].forEach(([key, label]) => {
     const row = document.createElement("div");
     row.className = "settings-api-item";
+    const top = document.createElement("div");
+    top.className = "settings-api-item-top";
     const name = document.createElement("div");
     name.className = "settings-api-name";
     name.textContent = label;
@@ -571,8 +594,84 @@ function renderSettingsApiStatus() {
     const configured = !!apiStatus[key]?.configured;
     badge.className = `settings-api-badge ${configured ? "ok" : "muted"}`;
     badge.textContent = configured ? "已配置" : "未配置";
-    row.appendChild(name);
-    row.appendChild(badge);
+    top.appendChild(name);
+    top.appendChild(badge);
+    row.appendChild(top);
+
+    const input = document.createElement("input");
+    input.className = "settings-input";
+    input.type = "password";
+    input.autocomplete = "off";
+    input.placeholder = configured ? "输入新 key 后保存" : "粘贴 API key";
+    input.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
+    row.appendChild(input);
+
+    const actions = document.createElement("div");
+    actions.className = "settings-actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "detail-retry-btn";
+    saveBtn.type = "button";
+    saveBtn.textContent = configured ? "更新 key" : "保存 key";
+    saveBtn.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
+    saveBtn.addEventListener("click", async () => {
+      const draft = (input.value || "").trim();
+      if (!draft) {
+        state.settingsMessage = "请输入非空 API key。";
+        state.settingsMessageTone = "failed";
+        renderSettingsOverlay();
+        return;
+      }
+      state.settingsSecretBusyProvider = key;
+      state.settingsMessage = `${label} key 保存中...`;
+      state.settingsMessageTone = "pending";
+      renderSettingsOverlay();
+      try {
+        state.runtimeSettings = await saveApiSecret(key, draft);
+        state.settingsMessage = "已保存，重启 Flask 后生效。";
+        state.settingsMessageTone = "ready";
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "";
+        state.settingsMessage =
+          code === "keychain_unavailable"
+            ? "当前机器不可用 macOS Keychain，无法保存。"
+            : "保存失败，请稍后重试。";
+        state.settingsMessageTone = "failed";
+      } finally {
+        state.settingsSecretBusyProvider = "";
+        renderSettingsOverlay();
+      }
+    });
+    actions.appendChild(saveBtn);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "detail-retry-btn";
+    deleteBtn.type = "button";
+    deleteBtn.textContent = "删除 key";
+    deleteBtn.disabled = !configured || state.settingsSaving || state.settingsSecretBusyProvider === key;
+    deleteBtn.addEventListener("click", async () => {
+      if (!window.confirm(`确认删除 ${label} API key？`)) return;
+      state.settingsSecretBusyProvider = key;
+      state.settingsMessage = `${label} key 删除中...`;
+      state.settingsMessageTone = "pending";
+      renderSettingsOverlay();
+      try {
+        state.runtimeSettings = await deleteApiSecret(key);
+        state.settingsMessage = "已删除，重启 Flask 后生效。";
+        state.settingsMessageTone = "ready";
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "";
+        state.settingsMessage =
+          code === "keychain_unavailable"
+            ? "当前机器不可用 macOS Keychain，无法删除。"
+            : "删除失败，请稍后重试。";
+        state.settingsMessageTone = "failed";
+      } finally {
+        state.settingsSecretBusyProvider = "";
+        renderSettingsOverlay();
+      }
+    });
+    actions.appendChild(deleteBtn);
+    row.appendChild(actions);
     settingsApiStatus.appendChild(row);
   });
 }
@@ -652,7 +751,7 @@ function renderSettingsOverlay() {
     ? "读取中..."
     : state.settingsSaving
       ? "保存中..."
-      : state.settingsMessage || "设置保存到本机配置文件；API key 只展示是否已配置，不回显明文。";
+      : state.settingsMessage || "模型路由保存到本机配置文件；API key 仅存 macOS Keychain，页面只显示是否已配置。";
   const tone = state.settingsLoading || state.settingsSaving ? "pending" : (state.settingsMessageTone || "muted");
   settingsStatus.textContent = statusText;
   settingsStatus.className = `detail-status ${tone}`;
@@ -2293,7 +2392,11 @@ async function requestNewsChat(item, provider, messages) {
     body: JSON.stringify({ provider, messages }),
   });
   const payload = await res.json().catch(() => ({ ok: false, error: "chat_request_failed" }));
-  if (!res.ok || !payload.ok) throw new Error(payload.error || "chat_request_failed");
+  if (!res.ok || !payload.ok) {
+    const err = new Error(payload.error || "chat_request_failed");
+    err.detail = payload.detail || "";
+    throw err;
+  }
   return payload;
 }
 
@@ -3684,7 +3787,7 @@ if (detailChatBackBtn) {
 
 if (detailChatProviderSelect) {
   detailChatProviderSelect.addEventListener("change", () => {
-    state.detailChatProvider = detailChatProviderSelect.value || "deepseek";
+    state.detailChatProvider = detailChatProviderSelect.value || "openai";
     state.detailChatMessages = [];
     state.detailChatStatus = "已切换模型，临时对话已清空。";
     if (detailChatInput) detailChatInput.value = "";

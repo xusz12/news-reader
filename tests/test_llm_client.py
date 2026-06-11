@@ -14,6 +14,7 @@ def _install_fake_openai(monkeypatch, create_impl):
             self.chat = types.SimpleNamespace(
                 completions=types.SimpleNamespace(create=create_impl)
             )
+            self.responses = types.SimpleNamespace(create=create_impl)
 
     fake_module = types.SimpleNamespace(OpenAI=FakeOpenAI)
     monkeypatch.setitem(sys.modules, "openai", fake_module)
@@ -80,6 +81,39 @@ def test_generate_article_ai_invalid_tool_payload(monkeypatch):
             content="English body " * 50,
         )
     assert "INVALID_KEY_POINTS" in str(exc.value)
+
+
+def test_generate_article_ai_reads_key_from_keychain(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    arguments = json.dumps(
+        {
+            "key_points_zh": ["要点一", "要点二", "要点三"],
+            "conclusion_zh": "一句话结论",
+            "body_zh": "中" * 260,
+        },
+        ensure_ascii=False,
+    )
+
+    def create_impl(**kwargs):
+        tool_call = types.SimpleNamespace(
+            function=types.SimpleNamespace(arguments=arguments)
+        )
+        msg = types.SimpleNamespace(tool_calls=[tool_call])
+        choice = types.SimpleNamespace(message=msg)
+        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+
+    _install_fake_openai(monkeypatch, create_impl)
+    import llm_client
+
+    importlib.reload(llm_client)
+    monkeypatch.setattr(llm_client, "read_secret", lambda name: "keychain-secret")
+    out = llm_client.generate_article_ai(
+        title="Test Title",
+        source="Reuters",
+        content="English body " * 50,
+    )
+    assert out["model"] == "deepseek-chat"
 
 
 def test_generate_article_ai_uses_configured_model_and_fallback(monkeypatch):

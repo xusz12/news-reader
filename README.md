@@ -4,6 +4,20 @@
 
 ## What's Changed
 
+### 2026-06-11 — feat: 新增 v1.9.5.1 设置页 API Key 管理
+- **文件**
+  - *secret_store.py（新文件）*、*app.py（+）*、*llm_client.py（+）*
+    - 新增 macOS Keychain secret store，统一管理 `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`
+    - 设置页新增 `PUT/DELETE /api/settings/secrets/:provider`，支持 DeepSeek / ChatGPT key 新增、更新、删除
+    - `/api/settings` 与 chat provider 状态继续只返回 `configured` 布尔值，不回显任何 key 明文
+    - LLM 调用链在环境变量缺失时可自动回退读取 Keychain
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 设置页 `LLM API 管理` 区新增每个 provider 的 password 输入、保存/更新、删除与确认交互
+    - 保存/删除后刷新状态，并明确提示“重启 Flask 后生效”
+  - *tests/test_api.py（+）*、*tests/test_llm_client.py（+）*
+    - 覆盖 key save/delete、非法 provider、空 key、失败不泄露、Keychain 回退读取
+- **影响**：用户现在可以直接在设置页安全管理 DeepSeek / ChatGPT API key，key 只存 macOS Keychain，不会写入配置文件、数据库或前端存储。
+
 ### 2026-06-11 — feat: 新增 v1.9.4 设置页 MVP
 - **文件**
   - *app.py（+189 −0）*、*settings.py（+74 −0）*、*llm_client.py（+16 −2）*

@@ -23,6 +23,7 @@ from llm_client import (
 )
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
+from secret_store import SecretStoreError, delete_secret, has_secret, write_secret
 from settings import default_app_settings, load_app_settings, resolve_daily_news_dir, resolve_db_path, save_app_settings
 
 
@@ -90,6 +91,10 @@ items.id DESC
 ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10))"
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
+SECRET_PROVIDER_MAP = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
 
 
 def news_order_by_sql(collection: str) -> str:
@@ -378,15 +383,44 @@ def current_runtime_settings() -> dict:
     return merged
 
 
+def provider_secret_name(provider: str) -> str:
+    secret_name = SECRET_PROVIDER_MAP.get((provider or "").strip().lower())
+    if not secret_name:
+        raise ValueError("unsupported_provider")
+    return secret_name
+
+
+def provider_has_configured_key(provider: str) -> bool:
+    secret_name = provider_secret_name(provider)
+    if (os.getenv(secret_name) or "").strip():
+        return True
+    try:
+        return has_secret(secret_name)
+    except SecretStoreError:
+        return False
+
+
+def save_provider_secret(provider: str, value: object) -> None:
+    secret_name = provider_secret_name(provider)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("empty_key")
+    write_secret(secret_name, value.strip())
+
+
+def remove_provider_secret(provider: str) -> None:
+    secret_name = provider_secret_name(provider)
+    delete_secret(secret_name)
+
+
 def serialize_runtime_settings() -> dict:
     settings = current_runtime_settings()
     return {
         "api_status": {
-            "deepseek": {"configured": bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())},
-            "openai": {"configured": bool((os.getenv("OPENAI_API_KEY") or "").strip())},
+            "deepseek": {"configured": provider_has_configured_key("deepseek")},
+            "openai": {"configured": provider_has_configured_key("openai")},
         },
         "llm": settings["llm"],
-        "restart_notice": "新请求通常会立即使用新配置；如需确保 worker 与长连接状态完全一致，建议重启 Flask。",
+        "restart_notice": "模型路由通常对新请求立即生效；API key 保存或删除后，建议重启 Flask 再使用。",
     }
 
 
@@ -446,12 +480,12 @@ def chat_provider_catalog() -> dict[str, dict]:
     return {
         "deepseek": {
             "label": "DeepSeek",
-            "available": bool((os.getenv("DEEPSEEK_API_KEY") or "").strip()),
+            "available": provider_has_configured_key("deepseek"),
             "note": "基于新闻正文与已有知识回答，不保证实时联网。",
         },
         "openai": {
             "label": "ChatGPT",
-            "available": bool((os.getenv("OPENAI_API_KEY") or "").strip()),
+            "available": provider_has_configured_key("openai"),
             "note": "可尝试结合联网搜索补充最新公开信息。",
         },
     }
@@ -1475,6 +1509,31 @@ def api_settings_update():
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     save_app_settings(normalized)
+    return jsonify({"ok": True, **serialize_runtime_settings()})
+
+
+@app.put("/api/settings/secrets/<provider>")
+def api_settings_secret_save(provider: str):
+    body = request.get_json(silent=True) or {}
+    try:
+        save_provider_secret(provider, body.get("key"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except SecretStoreError as exc:
+        status = 503 if exc.code == "keychain_unavailable" else 500
+        return jsonify({"ok": False, "error": exc.code}), status
+    return jsonify({"ok": True, **serialize_runtime_settings()})
+
+
+@app.delete("/api/settings/secrets/<provider>")
+def api_settings_secret_delete(provider: str):
+    try:
+        remove_provider_secret(provider)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except SecretStoreError as exc:
+        status = 503 if exc.code == "keychain_unavailable" else 500
+        return jsonify({"ok": False, "error": exc.code}), status
     return jsonify({"ok": True, **serialize_runtime_settings()})
 
 

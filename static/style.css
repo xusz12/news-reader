@@ -333,6 +333,15 @@ body.search-bar-open .topbar-search {
   border-radius: 12px;
   padding: 12px;
   background: var(--panel);
+  display: grid;
+  gap: 10px;
+}
+
+.settings-api-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .settings-api-name {

@@ -6,6 +6,8 @@ import re
 import subprocess
 from typing import Any
 
+from secret_store import SecretStoreError, read_secret
+
 
 class LLMClientError(RuntimeError):
     pass
@@ -26,6 +28,17 @@ def _configured_model() -> str:
 def _configured_openai_chat_model() -> str:
     value = (os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "").strip()
     return value or "gpt-4.1-mini"
+
+
+def _resolve_api_key(env_name: str) -> str:
+    value = (os.getenv(env_name) or "").strip()
+    if value:
+        return value
+    try:
+        secret = read_secret(env_name)
+    except SecretStoreError:
+        return ""
+    return (secret or "").strip()
 
 
 def _build_messages(*, title: str, source: str, content: str) -> list[dict[str, str]]:
@@ -50,7 +63,7 @@ def _build_messages(*, title: str, source: str, content: str) -> list[dict[str, 
 
 
 def generate_article_ai(*, title: str, source: str, content: str, model: str | None = None) -> dict[str, Any]:
-    api_key = os.getenv("DEEPSEEK_API_KEY")
+    api_key = _resolve_api_key("DEEPSEEK_API_KEY")
     if not api_key:
         raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
 
@@ -213,7 +226,7 @@ def ask_deepseek_news_chat(
     model: str | None = None,
     timeout: int = 90,
 ) -> dict[str, Any]:
-    api_key = os.getenv("DEEPSEEK_API_KEY")
+    api_key = _resolve_api_key("DEEPSEEK_API_KEY")
     if not api_key:
         raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
 
@@ -272,7 +285,7 @@ def ask_openai_news_chat(
     model: str | None = None,
     timeout: int = 90,
 ) -> dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = _resolve_api_key("OPENAI_API_KEY")
     if not api_key:
         raise LLMClientError("MISSING_OPENAI_API_KEY")
 
