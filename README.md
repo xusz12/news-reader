@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-06-12 — improve: 收敛 v1.9.6.5 设置页与 chatPage 信息密度
+- **文件**
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 设置页移除常驻解释性副标题、模型用途提示、重启提醒与冗余 `当前使用` 长文案，只在读取/保存/失败时显示状态条
+    - chatPage 移除 `归档（预留）` 与大段能力说明，标题下改为紧凑 `来源 + ● model` 状态展示
+    - chatPage 复用正文已有 `key_points_zh`，在标题下以紧凑单行要点显示；无要点时自动隐藏，不再占空白
+  - *static/app.js（+）*
+    - fallback 来源判断改为优先读取 `ai.raw_json.provider` 前缀 `codex-fallback*`，兼容 structured fallback 使用真实 Codex model 的场景
+    - DeepSeek 失败且 Codex body-only fallback 时显示“已由 GPT 完成翻译；结构化 fallback 失败，仅保留正文翻译”
+    - DeepSeek 与 Codex fallback 都失败时，正文状态明确显示“DeepSeek 失败，Codex fallback 也失败”
+- **影响**：设置页和 chatPage 的工具信息更紧凑；翻译链路一旦走 fallback，用户能更明确地区分 DeepSeek 主链路成功、GPT 结构化 fallback 成功和 body-only / 全失败场景。
+
 ### 2026-06-12 — fix: 修复 v1.9.6.3 设置页模型管理显示
 - **文件**
   - *app.py（+）*、*static/app.js（+）*

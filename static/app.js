@@ -153,7 +153,6 @@ const settingsCodexChatModelSelect = document.getElementById("settingsCodexChatM
 const settingsCodexChatModelCustom = document.getElementById("settingsCodexChatModelCustom");
 const settingsCodexChatModelCurrent = document.getElementById("settingsCodexChatModelCurrent");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
-const settingsRestartHint = document.getElementById("settingsRestartHint");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
 const detailAiBox = document.getElementById("detailAiBox");
@@ -882,19 +881,18 @@ function populateSettingsForm() {
     const resolvedDefaultTranslationModel = (state.runtimeSettings?.model_catalogs?.translation?.resolved_default_model || "deepseek-chat").trim();
     if (currentTranslationModel) {
       settingsTranslationModelCurrent.textContent = currentTranslationModel === resolvedDefaultTranslationModel
-        ? `当前使用：${currentTranslationModel}`
-        : `当前使用：${currentTranslationModel} · 该模型未验证结构化兼容性，失败时会只保留正文翻译`;
+        ? `当前：${currentTranslationModel}`
+        : `当前：${currentTranslationModel} · 结构化兼容性未验证`;
     } else {
-      settingsTranslationModelCurrent.textContent = `当前使用：${resolvedDefaultTranslationModel}（默认）`;
+      settingsTranslationModelCurrent.textContent = `当前：${resolvedDefaultTranslationModel}（默认）`;
     }
   }
   if (settingsCodexChatModelCurrent) {
     const currentCodexModel = (llm.codex_chat?.model || "").trim();
     settingsCodexChatModelCurrent.textContent = currentCodexModel
-      ? `当前使用：${currentCodexModel}`
-      : "当前使用：Codex 默认模型";
+      ? `当前：${currentCodexModel}`
+      : "当前：Codex 默认模型";
   }
-  settingsRestartHint.textContent = state.runtimeSettings?.restart_notice || "";
 }
 
 function renderSettingsOverlay() {
@@ -910,10 +908,10 @@ function renderSettingsOverlay() {
     ? "读取中..."
     : state.settingsSaving
       ? "保存中..."
-      : state.settingsMessage || "服务状态会做轻量检查；模型优先读取官方 / 本机目录，失败时自动回退候选列表。";
+      : state.settingsMessage || "";
   const tone = state.settingsLoading || state.settingsSaving ? "pending" : (state.settingsMessageTone || "muted");
   settingsStatus.textContent = statusText;
-  settingsStatus.className = `detail-status ${tone}`;
+  settingsStatus.className = `detail-status ${tone}${statusText ? "" : " hidden"}`;
 }
 
 async function openSettingsOverlay() {
@@ -2480,12 +2478,63 @@ function currentCodexChatModel() {
   return (state.runtimeSettings?.llm?.codex_chat?.model || "").trim();
 }
 
-function chatCapabilityText(meta) {
-  if (!meta) return "当前 chatPage 的 API 问答入口已下线；后续会改走 codex exec 方向。";
-  const model = meta.model || currentCodexChatModel();
-  return model
-    ? `当前使用 Codex exec 提问，模型：${model}。会基于正文上下文回答，并明确区分正文事实 / 外部补充 / 推断。`
-    : "当前使用 Codex exec 提问，模型留空时走 Codex 默认模型。会基于正文上下文回答，并明确区分正文事实 / 外部补充 / 推断。";
+function chatModelLabel(meta) {
+  const model = (meta?.model || currentCodexChatModel()).trim();
+  return model || "Codex 默认模型";
+}
+
+function parseKeyPoints(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.map((point) => (typeof point === "string" ? point.trim() : "")).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function fallbackProviderFromAi(ai) {
+  if (!ai?.raw_json) return "";
+  try {
+    return (JSON.parse(ai.raw_json || "{}")?.provider || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function isCodexFallbackAi(ai) {
+  const provider = fallbackProviderFromAi(ai);
+  return provider.startsWith("codex-fallback") || (ai?.model || "") === "codex-fallback";
+}
+
+function renderDetailChatMeta(item, codexMeta) {
+  if (!detailChatMeta) return;
+  detailChatMeta.innerHTML = "";
+
+  const source = document.createElement("span");
+  source.className = "detail-chat-source";
+  source.textContent = item.source || "未知来源";
+  detailChatMeta.appendChild(source);
+
+  const modelBadge = document.createElement("span");
+  modelBadge.className = `detail-chat-model-badge ${codexMeta.available ? "ok" : "failed"}`;
+  modelBadge.textContent = `● ${chatModelLabel(codexMeta)}`;
+  detailChatMeta.appendChild(modelBadge);
+}
+
+function renderDetailChatKeyPoints(item) {
+  if (!detailChatCapability) return;
+  const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
+  const points = parseKeyPoints(cached?.ai?.key_points_zh).slice(0, 4);
+  if (!points.length) {
+    detailChatCapability.textContent = "";
+    detailChatCapability.classList.add("hidden");
+    return;
+  }
+  detailChatCapability.textContent = points.join(" · ");
+  detailChatCapability.classList.remove("hidden");
 }
 
 function renderDetailChat(item) {
@@ -2494,16 +2543,16 @@ function renderDetailChat(item) {
   const codexMeta = providers.codex || { available: true, model: currentCodexChatModel() };
   const chatEnabled = !!codexMeta.available;
 
-  detailChatMeta.textContent = `${item.title || ""} · ${item.source || "未知来源"}`;
-  detailChatCapability.textContent = chatCapabilityText(codexMeta);
+  renderDetailChatMeta(item, codexMeta);
+  renderDetailChatKeyPoints(item);
   detailChatInput.disabled = state.detailChatSending || !chatEnabled;
   detailChatSendBtn.disabled = state.detailChatSending || !chatEnabled;
   detailChatInput.placeholder = chatEnabled
     ? "围绕这条新闻继续追问，例如：这件事对相关公司/板块意味着什么？"
-    : "当前 API chat 已停用，后续将改走 codex exec。";
+    : "Codex chat 当前不可用。";
 
   const chatReady = !!(state.detailChatMessages && state.detailChatMessages.length);
-  const statusText = state.detailChatStatus || (chatReady ? "" : (chatEnabled ? "这次对话不会保存；切换新闻或切换 Codex chat 模型后会清空。" : "当前版本不再提供 API chat provider。"));
+  const statusText = state.detailChatStatus || (chatReady ? "" : (chatEnabled ? "" : "Codex chat 当前不可用。"));
   detailChatStatus.textContent = statusText;
   detailChatStatus.className = `detail-status ${state.detailChatSending ? "pending" : statusText ? "muted" : "hidden"}`;
 
@@ -2512,8 +2561,8 @@ function renderDetailChat(item) {
     const empty = document.createElement("div");
     empty.className = "detail-chat-empty";
     empty.textContent = chatEnabled
-      ? "可以追问这条新闻的背景、影响、最新进展判断或相关公司/板块含义。"
-      : "这个区域暂时保留占位，后续 chatPage 会改走 codex exec。";
+      ? "围绕正文继续追问。"
+      : "Codex chat 当前不可用。";
     detailChatMessages.appendChild(empty);
     return;
   }
@@ -2842,15 +2891,8 @@ function renderDetail(item) {
   const detailErr = cached?.job?.last_error || item.detail_error || "";
   const ai = cached?.ai || null;
   const aiStatus = cached?.ai_status || item.ai_status || "none";
-  const isCodexFallback = (ai?.model || "") === "codex-fallback";
-  let fallbackProvider = "";
-  if (ai?.raw_json) {
-    try {
-      fallbackProvider = JSON.parse(ai.raw_json || "{}")?.provider || "";
-    } catch {
-      fallbackProvider = "";
-    }
-  }
+  const fallbackProvider = fallbackProviderFromAi(ai);
+  const isCodexFallback = isCodexFallbackAi(ai);
   const isCodexFallbackBodyOnly = fallbackProvider === "codex-fallback-body-only";
 
   detailAiBox.classList.add("hidden");
@@ -2912,7 +2954,9 @@ function renderDetail(item) {
       stopDetailPolling();
     } else if (aiStatus === "failed") {
       const err = cached?.ai_job?.last_error || item.ai_error || "中文生成失败";
-      statusEl.textContent = `中文生成失败，可重试：${err}`;
+      statusEl.textContent = err.includes("CODEX_FALLBACK")
+        ? `DeepSeek 失败，Codex fallback 也失败：${err}`
+        : `中文生成失败，可重试：${err}`;
       statusEl.className = "detail-status failed";
       contentEl.textContent = original;
       contentEl.classList.remove("hidden");

@@ -212,10 +212,7 @@
         <div id="detailChatBody" class="detail-body hidden">
           <button id="detailChatBackBtn" class="detail-return-btn" type="button">返回正文</button>
           <h3 class="detail-title">新闻提问</h3>
-          <div id="detailChatMeta" class="detail-meta"></div>
-          <div class="detail-chat-toolbar">
-            <button id="detailChatArchiveBtn" class="detail-retry-btn" type="button" disabled>归档（预留）</button>
-          </div>
+          <div id="detailChatMeta" class="detail-meta detail-chat-meta"></div>
           <div id="detailChatCapability" class="detail-summary detail-chat-capability"></div>
           <div id="detailChatStatus" class="detail-status muted">选择一条有正文的新闻后开始提问</div>
           <div id="detailChatMessages" class="detail-chat-messages"></div>
@@ -236,11 +233,10 @@
           <div>
             <div class="settings-eyebrow">Settings</div>
             <h2 class="settings-title">设置页</h2>
-            <p class="settings-subtitle">集中管理服务状态、默认模型与版本发布记录。</p>
           </div>
           <button id="settingsCloseBtn" class="detail-retry-btn" type="button">关闭</button>
         </div>
-        <div id="settingsStatus" class="detail-status muted">读取中...</div>
+        <div id="settingsStatus" class="detail-status muted hidden">读取中...</div>
         <div class="settings-grid">
           <section class="settings-card">
             <h3 class="settings-card-title">服务管理</h3>
@@ -267,12 +263,10 @@
                 <input id="settingsCodexChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Codex 模型名" />
                 <div id="settingsCodexChatModelCurrent" class="settings-field-current"></div>
               </div>
-              <p class="settings-hint">DeepSeek 只用于正文翻译 / 总结；chatPage 主链路继续走 Codex exec。</p>
               <div class="settings-actions">
                 <button id="settingsSaveBtn" class="detail-retry-btn" type="button">保存设置</button>
               </div>
             </div>
-            <p id="settingsRestartHint" class="settings-hint"></p>
           </section>
         </div>
         <section class="settings-card settings-release-card">
