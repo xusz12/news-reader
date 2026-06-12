@@ -22,6 +22,7 @@ from llm_client import (
     LLMClientError,
     generate_codex_fallback_translation,
     generate_article_ai,
+    resolve_translation_default_model,
 )
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
@@ -499,6 +500,7 @@ def parse_deepseek_model_options(payload: object) -> list[dict]:
 
 
 def deepseek_settings_snapshot(saved_model: str) -> dict:
+    resolved_default_model = resolve_translation_default_model()
     configured = provider_has_configured_key("deepseek")
     options = fallback_model_options(DEEPSEEK_MODEL_FALLBACKS, source="fallback")
     status_text = "未配置 key，使用默认候选。"
@@ -559,8 +561,9 @@ def deepseek_settings_snapshot(saved_model: str) -> dict:
         "catalog": {
             "source": source,
             "saved_model": (saved_model or "").strip(),
+            "resolved_default_model": resolved_default_model,
             "custom_allowed": True,
-            "default_label": "留空则使用 DeepSeek 默认模型",
+            "default_label": resolved_default_model,
             "options": merge_model_options(options, saved_model),
         },
     }
@@ -2615,7 +2618,7 @@ def api_news_detail(item_id: str):
                 (url,),
             ).fetchone()
             ai = conn.execute(
-                "SELECT model, key_points_zh, conclusion_zh, body_zh, generated_at FROM article_ai WHERE url=?",
+                "SELECT model, key_points_zh, conclusion_zh, body_zh, raw_json, generated_at FROM article_ai WHERE url=?",
                 (url,),
             ).fetchone()
             note_row = conn.execute(

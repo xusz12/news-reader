@@ -800,7 +800,7 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
 
   const defaultOption = document.createElement("option");
   defaultOption.value = "";
-  defaultOption.textContent = catalog?.default_label || "留空则使用默认模型";
+  defaultOption.textContent = catalog?.default_label || "deepseek-chat";
   select.appendChild(defaultOption);
 
   const values = new Set([""]);
@@ -879,9 +879,14 @@ function populateSettingsForm() {
   );
   if (settingsTranslationModelCurrent) {
     const currentTranslationModel = (llm.translation?.model || "").trim();
-    settingsTranslationModelCurrent.textContent = currentTranslationModel
-      ? `当前使用：${currentTranslationModel}`
-      : "当前使用：DeepSeek 默认模型";
+    const resolvedDefaultTranslationModel = (state.runtimeSettings?.model_catalogs?.translation?.resolved_default_model || "deepseek-chat").trim();
+    if (currentTranslationModel) {
+      settingsTranslationModelCurrent.textContent = currentTranslationModel === resolvedDefaultTranslationModel
+        ? `当前使用：${currentTranslationModel}`
+        : `当前使用：${currentTranslationModel} · 该模型未验证结构化兼容性，失败时会只保留正文翻译`;
+    } else {
+      settingsTranslationModelCurrent.textContent = `当前使用：${resolvedDefaultTranslationModel}（默认）`;
+    }
   }
   if (settingsCodexChatModelCurrent) {
     const currentCodexModel = (llm.codex_chat?.model || "").trim();
@@ -2838,6 +2843,15 @@ function renderDetail(item) {
   const ai = cached?.ai || null;
   const aiStatus = cached?.ai_status || item.ai_status || "none";
   const isCodexFallback = (ai?.model || "") === "codex-fallback";
+  let fallbackProvider = "";
+  if (ai?.raw_json) {
+    try {
+      fallbackProvider = JSON.parse(ai.raw_json || "{}")?.provider || "";
+    } catch {
+      fallbackProvider = "";
+    }
+  }
+  const isCodexFallbackBodyOnly = fallbackProvider === "codex-fallback-body-only";
 
   detailAiBox.classList.add("hidden");
   detailAiPoints.innerHTML = "";
@@ -2875,22 +2889,24 @@ function renderDetail(item) {
       } catch {
         keyPoints = [];
       }
-      if (!isCodexFallback && Array.isArray(keyPoints) && keyPoints.length) {
+      if (Array.isArray(keyPoints) && keyPoints.length) {
         keyPoints.forEach((point) => {
           const li = document.createElement("li");
           li.textContent = point;
           detailAiPoints.appendChild(li);
         });
       }
-      if (!isCodexFallback) {
+      if ((Array.isArray(keyPoints) && keyPoints.length) || (ai.conclusion_zh || "").trim()) {
         detailAiConclusion.textContent = ai.conclusion_zh || "";
         detailAiBox.classList.remove("hidden");
       }
 
-      statusEl.textContent = isCodexFallback
-        ? "Codex exec 保底翻译"
+      statusEl.textContent = isCodexFallbackBodyOnly
+        ? "已由 GPT 完成翻译；结构化 fallback 失败，仅保留正文翻译"
+        : isCodexFallback
+          ? "已由 GPT 完成翻译"
         : "中文摘要与翻译已生成";
-      statusEl.className = isCodexFallback ? "detail-status pending" : "detail-status ready";
+      statusEl.className = isCodexFallbackBodyOnly ? "detail-status pending" : "detail-status ready";
       contentEl.textContent = ai.body_zh;
       contentEl.classList.remove("hidden");
       stopDetailPolling();

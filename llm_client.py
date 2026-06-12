@@ -14,6 +14,33 @@ class LLMClientError(RuntimeError):
     pass
 
 
+def _validate_structured_translation_payload(parsed: object) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        raise LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: payload_not_object")
+
+    key_points = parsed.get("key_points_zh")
+    conclusion = parsed.get("conclusion_zh")
+    body_zh = parsed.get("body_zh")
+
+    if not isinstance(key_points, list) or not (3 <= len(key_points) <= 5):
+        raise LLMClientError("INVALID_KEY_POINTS")
+    if not all(isinstance(x, str) and x.strip() for x in key_points):
+        raise LLMClientError("INVALID_KEY_POINT_ITEM")
+    if not isinstance(conclusion, str) or not conclusion.strip():
+        raise LLMClientError("INVALID_CONCLUSION")
+    if not isinstance(body_zh, str):
+        raise LLMClientError("INVALID_BODY_ZH")
+    body_text = body_zh.strip()
+    if not body_text or not _contains_cjk(body_text):
+        raise LLMClientError("INVALID_BODY_ZH")
+
+    return {
+        "key_points_zh": [x.strip() for x in key_points],
+        "conclusion_zh": conclusion.strip(),
+        "body_zh": body_text,
+    }
+
+
 def _contains_cjk(text: str) -> bool:
     for char in text:
         code = ord(char)
@@ -25,6 +52,10 @@ def _contains_cjk(text: str) -> bool:
 def _configured_model() -> str:
     value = (os.getenv("NEWS_READER_LLM_MODEL") or "").strip()
     return value or "deepseek-chat"
+
+
+def resolve_translation_default_model() -> str:
+    return _configured_model()
 
 
 def _resolve_api_key(env_name: str) -> str:
@@ -123,26 +154,11 @@ def generate_article_ai(*, title: str, source: str, content: str, model: str | N
     except Exception as exc:
         raise LLMClientError(f"INVALID_TOOL_ARGUMENTS_JSON: {exc}") from exc
 
-    key_points = parsed.get("key_points_zh")
-    conclusion = parsed.get("conclusion_zh")
-    body_zh = parsed.get("body_zh")
-    if not isinstance(key_points, list) or not (3 <= len(key_points) <= 5):
-        raise LLMClientError("INVALID_KEY_POINTS")
-    if not all(isinstance(x, str) and x.strip() for x in key_points):
-        raise LLMClientError("INVALID_KEY_POINT_ITEM")
-    if not isinstance(conclusion, str) or not conclusion.strip():
-        raise LLMClientError("INVALID_CONCLUSION")
-    if not isinstance(body_zh, str):
-        raise LLMClientError("INVALID_BODY_ZH")
-    body_text = body_zh.strip()
-    if not body_text or not _contains_cjk(body_text):
-        raise LLMClientError("INVALID_BODY_ZH")
+    normalized = _validate_structured_translation_payload(parsed)
 
     return {
         "model": getattr(resp, "model", None) or model_name,
-        "key_points_zh": [x.strip() for x in key_points],
-        "conclusion_zh": conclusion.strip(),
-        "body_zh": body_text,
+        **normalized,
         "raw_json": json.dumps(parsed, ensure_ascii=False),
     }
 
@@ -166,7 +182,11 @@ def generate_codex_fallback_translation(
         truncated = True
 
     prompt = (
-        "把下面英文新闻正文完整翻译成中文，只输出译文，不要总结，不要解释，不要补充标题。\n"
+        "你是专业新闻编辑与翻译。请基于英文新闻正文返回一个 JSON 对象，不要输出 JSON 以外的任何内容。\n"
+        "JSON 字段要求：\n"
+        '- "key_points_zh": 3 到 5 条中文要点数组，每条一句话\n'
+        '- "conclusion_zh": 一句中文结论\n'
+        '- "body_zh": 完整中文翻译，保持段落结构，不遗漏关键信息\n'
         f"来源：{source or '未知'}\n"
         f"标题：{title or '无标题'}\n\n"
         f"{body}"
@@ -197,28 +217,55 @@ def generate_codex_fallback_translation(
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
     try:
-        body_zh = Path(output_path).read_text(encoding="utf-8").strip()
+        raw_output = Path(output_path).read_text(encoding="utf-8").strip()
     except Exception:
-        body_zh = ""
+        raw_output = ""
     finally:
         Path(output_path).unlink(missing_ok=True)
 
     if proc.returncode != 0:
         detail = stderr or stdout or f"exit={proc.returncode}"
         raise LLMClientError(f"CODEX_FALLBACK_FAILED: {detail[:300]}")
-    if not body_zh or not _contains_cjk(body_zh):
-        raise LLMClientError("CODEX_FALLBACK_INVALID_OUTPUT")
 
     raw_payload = {
-        "provider": "codex-fallback",
+        "provider": "codex-fallback-structured",
         "truncated": truncated,
         "stdout": stdout[:4000],
         "stderr": stderr[:1000],
     }
-    return {
-        "model": model_name or "codex-fallback",
-        "key_points_zh": [],
-        "conclusion_zh": "",
-        "body_zh": body_zh,
-        "raw_json": json.dumps(raw_payload, ensure_ascii=False),
-    }
+
+    try:
+        parsed = json.loads(raw_output)
+        normalized = _validate_structured_translation_payload(parsed)
+        return {
+            "model": model_name or "codex-fallback",
+            **normalized,
+            "raw_json": json.dumps(
+                {
+                    **raw_payload,
+                    "structured_success": True,
+                    "parsed": parsed,
+                },
+                ensure_ascii=False,
+            ),
+        }
+    except Exception as exc:
+        body_zh = raw_output.strip()
+        if not body_zh or not _contains_cjk(body_zh):
+            detail = str(exc) if isinstance(exc, LLMClientError) else "CODEX_FALLBACK_INVALID_OUTPUT"
+            raise LLMClientError(detail)
+        return {
+            "model": model_name or "codex-fallback",
+            "key_points_zh": [],
+            "conclusion_zh": "",
+            "body_zh": body_zh,
+            "raw_json": json.dumps(
+                {
+                    **raw_payload,
+                    "provider": "codex-fallback-body-only",
+                    "structured_success": False,
+                    "structured_error": str(exc),
+                },
+                ensure_ascii=False,
+            ),
+        }

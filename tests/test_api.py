@@ -1563,10 +1563,10 @@ def test_ai_fallback_to_codex_success(tmp_path: Path, monkeypatch):
     def succeed_fallback(**kwargs):
         return {
             "model": "codex-fallback",
-            "key_points_zh": [],
-            "conclusion_zh": "",
+            "key_points_zh": ["要点一", "要点二", "要点三"],
+            "conclusion_zh": "兜底结论",
             "body_zh": "这是 Codex 保底译文。",
-            "raw_json": '{"provider":"codex-fallback"}',
+            "raw_json": '{"provider":"codex-fallback-structured","structured_success":true}',
         }
 
     monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
@@ -1576,7 +1576,7 @@ def test_ai_fallback_to_codex_success(tmp_path: Path, monkeypatch):
 
     with app_module.db_conn() as conn:
         ai_row = conn.execute(
-            "SELECT model, key_points_zh, conclusion_zh, body_zh FROM article_ai WHERE url=?",
+            "SELECT model, key_points_zh, conclusion_zh, body_zh, raw_json FROM article_ai WHERE url=?",
             ("https://example.com/fallback",),
         ).fetchone()
         job_row = conn.execute(
@@ -1586,8 +1586,9 @@ def test_ai_fallback_to_codex_success(tmp_path: Path, monkeypatch):
 
     assert ai_row["model"] == "codex-fallback"
     assert ai_row["body_zh"] == "这是 Codex 保底译文。"
-    assert ai_row["key_points_zh"] == "[]"
-    assert ai_row["conclusion_zh"] == ""
+    assert ai_row["key_points_zh"] == '["要点一", "要点二", "要点三"]'
+    assert ai_row["conclusion_zh"] == "兜底结论"
+    assert "codex-fallback-structured" in ai_row["raw_json"]
     assert job_row["status"] == "success"
     assert job_row["last_error"] is None
 
@@ -1657,6 +1658,112 @@ def test_ai_fallback_to_codex_failure_keeps_error(tmp_path: Path, monkeypatch):
     assert job_row["status"] == "failed"
     assert "INVALID_TOOL_ARGUMENTS_JSON" in job_row["last_error"]
     assert "CODEX_FALLBACK_FAILED" in job_row["last_error"]
+
+
+def test_ai_fallback_to_codex_body_only_degrades_cleanly(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO source_files(path, mtime, size, last_scanned_at, item_count)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "dailyFreshNews_2026-06-04.md",
+                1717488000.0,
+                123,
+                "2026-06-04 16:59:00",
+                1,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO items(
+              id, source_file, item_order, published_at, date, time, source, source_type,
+              source_name, title, summary, url, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "fallback-body-item",
+                "dailyFreshNews_2026-06-04.md",
+                1,
+                "2026-06-04 17:00:00",
+                "2026-06-04",
+                "17:00:00",
+                "Reuters",
+                "article",
+                "Reuters",
+                "Fallback body title",
+                "Fallback body summary",
+                "https://example.com/fallback-body",
+                "2026-06-04 17:00:00",
+                "2026-06-04 17:00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/fallback-body",
+                "Fallback body title",
+                "Reuters",
+                "Original english body",
+                21,
+                "2026-06-04 17:00:00",
+                "2026-06-04 17:00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_ai(url, model, key_points_zh, conclusion_zh, body_zh, raw_json, generated_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/fallback-body",
+                "codex-fallback",
+                "[]",
+                "",
+                "这是只有正文的兜底翻译。",
+                '{"provider":"codex-fallback-body-only","structured_success":false,"structured_error":"INVALID_JSON"}',
+                "2026-06-04 17:10:00",
+                "2026-06-04 17:10:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_jobs(url, status, attempts, queued_at, started_at, finished_at, updated_at)
+            VALUES (?, 'success', 1, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/fallback-body",
+                "2026-06-04 17:01:00",
+                "2026-06-04 17:02:00",
+                "2026-06-04 17:03:00",
+                "2026-06-04 17:03:00",
+            ),
+        )
+
+    detail_res = client.get("/api/news/fallback-body-item/detail")
+    assert detail_res.status_code == 200
+    payload = detail_res.get_json()
+    assert payload["ai"]["model"] == "codex-fallback"
+    assert payload["ai"]["key_points_zh"] == "[]"
+    assert payload["ai"]["conclusion_zh"] == ""
+    assert "codex-fallback-body-only" in payload["ai"]["raw_json"]
 
 
 def test_error_stats_today_with_and_without_errors(tmp_path: Path, monkeypatch):
@@ -2115,6 +2222,8 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     assert data["api_status"]["codex"]["exec_available"] is True
     assert data["api_status"]["codex"]["models_readable"] is True
     assert data["model_catalogs"]["translation"]["source"] == "official"
+    assert data["model_catalogs"]["translation"]["resolved_default_model"] == "deepseek-chat"
+    assert data["model_catalogs"]["translation"]["default_label"] == "deepseek-chat"
     assert data["model_catalogs"]["translation"]["options"][0]["value"] == "deepseek-v4-flash"
     assert data["model_catalogs"]["codex_chat"]["source"] == "codex_debug"
     assert data["model_catalogs"]["codex_chat"]["options"][0] == {
@@ -2145,6 +2254,30 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved_file["llm"]["translation"]["model"] == "deepseek-reasoner"
     assert saved_file["llm"]["codex_chat"]["model"] == "gpt-5-codex"
+
+
+def test_settings_translation_resolved_default_model_respects_env(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_LLM_MODEL", "deepseek-v4-flash")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: None)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    payload = client.get("/api/settings").get_json()
+    assert payload["model_catalogs"]["translation"]["resolved_default_model"] == "deepseek-v4-flash"
+    assert payload["model_catalogs"]["translation"]["default_label"] == "deepseek-v4-flash"
+    assert payload["llm"]["translation"]["model"] == ""
 
 
 def test_deepseek_model_catalog_fallback_keeps_saved_model(tmp_path: Path, monkeypatch):
