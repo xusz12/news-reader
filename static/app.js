@@ -29,8 +29,9 @@ let state = {
   searchTime: "all",
   feedUnreadCursor: null,
   detailView: "detail",
-  detailChatProvider: "openai",
   detailChatMessages: [],
+  detailChatSessionId: "",
+  detailChatModel: "",
   detailChatStatus: "",
   detailChatSending: false,
   settingsOpen: false,
@@ -144,6 +145,7 @@ const settingsStatus = document.getElementById("settingsStatus");
 const settingsApiStatus = document.getElementById("settingsApiStatus");
 const settingsTranslationProvider = document.getElementById("settingsTranslationProvider");
 const settingsTranslationModel = document.getElementById("settingsTranslationModel");
+const settingsCodexChatModel = document.getElementById("settingsCodexChatModel");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
 const settingsRestartHint = document.getElementById("settingsRestartHint");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
@@ -566,10 +568,6 @@ async function deleteApiSecret(provider) {
   return data;
 }
 
-function currentChatDefaultProvider() {
-  return "openai";
-}
-
 function renderSettingsApiStatus() {
   if (!settingsApiStatus) return;
   settingsApiStatus.innerHTML = "";
@@ -724,6 +722,7 @@ function populateSettingsForm() {
   if (!llm) return;
   settingsTranslationProvider.value = llm.translation?.provider || "deepseek";
   settingsTranslationModel.value = llm.translation?.model || "";
+  settingsCodexChatModel.value = llm.codex_chat?.model || "";
   settingsRestartHint.textContent = state.runtimeSettings?.restart_notice || "";
 }
 
@@ -740,7 +739,7 @@ function renderSettingsOverlay() {
     ? "读取中..."
     : state.settingsSaving
       ? "保存中..."
-      : state.settingsMessage || "翻译 / 总结模型保存到本机配置文件；DeepSeek API key 仅存 macOS Keychain，页面只显示是否已配置。";
+      : state.settingsMessage || "翻译 / 总结模型与 Codex chat 模型保存到本机配置文件；DeepSeek API key 仅存 macOS Keychain，页面只显示是否已配置。";
   const tone = state.settingsLoading || state.settingsSaving ? "pending" : (state.settingsMessageTone || "muted");
   settingsStatus.textContent = statusText;
   settingsStatus.className = `detail-status ${tone}`;
@@ -775,11 +774,15 @@ async function saveRuntimeSettings() {
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
+    const previousCodexModel = state.runtimeSettings?.llm?.codex_chat?.model || "";
     const payload = {
       llm: {
         translation: {
           provider: settingsTranslationProvider.value || "deepseek",
           model: (settingsTranslationModel.value || "").trim(),
+        },
+        codex_chat: {
+          model: (settingsCodexChatModel.value || "").trim(),
         },
       },
     };
@@ -791,7 +794,14 @@ async function saveRuntimeSettings() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
     state.runtimeSettings = data;
-    state.settingsMessage = "保存成功。翻译 / 总结新请求通常立即生效；如需与 worker 完全一致，可重启 Flask。";
+    const currentCodexModel = data.llm?.codex_chat?.model || "";
+    if (currentCodexModel !== previousCodexModel) {
+      state.detailChatSessionId = "";
+      state.detailChatModel = "";
+      state.detailChatMessages = [];
+      state.detailChatStatus = "Codex chat 模型已切换，当前临时对话已清空。";
+    }
+    state.settingsMessage = "保存成功。翻译 / 总结与 Codex chat 的新请求通常立即生效；如需与 worker 完全一致，可重启 Flask。";
     state.settingsMessageTone = "ready";
   } catch {
     state.settingsMessage = "保存失败，请检查输入后重试。";
@@ -2279,9 +2289,10 @@ function normalizedDetailNote(cached) {
 function resetDetailChatState({ keepProvider = false } = {}) {
   state.detailView = "detail";
   state.detailChatMessages = [];
+  state.detailChatSessionId = "";
+  state.detailChatModel = "";
   state.detailChatStatus = "";
   state.detailChatSending = false;
-  if (!keepProvider) state.detailChatProvider = currentChatDefaultProvider();
   if (detailChatInput) detailChatInput.value = "";
 }
 
@@ -2290,36 +2301,26 @@ function chatProvidersFromItem(item) {
   return cached?.chat_providers || {};
 }
 
-function resolveDetailChatProvider(item) {
-  const providers = chatProvidersFromItem(item);
-  if (providers[state.detailChatProvider]?.available) return state.detailChatProvider;
-  if (providers.openai?.available) return "openai";
-  if (providers.deepseek?.available) return "deepseek";
-  return state.detailChatProvider || "openai";
+function currentCodexChatModel() {
+  return (state.runtimeSettings?.llm?.codex_chat?.model || "").trim();
 }
 
-function chatCapabilityText(provider, meta) {
+function chatCapabilityText(meta) {
   if (!meta) return "当前 chatPage 的 API 问答入口已下线；后续会改走 codex exec 方向。";
-  if (provider === "openai") {
-    return meta.available
-      ? "ChatGPT：可尝试联网搜索补充最新公开信息；会区分正文事实、外部补充和推断。"
-      : "ChatGPT：当前未配置 OPENAI_API_KEY，已禁用。";
-  }
-  return meta.available
-    ? "DeepSeek：基于新闻正文与已有知识回答，不保证实时联网或最新进展。"
-    : "DeepSeek：当前未配置 DEEPSEEK_API_KEY，已禁用。";
+  const model = meta.model || currentCodexChatModel();
+  return model
+    ? `当前使用 Codex exec 提问，模型：${model}。会基于正文上下文回答，并明确区分正文事实 / 外部补充 / 推断。`
+    : "当前使用 Codex exec 提问，模型留空时走 Codex 默认模型。会基于正文上下文回答，并明确区分正文事实 / 外部补充 / 推断。";
 }
 
 function renderDetailChat(item) {
   if (!item) return;
   const providers = chatProvidersFromItem(item);
-  const provider = resolveDetailChatProvider(item);
-  const availableProviders = Object.entries(providers).filter(([, meta]) => meta?.available);
-  const chatEnabled = availableProviders.length > 0;
-  state.detailChatProvider = provider;
+  const codexMeta = providers.codex || { available: true, model: currentCodexChatModel() };
+  const chatEnabled = !!codexMeta.available;
 
   detailChatMeta.textContent = `${item.title || ""} · ${item.source || "未知来源"}`;
-  detailChatCapability.textContent = chatCapabilityText(provider, providers[provider]);
+  detailChatCapability.textContent = chatCapabilityText(codexMeta);
   detailChatInput.disabled = state.detailChatSending || !chatEnabled;
   detailChatSendBtn.disabled = state.detailChatSending || !chatEnabled;
   detailChatInput.placeholder = chatEnabled
@@ -2327,7 +2328,7 @@ function renderDetailChat(item) {
     : "当前 API chat 已停用，后续将改走 codex exec。";
 
   const chatReady = !!(state.detailChatMessages && state.detailChatMessages.length);
-  const statusText = state.detailChatStatus || (chatReady ? "" : (chatEnabled ? "这次对话不会保存；切换新闻后会清空。" : "当前版本不再提供 API chat provider。"));
+  const statusText = state.detailChatStatus || (chatReady ? "" : (chatEnabled ? "这次对话不会保存；切换新闻或切换 Codex chat 模型后会清空。" : "当前版本不再提供 API chat provider。"));
   detailChatStatus.textContent = statusText;
   detailChatStatus.className = `detail-status ${state.detailChatSending ? "pending" : statusText ? "muted" : "hidden"}`;
 
@@ -2357,11 +2358,11 @@ function renderDetailChat(item) {
   detailChatMessages.scrollTop = detailChatMessages.scrollHeight;
 }
 
-async function requestNewsChat(item, provider, messages) {
+async function requestNewsChat(item, requestPayload) {
   const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider, messages }),
+    body: JSON.stringify(requestPayload),
   });
   const payload = await res.json().catch(() => ({ ok: false, error: "chat_request_failed" }));
   if (!res.ok || !payload.ok) {
@@ -2376,13 +2377,15 @@ async function sendDetailChatMessage() {
   if (!state.selectedId || state.detailChatSending) return;
   const item = state.itemsById.get(state.selectedId);
   if (!item) return;
-  if (!Object.keys(chatProvidersFromItem(item)).length) {
-    state.detailChatStatus = "当前 API chat 已下线，后续会改走 codex exec。";
-    renderDetailChat(item);
-    return;
-  }
   const content = (detailChatInput.value || "").trim().slice(0, DETAIL_CHAT_MAX_LEN);
   if (!content) return;
+  const configuredModel = currentCodexChatModel();
+  const reset = !!state.detailChatSessionId && !!state.detailChatModel && configuredModel !== state.detailChatModel;
+  if (reset) {
+    state.detailChatMessages = [];
+    state.detailChatSessionId = "";
+    state.detailChatStatus = "Codex chat 模型已切换，已为你重新开始一轮对话。";
+  }
 
   state.detailChatMessages = [...state.detailChatMessages, { role: "user", content }];
   state.detailChatSending = true;
@@ -2391,20 +2394,32 @@ async function sendDetailChatMessage() {
   renderDetailChat(item);
 
   try {
-    const payload = await requestNewsChat(item, state.detailChatProvider, state.detailChatMessages);
+    const payload = await requestNewsChat(item, {
+      question: content,
+      session_id: state.detailChatSessionId,
+      model: configuredModel,
+      reset,
+    });
     state.detailChatMessages = [...state.detailChatMessages, { role: "assistant", content: payload.answer || "" }];
-    state.detailChatStatus = `${payload.provider === "openai" ? "ChatGPT" : "DeepSeek"} · ${payload.model || ""}`.trim();
+    state.detailChatSessionId = payload.session_id || "";
+    state.detailChatModel = configuredModel;
+    state.detailChatStatus = `${payload.provider === "codex" ? "Codex" : "助手"} · ${payload.model || "默认模型"}`.trim();
   } catch (error) {
     const code = error instanceof Error ? error.message : "chat_request_failed";
     const labelMap = {
       detail_not_ready: "正文还没准备好，暂时不能提问。",
-      missing_openai_api_key: "ChatGPT 当前未配置 OPENAI_API_KEY。",
-      missing_deepseek_api_key: "DeepSeek 当前未配置 DEEPSEEK_API_KEY。",
       provider_busy: "该模型当前正忙，请稍后重试。",
       provider_timeout: "请求超时，请稍后重试。",
-      provider_failed: "模型调用失败，请稍后重试。",
-      chat_disabled: "当前 API chat 已下线，后续会改走 codex exec。",
+      provider_failed: "Codex 调用失败，请稍后重试。",
+      session_invalid: "上轮对话 session 已失效，请重新开始。",
+      missing_session_id: "Codex 没有返回可继续对话的 session id，请重试。",
+      empty_answer: "Codex 没有返回有效回答，请重试。",
     };
+    if (code === "session_invalid") {
+      state.detailChatSessionId = "";
+      state.detailChatModel = "";
+      state.detailChatMessages = state.detailChatMessages.slice(0, -1);
+    }
     state.detailChatStatus = labelMap[code] || "发送失败，请稍后重试。";
   } finally {
     state.detailChatSending = false;
@@ -3935,7 +3950,6 @@ fetchReadingCheckpoint()
 fetchRuntimeSettings()
   .then((data) => {
     state.runtimeSettings = data;
-    state.detailChatProvider = currentChatDefaultProvider();
   })
   .catch(() => {});
 autoReindexAndLoad();

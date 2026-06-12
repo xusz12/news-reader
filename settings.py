@@ -17,6 +17,9 @@ DEFAULT_APP_SETTINGS = {
             "provider": "deepseek",
             "model": "",
         },
+        "codex_chat": {
+            "model": "",
+        },
     }
 }
 
@@ -62,6 +65,12 @@ def load_app_settings() -> dict:
             base["llm"]["translation"]["provider"] = provider.strip()
         if isinstance(model, str):
             base["llm"]["translation"]["model"] = model.strip()
+
+    codex_chat = llm.get("codex_chat")
+    if isinstance(codex_chat, dict):
+        model = codex_chat.get("model")
+        if isinstance(model, str):
+            base["llm"]["codex_chat"]["model"] = model.strip()
 
     return base
 

@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -16,8 +17,6 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from llm_client import (
     LLMClientError,
-    ask_deepseek_news_chat,
-    ask_openai_news_chat,
     generate_article_ai,
     generate_gemini_fallback_translation,
 )
@@ -37,10 +36,8 @@ README_PATH = BASE_DIR / "README.md"
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 
 DETAIL_LOCK = threading.Lock()
-CHAT_PROVIDER_LOCKS = {
-    "deepseek": threading.Lock(),
-    "openai": threading.Lock(),
-}
+CODEX_CHAT_LOCKS: dict[str, threading.Lock] = {}
+CODEX_CHAT_LOCKS_GUARD = threading.Lock()
 WORKER_THREAD: threading.Thread | None = None
 WORKER_STOP = threading.Event()
 
@@ -366,6 +363,11 @@ def current_runtime_settings() -> dict:
                 merged["llm"]["translation"]["provider"] = provider
             if isinstance(model, str):
                 merged["llm"]["translation"]["model"] = model
+        codex_chat = llm.get("codex_chat")
+        if isinstance(codex_chat, dict):
+            model = codex_chat.get("model")
+            if isinstance(model, str):
+                merged["llm"]["codex_chat"]["model"] = model.strip()
     return merged
 
 
@@ -405,7 +407,7 @@ def serialize_runtime_settings() -> dict:
             "deepseek": {"configured": provider_has_configured_key("deepseek")},
         },
         "llm": settings["llm"],
-        "restart_notice": "翻译 / 总结模型的新请求通常立即生效；API key 保存或删除后，建议重启 Flask 再使用。",
+        "restart_notice": "翻译 / 总结模型与 Codex chat 模型对新请求通常立即生效；API key 保存或删除后，建议重启 Flask 再使用。",
     }
 
 
@@ -422,10 +424,14 @@ def validate_runtime_settings(payload: object) -> dict:
 
     translation_provider = (translation.get("provider") or "").strip().lower()
     translation_model = (translation.get("model") or "").strip()
+    codex_chat = llm.get("codex_chat") if isinstance(llm.get("codex_chat"), dict) else {}
+    codex_chat_model = (codex_chat.get("model") or "").strip()
     if translation_provider != "deepseek":
         raise ValueError("unsupported_translation_provider")
     if len(translation_model) > 120:
         raise ValueError("invalid_translation_model")
+    if len(codex_chat_model) > 120:
+        raise ValueError("invalid_codex_chat_model")
 
     normalized = {
         "llm": {
@@ -433,13 +439,134 @@ def validate_runtime_settings(payload: object) -> dict:
                 "provider": "deepseek",
                 "model": translation_model,
             },
+            "codex_chat": {
+                "model": codex_chat_model,
+            },
         }
     }
     return normalized
 
 
 def chat_provider_catalog() -> dict[str, dict]:
-    return {}
+    llm = current_runtime_settings()["llm"]
+    model = (llm.get("codex_chat", {}).get("model") or "").strip()
+    return {
+        "codex": {
+            "label": "Codex",
+            "available": True,
+            "note": "基于新闻正文上下文回答；可结合外部知识，无法确认的最新进展会明确说明。",
+            "model": model,
+        }
+    }
+
+
+def current_codex_chat_model() -> str:
+    llm = current_runtime_settings()["llm"]
+    return (llm.get("codex_chat", {}).get("model") or "").strip()
+
+
+def codex_chat_lock(item_id: str) -> threading.Lock:
+    with CODEX_CHAT_LOCKS_GUARD:
+        return CODEX_CHAT_LOCKS.setdefault(item_id, threading.Lock())
+
+
+def build_codex_chat_prompt(*, title: str, source: str, published_at: str, content: str, question: str) -> str:
+    return (
+        "你是一名新闻研究助手。请基于下面的新闻正文作为引用锚点来回答用户问题。\n"
+        "要求：\n"
+        "1. 用中文，简洁但信息充分。\n"
+        "2. 明确区分“正文事实”“外部补充”“推断/判断”。\n"
+        "3. 可以结合外部知识回答，但如果无法确认最新进展，必须直接说明不确定。\n"
+        "4. 不要假装看到了正文里没有的信息。\n\n"
+        f"新闻标题：{title}\n"
+        f"新闻来源：{source}\n"
+        f"发布时间：{published_at}\n"
+        "新闻正文：\n"
+        f"{content}\n\n"
+        f"用户问题：{question}"
+    )
+
+
+def run_codex_chat(*, question: str, title: str, source: str, published_at: str, content: str, session_id: str = "", model: str = "", reset: bool = False, timeout: int = 90) -> dict:
+    prompt = question.strip()
+    if not prompt:
+        raise ValueError("empty_question")
+
+    session = (session_id or "").strip()
+    use_resume = bool(session) and not reset
+    command = ["codex", "exec"]
+    if use_resume:
+        command.extend(["resume", session, prompt])
+    else:
+        command.append(
+            build_codex_chat_prompt(
+                title=title,
+                source=source,
+                published_at=published_at,
+                content=content,
+                question=prompt,
+            )
+        )
+    command.extend(["--json", "--skip-git-repo-check"])
+    if model:
+        command.extend(["--model", model])
+
+    with tempfile.NamedTemporaryFile(prefix="news-reader-codex-", suffix=".txt", delete=False) as handle:
+        output_path = handle.name
+    command.extend(["--output-last-message", output_path])
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(BASE_DIR),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("codex_timeout") from exc
+
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    thread_id = ""
+    for line in stdout.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") == "thread.started":
+            thread_id = (payload.get("thread_id") or "").strip()
+            break
+
+    answer = ""
+    try:
+        answer = Path(output_path).read_text(encoding="utf-8").strip()
+    except Exception:
+        answer = ""
+    finally:
+        Path(output_path).unlink(missing_ok=True)
+
+    if completed.returncode != 0:
+        detail = (stderr or stdout).strip()
+        lowered = detail.lower()
+        if use_resume and ("no session" in lowered or "not found" in lowered or "invalid" in lowered):
+            raise RuntimeError("codex_session_invalid")
+        raise RuntimeError(detail or "codex_failed")
+
+    if not thread_id:
+        raise RuntimeError("codex_missing_session_id")
+    if not answer:
+        raise RuntimeError("codex_empty_answer")
+
+    return {
+        "provider": "codex",
+        "session_id": thread_id,
+        "model": model,
+        "answer": answer,
+    }
 
 
 def normalize_chat_messages(raw_messages: object, *, max_messages: int = 20, max_chars: int = 4000) -> list[dict[str, str]]:
@@ -2245,7 +2372,73 @@ def api_news_detail(item_id: str):
 
 @app.post("/api/news/<item_id>/chat")
 def api_news_chat(item_id: str):
-    return jsonify({"ok": False, "error": "chat_disabled"}), 410
+    body = request.get_json(silent=True) or {}
+    question = (body.get("question") or "").strip()
+    if not question:
+        return jsonify({"ok": False, "error": "empty_question"}), 400
+
+    session_id = (body.get("session_id") or "").strip()
+    requested_model = (body.get("model") or "").strip()
+    reset = bool(body.get("reset"))
+    model = requested_model or current_codex_chat_model()
+
+    conn = db_conn()
+    try:
+        item = conn.execute(
+            "SELECT id, title, url, source, published_at FROM items WHERE id=?",
+            (item_id,),
+        ).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        detail = conn.execute(
+            """
+            SELECT title, source, published_at, content
+            FROM article_details
+            WHERE url=?
+            """,
+            (url,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not detail or not (detail["content"] or "").strip():
+        return jsonify({"ok": False, "error": "detail_not_ready"}), 409
+
+    lock = codex_chat_lock(item_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "provider_busy"}), 409
+
+    try:
+        payload = run_codex_chat(
+            question=question,
+            session_id=session_id,
+            model=model,
+            reset=reset,
+            title=(detail["title"] or item["title"] or "").strip(),
+            source=(detail["source"] or item["source"] or "").strip(),
+            published_at=(detail["published_at"] or item["published_at"] or "").strip(),
+            content=(detail["content"] or "").strip(),
+        )
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except RuntimeError as exc:
+        error = str(exc)
+        if error == "codex_timeout":
+            return jsonify({"ok": False, "error": "provider_timeout"}), 504
+        if error == "codex_session_invalid":
+            return jsonify({"ok": False, "error": "session_invalid"}), 409
+        if error == "codex_missing_session_id":
+            return jsonify({"ok": False, "error": "missing_session_id"}), 502
+        if error == "codex_empty_answer":
+            return jsonify({"ok": False, "error": "empty_answer"}), 502
+        return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
+    finally:
+        lock.release()
+
+    return jsonify({"ok": True, **payload})
 
 
 @app.get("/api/market-tags")

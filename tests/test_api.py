@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1729,7 +1730,8 @@ def test_detail_endpoint_includes_chat_providers(tmp_path: Path, monkeypatch):
     payload = client.get(f"/api/news/{item['id']}/detail").get_json()
 
     assert payload["ok"] is True
-    assert payload["chat_providers"] == {}
+    assert payload["chat_providers"]["codex"]["available"] is True
+    assert payload["chat_providers"]["codex"]["label"] == "Codex"
 
 
 def test_news_chat_requires_ready_detail(tmp_path: Path, monkeypatch):
@@ -1755,13 +1757,13 @@ def test_news_chat_requires_ready_detail(tmp_path: Path, monkeypatch):
     item = client.get("/api/news?per=20").get_json()["items"][0]
     res = client.post(
         f"/api/news/{item['id']}/chat",
-        json={"provider": "deepseek", "messages": [{"role": "user", "content": "这是什么意思？"}]},
+        json={"question": "这是什么意思？"},
     )
-    assert res.status_code == 410
-    assert res.get_json()["error"] == "chat_disabled"
+    assert res.status_code == 409
+    assert res.get_json()["error"] == "detail_not_ready"
 
 
-def test_news_chat_is_disabled_even_when_detail_ready(tmp_path: Path, monkeypatch):
+def test_news_chat_first_turn_uses_context_and_returns_session(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
@@ -1807,20 +1809,36 @@ def test_news_chat_is_disabled_even_when_detail_ready(tmp_path: Path, monkeypatc
                 ),
             )
 
-    transcript = [
-        {"role": "user", "content": "先总结一下"},
-        {"role": "assistant", "content": "上一轮回答"},
-        {"role": "user", "content": "那最新影响呢？"},
-    ]
+    captured = {}
+
+    def fake_run_codex_chat(**kwargs):
+        captured.update(kwargs)
+        return {
+            "provider": "codex",
+            "session_id": "session-123",
+            "model": kwargs["model"],
+            "answer": "Codex 回答",
+        }
+
+    monkeypatch.setattr(app_module, "run_codex_chat", fake_run_codex_chat)
     res = client.post(
         f"/api/news/{item['id']}/chat",
-        json={"provider": "openai", "messages": transcript},
+        json={"question": "那最新影响呢？", "model": "gpt-5-codex"},
     )
-    assert res.status_code == 410
-    assert res.get_json()["error"] == "chat_disabled"
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert payload["answer"] == "Codex 回答"
+    assert payload["session_id"] == "session-123"
+    assert captured["title"] == "Chat Ready"
+    assert captured["content"] == "Full english body for chat route tests."
+    assert captured["question"] == "那最新影响呢？"
+    assert captured["session_id"] == ""
+    assert captured["model"] == "gpt-5-codex"
+    assert captured["reset"] is False
 
 
-def test_news_chat_disabled_before_provider_checks(tmp_path: Path, monkeypatch):
+def test_news_chat_resume_uses_explicit_session_id(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
@@ -1866,12 +1884,142 @@ def test_news_chat_disabled_before_provider_checks(tmp_path: Path, monkeypatch):
                 ),
             )
 
-    missing_key_res = client.post(
+    captured = {}
+
+    def fake_run_codex_chat(**kwargs):
+        captured.update(kwargs)
+        return {
+            "provider": "codex",
+            "session_id": kwargs["session_id"] or "session-456",
+            "model": kwargs["model"],
+            "answer": "续问回答",
+        }
+
+    monkeypatch.setattr(app_module, "run_codex_chat", fake_run_codex_chat)
+
+    resume_res = client.post(
         f"/api/news/{item['id']}/chat",
-        json={"provider": "openai", "messages": [{"role": "user", "content": "最新进展？"}]},
+        json={"question": "最新进展？", "session_id": "session-456", "model": "gpt-5-codex"},
     )
-    assert missing_key_res.status_code == 410
-    assert missing_key_res.get_json()["error"] == "chat_disabled"
+    assert resume_res.status_code == 200
+    assert resume_res.get_json()["session_id"] == "session-456"
+    assert captured["session_id"] == "session-456"
+    assert captured["question"] == "最新进展？"
+    assert captured["model"] == "gpt-5-codex"
+
+
+def test_news_chat_errors_and_busy(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Error](https://example.com/chat-error)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(
+                  url, source, title, author, published_at, content,
+                  content_length, raw_json, fetched_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["url"],
+                    "Reuters",
+                    "Chat Error",
+                    "Reporter",
+                    "2026-06-11 09:00:00",
+                    "Ready detail body",
+                    17,
+                    "{}",
+                    ts,
+                    ts,
+                ),
+            )
+
+    monkeypatch.setattr(app_module, "run_codex_chat", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("codex_timeout")))
+    timeout_res = client.post(f"/api/news/{item['id']}/chat", json={"question": "最新进展？"})
+    assert timeout_res.status_code == 504
+    assert timeout_res.get_json()["error"] == "provider_timeout"
+
+    monkeypatch.setattr(app_module, "run_codex_chat", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("codex_session_invalid")))
+    invalid_res = client.post(f"/api/news/{item['id']}/chat", json={"question": "继续", "session_id": "bad-session"})
+    assert invalid_res.status_code == 409
+    assert invalid_res.get_json()["error"] == "session_invalid"
+
+    lock = app_module.codex_chat_lock(item["id"])
+    assert lock.acquire(blocking=False) is True
+    try:
+        busy_res = client.post(f"/api/news/{item['id']}/chat", json={"question": "继续"})
+    finally:
+        lock.release()
+    assert busy_res.status_code == 409
+    assert busy_res.get_json()["error"] == "provider_busy"
+
+
+def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    commands = []
+
+    def fake_run(command, capture_output, text, timeout, cwd):
+        commands.append(command)
+        output_path = command[command.index("--output-last-message") + 1]
+        Path(output_path).write_text("回答内容", encoding="utf-8")
+        if "resume" in command:
+            stdout = '{"type":"thread.started","thread_id":"resume-session"}\n{"type":"turn.completed"}\n'
+        else:
+            stdout = '{"type":"thread.started","thread_id":"first-session"}\n{"type":"turn.completed"}\n'
+        return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+
+    first = app_module.run_codex_chat(
+        question="什么是 codex exec？",
+        title="Test",
+        source="Reuters",
+        published_at="2026-06-11 09:00:00",
+        content="Body",
+        model="gpt-5-codex",
+    )
+    resumed = app_module.run_codex_chat(
+        question="继续说",
+        session_id="first-session",
+        title="Test",
+        source="Reuters",
+        published_at="2026-06-11 09:00:00",
+        content="Body",
+        model="gpt-5-codex",
+    )
+
+    assert first["session_id"] == "first-session"
+    assert resumed["session_id"] == "resume-session"
+    assert commands[0][0:2] == ["codex", "exec"]
+    assert "resume" not in commands[0]
+    assert "--last" not in commands[0]
+    assert commands[1][0:4] == ["codex", "exec", "resume", "first-session"]
+    assert "--last" not in commands[1]
 
 
 def test_release_notes_api_returns_items(tmp_path: Path, monkeypatch):
@@ -1917,6 +2065,7 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     data = initial.get_json()
     assert data["ok"] is True
     assert data["api_status"]["deepseek"]["configured"] is True
+    assert data["llm"]["codex_chat"]["model"] == ""
     dumped = json.dumps(data, ensure_ascii=False)
     assert "sk-deepseek-test" not in dumped
 
@@ -1925,15 +2074,18 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
         json={
             "llm": {
                 "translation": {"provider": "deepseek", "model": "deepseek-reasoner"},
+                "codex_chat": {"model": "gpt-5-codex"},
             }
         },
     )
     assert save_res.status_code == 200
     saved = save_res.get_json()
     assert saved["llm"]["translation"]["model"] == "deepseek-reasoner"
+    assert saved["llm"]["codex_chat"]["model"] == "gpt-5-codex"
     assert settings_path.exists() is True
     saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved_file["llm"]["translation"]["model"] == "deepseek-reasoner"
+    assert saved_file["llm"]["codex_chat"]["model"] == "gpt-5-codex"
 
 
 def test_settings_secret_api_save_and_delete(tmp_path: Path, monkeypatch):
@@ -2030,7 +2182,7 @@ def test_settings_secret_api_keychain_failure_does_not_leak_key(tmp_path: Path, 
     assert "sk-sensitive-value" not in dumped
 
 
-def test_saved_models_are_used_by_chat_and_translation(tmp_path: Path, monkeypatch):
+def test_saved_models_are_used_by_translation_and_codex_chat(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
@@ -2058,6 +2210,7 @@ def test_saved_models_are_used_by_chat_and_translation(tmp_path: Path, monkeypat
         json={
             "llm": {
                 "translation": {"provider": "deepseek", "model": "deepseek-translator-x"},
+                "codex_chat": {"model": "gpt-5-codex-x"},
             }
         },
     ).status_code == 200
@@ -2112,6 +2265,20 @@ def test_saved_models_are_used_by_chat_and_translation(tmp_path: Path, monkeypat
     assert app_module.process_pending_ai_once() is True
     assert captured["translation_model"] == "deepseek-translator-x"
 
+    monkeypatch.setattr(
+        app_module,
+        "run_codex_chat",
+        lambda **kwargs: {
+            "provider": "codex",
+            "session_id": "session-test",
+            "model": kwargs["model"],
+            "answer": "回答",
+        },
+    )
+    chat_res = client.post(f"/api/news/{item['id']}/chat", json={"question": "最新进展？"})
+    assert chat_res.status_code == 200
+    assert chat_res.get_json()["model"] == "gpt-5-codex-x"
+
 
 def test_settings_api_ignores_legacy_chat_fields(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
@@ -2123,6 +2290,7 @@ def test_settings_api_ignores_legacy_chat_fields(tmp_path: Path, monkeypatch):
             {
                 "llm": {
                     "translation": {"provider": "deepseek", "model": "deepseek-legacy"},
+                    "codex_chat": {"model": "gpt-5-codex-legacy"},
                     "chat": {
                         "default_provider": "openai",
                         "providers": {
@@ -2149,4 +2317,5 @@ def test_settings_api_ignores_legacy_chat_fields(tmp_path: Path, monkeypatch):
     payload = client.get("/api/settings").get_json()
     assert payload["ok"] is True
     assert payload["llm"]["translation"]["model"] == "deepseek-legacy"
+    assert payload["llm"]["codex_chat"]["model"] == "gpt-5-codex-legacy"
     assert "chat" not in payload["llm"]

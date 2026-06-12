@@ -4,6 +4,21 @@
 
 ## What's Changed
 
+### 2026-06-12 — feat: 新增 v1.9.6 codex exec chatPage MVP
+- **文件**
+  - *app.py（+）*、*settings.py（+）*
+    - 恢复 `POST /api/news/:id/chat`，改为通过本机 `codex exec` 执行新闻提问
+    - 首问从 `thread.started.thread_id` 提取具体 session id，续问固定使用 `codex exec resume <session_id>`，不使用 `--last`
+    - 新增 `llm.codex_chat.model` 设置项；留空时走 Codex 默认模型
+    - 对 `detail_not_ready / provider_busy / provider_timeout / session_invalid / missing_session_id / provider_failed` 返回清晰结构化错误
+  - *static/index.html（+）*、*static/app.js（+）*
+    - 右侧 chatPage 改为单一 `Codex exec` 入口，不再展示 provider 选择
+    - 设置页新增 `Codex Chat 模型` 输入项；切换模型时清空当前新闻的临时对话并重新建 session
+    - 同一条新闻支持前端内存态多轮对话；切换新闻即清空
+  - *tests/test_api.py（+）*
+    - 覆盖首问上下文透传、session id 返回、显式 resume、禁止 `--last`、模型设置生效、错误码与旧配置兼容
+- **影响**：用户现在可以在正文 ready 的新闻详情里直接通过 `codex exec` 提问；同一新闻支持多轮对话，且每轮都绑定具体 session id。当前版本仍不做 chat 落库、归档或翻译保底替换。
+
 ### 2026-06-12 — improve: 收敛 v1.9.5.2 设置页 LLM 配置
 - **文件**
   - *app.py（+）*、*settings.py（+）*
