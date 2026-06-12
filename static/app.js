@@ -38,6 +38,7 @@ let state = {
   settingsLoading: false,
   settingsSaving: false,
   settingsSecretBusyProvider: "",
+  settingsSecretEditorProvider: "",
   runtimeSettings: null,
   releaseNotes: [],
   settingsMessage: "",
@@ -50,6 +51,7 @@ const mediaIconMap = {
   TechCrunch: "/static/source-icons/techcrunch.png",
   "Ars Technica": "/static/source-icons/arstechnica.ico",
 };
+const SETTINGS_CUSTOM_MODEL_VALUE = "__custom__";
 
 const refreshBtn = document.getElementById("refreshBtn");
 const resumeAnchorBtn = document.getElementById("resumeAnchorBtn");
@@ -144,8 +146,12 @@ const settingsCloseBtn = document.getElementById("settingsCloseBtn");
 const settingsStatus = document.getElementById("settingsStatus");
 const settingsApiStatus = document.getElementById("settingsApiStatus");
 const settingsTranslationProvider = document.getElementById("settingsTranslationProvider");
-const settingsTranslationModel = document.getElementById("settingsTranslationModel");
-const settingsCodexChatModel = document.getElementById("settingsCodexChatModel");
+const settingsTranslationModelSelect = document.getElementById("settingsTranslationModelSelect");
+const settingsTranslationModelCustom = document.getElementById("settingsTranslationModelCustom");
+const settingsTranslationModelCurrent = document.getElementById("settingsTranslationModelCurrent");
+const settingsCodexChatModelSelect = document.getElementById("settingsCodexChatModelSelect");
+const settingsCodexChatModelCustom = document.getElementById("settingsCodexChatModelCustom");
+const settingsCodexChatModelCurrent = document.getElementById("settingsCodexChatModelCurrent");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
 const settingsRestartHint = document.getElementById("settingsRestartHint");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
@@ -572,96 +578,165 @@ function renderSettingsApiStatus() {
   if (!settingsApiStatus) return;
   settingsApiStatus.innerHTML = "";
   const apiStatus = state.runtimeSettings?.api_status || {};
-  [["deepseek", "DeepSeek"]].forEach(([key, label]) => {
+  [
+    ["deepseek", "DeepSeek"],
+    ["codex", "Codex exec"],
+  ].forEach(([key, label]) => {
+    const service = apiStatus[key] || {};
     const row = document.createElement("div");
     row.className = "settings-api-item";
     const top = document.createElement("div");
     top.className = "settings-api-item-top";
+    const head = document.createElement("div");
     const name = document.createElement("div");
     name.className = "settings-api-name";
     name.textContent = label;
+    head.appendChild(name);
+
+    const summary = document.createElement("div");
+    summary.className = "settings-api-meta";
+    if (key === "deepseek") {
+      const configured = !!service.configured;
+      const endpointStatus = service.models_endpoint_reachable === true
+        ? "/models 可访问"
+        : service.models_endpoint_reachable === false
+          ? "/models fallback"
+          : "/models 未检查";
+      summary.textContent = `Key ${configured ? "已配置" : "未配置"} · ${endpointStatus}`;
+    } else {
+      const cliStatus = service.cli_available ? "CLI 可见" : "CLI 缺失";
+      const execStatus = service.exec_available ? "exec 可用" : "exec 不可用";
+      const modelsStatus = service.models_readable ? "models 可读" : "models fallback";
+      summary.textContent = `${cliStatus} · ${execStatus} · ${modelsStatus}`;
+    }
+    head.appendChild(summary);
+
     const badge = document.createElement("span");
-    const configured = !!apiStatus[key]?.configured;
-    badge.className = `settings-api-badge ${configured ? "ok" : "muted"}`;
-    badge.textContent = configured ? "已配置" : "未配置";
-    top.appendChild(name);
+    const healthy = key === "deepseek" ? !!service.configured : !!service.exec_available;
+    badge.className = `settings-api-badge ${healthy ? "ok" : "muted"}`;
+    badge.textContent = healthy ? "可用" : "待处理";
+    top.appendChild(head);
     top.appendChild(badge);
     row.appendChild(top);
 
-    const input = document.createElement("input");
-    input.className = "settings-input";
-    input.type = "password";
-    input.autocomplete = "off";
-    input.placeholder = configured ? "输入新 key 后保存" : "粘贴 API key";
-    input.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
-    row.appendChild(input);
+    const statusLine = document.createElement("div");
+    statusLine.className = "settings-api-meta";
+    statusLine.textContent = service.status_text || "暂无状态信息。";
+    row.appendChild(statusLine);
 
-    const actions = document.createElement("div");
-    actions.className = "settings-actions";
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "detail-retry-btn";
-    saveBtn.type = "button";
-    saveBtn.textContent = configured ? "更新 key" : "保存 key";
-    saveBtn.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
-    saveBtn.addEventListener("click", async () => {
-      const draft = (input.value || "").trim();
-      if (!draft) {
-        state.settingsMessage = "请输入非空 API key。";
-        state.settingsMessageTone = "failed";
-        renderSettingsOverlay();
-        return;
-      }
-      state.settingsSecretBusyProvider = key;
-      state.settingsMessage = `${label} key 保存中...`;
-      state.settingsMessageTone = "pending";
-      renderSettingsOverlay();
-      try {
-        state.runtimeSettings = await saveApiSecret(key, draft);
-        state.settingsMessage = "已保存，重启 Flask 后生效。";
-        state.settingsMessageTone = "ready";
-      } catch (error) {
-        const code = error instanceof Error ? error.message : "";
-        state.settingsMessage =
-          code === "keychain_unavailable"
-            ? "当前机器不可用 macOS Keychain，无法保存。"
-            : "保存失败，请稍后重试。";
-        state.settingsMessageTone = "failed";
-      } finally {
-        state.settingsSecretBusyProvider = "";
-        renderSettingsOverlay();
-      }
-    });
-    actions.appendChild(saveBtn);
+    if (service.last_error) {
+      const errorLine = document.createElement("div");
+      errorLine.className = "settings-api-meta";
+      errorLine.textContent = `最近状态：${service.last_error}`;
+      row.appendChild(errorLine);
+    }
 
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "detail-retry-btn";
-    deleteBtn.type = "button";
-    deleteBtn.textContent = "删除 key";
-    deleteBtn.disabled = !configured || state.settingsSaving || state.settingsSecretBusyProvider === key;
-    deleteBtn.addEventListener("click", async () => {
-      if (!window.confirm(`确认删除 ${label} API key？`)) return;
-      state.settingsSecretBusyProvider = key;
-      state.settingsMessage = `${label} key 删除中...`;
-      state.settingsMessageTone = "pending";
-      renderSettingsOverlay();
-      try {
-        state.runtimeSettings = await deleteApiSecret(key);
-        state.settingsMessage = "已删除，重启 Flask 后生效。";
-        state.settingsMessageTone = "ready";
-      } catch (error) {
-        const code = error instanceof Error ? error.message : "";
-        state.settingsMessage =
-          code === "keychain_unavailable"
-            ? "当前机器不可用 macOS Keychain，无法删除。"
-            : "删除失败，请稍后重试。";
-        state.settingsMessageTone = "failed";
-      } finally {
-        state.settingsSecretBusyProvider = "";
-        renderSettingsOverlay();
+    if (key === "deepseek") {
+      const configured = !!service.configured;
+      const actions = document.createElement("div");
+      actions.className = "settings-actions";
+      const showEditor = !configured || state.settingsSecretEditorProvider === key || state.settingsSecretBusyProvider === key;
+
+      if (showEditor) {
+        const input = document.createElement("input");
+        input.className = "settings-input";
+        input.type = "password";
+        input.autocomplete = "off";
+        input.placeholder = configured ? "输入新 key 后保存" : "粘贴 API key";
+        input.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
+        row.appendChild(input);
+
+        const saveBtn = document.createElement("button");
+        saveBtn.className = "detail-retry-btn";
+        saveBtn.type = "button";
+        saveBtn.textContent = configured ? "保存 key" : "保存 key";
+        saveBtn.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
+        saveBtn.addEventListener("click", async () => {
+          const draft = (input.value || "").trim();
+          if (!draft) {
+            state.settingsMessage = "请输入非空 API key。";
+            state.settingsMessageTone = "failed";
+            renderSettingsOverlay();
+            return;
+          }
+          state.settingsSecretBusyProvider = key;
+          state.settingsMessage = `${label} key 保存中...`;
+          state.settingsMessageTone = "pending";
+          renderSettingsOverlay();
+          try {
+            state.runtimeSettings = await saveApiSecret(key, draft);
+            state.settingsSecretEditorProvider = "";
+            state.settingsMessage = "已保存，重启 Flask 后生效。";
+            state.settingsMessageTone = "ready";
+          } catch (error) {
+            const code = error instanceof Error ? error.message : "";
+            state.settingsMessage =
+              code === "keychain_unavailable"
+                ? "当前机器不可用 macOS Keychain，无法保存。"
+                : "保存失败，请稍后重试。";
+            state.settingsMessageTone = "failed";
+          } finally {
+            state.settingsSecretBusyProvider = "";
+            renderSettingsOverlay();
+          }
+        });
+        actions.appendChild(saveBtn);
+
+        if (configured) {
+          const cancelBtn = document.createElement("button");
+          cancelBtn.className = "detail-retry-btn";
+          cancelBtn.type = "button";
+          cancelBtn.textContent = "取消";
+          cancelBtn.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
+          cancelBtn.addEventListener("click", () => {
+            state.settingsSecretEditorProvider = "";
+            renderSettingsOverlay();
+          });
+          actions.appendChild(cancelBtn);
+        }
+      } else {
+        const updateBtn = document.createElement("button");
+        updateBtn.className = "detail-retry-btn";
+        updateBtn.type = "button";
+        updateBtn.textContent = "更新 key";
+        updateBtn.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
+        updateBtn.addEventListener("click", () => {
+          state.settingsSecretEditorProvider = key;
+          renderSettingsOverlay();
+        });
+        actions.appendChild(updateBtn);
       }
-    });
-    actions.appendChild(deleteBtn);
-    row.appendChild(actions);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "detail-retry-btn";
+      deleteBtn.type = "button";
+      deleteBtn.textContent = "删除 key";
+      deleteBtn.disabled = !configured || state.settingsSaving || state.settingsSecretBusyProvider === key;
+      deleteBtn.addEventListener("click", async () => {
+        if (!window.confirm(`确认删除 ${label} API key？`)) return;
+        state.settingsSecretBusyProvider = key;
+        state.settingsMessage = `${label} key 删除中...`;
+        state.settingsMessageTone = "pending";
+        renderSettingsOverlay();
+        try {
+          state.runtimeSettings = await deleteApiSecret(key);
+          state.settingsMessage = "已删除，重启 Flask 后生效。";
+          state.settingsMessageTone = "ready";
+        } catch (error) {
+          const code = error instanceof Error ? error.message : "";
+          state.settingsMessage =
+            code === "keychain_unavailable"
+              ? "当前机器不可用 macOS Keychain，无法删除。"
+              : "删除失败，请稍后重试。";
+          state.settingsMessageTone = "failed";
+        } finally {
+          state.settingsSecretBusyProvider = "";
+          renderSettingsOverlay();
+        }
+      });
+      actions.appendChild(deleteBtn);
+      row.appendChild(actions);
+    }
     settingsApiStatus.appendChild(row);
   });
 }
@@ -717,12 +792,103 @@ function renderReleaseNotes() {
   });
 }
 
+function populateModelSelect(select, customInput, catalog, currentValue) {
+  if (!select || !customInput) return;
+  const savedValue = (currentValue || "").trim();
+  const options = Array.isArray(catalog?.options) ? catalog.options : [];
+  select.innerHTML = "";
+
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = catalog?.default_label || "留空则使用默认模型";
+  select.appendChild(defaultOption);
+
+  const values = new Set([""]);
+  options.forEach((item) => {
+    const value = (item?.value || "").trim();
+    if (!value || values.has(value)) return;
+    values.add(value);
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = item?.label || value;
+    select.appendChild(option);
+  });
+
+  if (savedValue && !values.has(savedValue)) {
+    values.add(savedValue);
+    const savedOption = document.createElement("option");
+    savedOption.value = savedValue;
+    savedOption.textContent = savedValue;
+    select.appendChild(savedOption);
+  }
+
+  const customOption = document.createElement("option");
+  customOption.value = SETTINGS_CUSTOM_MODEL_VALUE;
+  customOption.textContent = "自定义输入...";
+  select.appendChild(customOption);
+
+  if (savedValue && values.has(savedValue)) {
+    select.value = savedValue;
+    customInput.value = "";
+    customInput.classList.add("hidden");
+  } else if (savedValue) {
+    select.value = SETTINGS_CUSTOM_MODEL_VALUE;
+    customInput.value = savedValue;
+    customInput.classList.remove("hidden");
+  } else {
+    select.value = "";
+    customInput.value = "";
+    customInput.classList.add("hidden");
+  }
+}
+
+function syncModelCustomVisibility(select, customInput) {
+  if (!select || !customInput) return;
+  const useCustom = select.value === SETTINGS_CUSTOM_MODEL_VALUE;
+  customInput.classList.toggle("hidden", !useCustom);
+  if (useCustom) {
+    customInput.focus();
+  } else {
+    customInput.value = "";
+  }
+}
+
+function readModelSetting(select, customInput) {
+  if (!select) return "";
+  if (select.value === SETTINGS_CUSTOM_MODEL_VALUE) {
+    return (customInput?.value || "").trim();
+  }
+  return (select.value || "").trim();
+}
+
 function populateSettingsForm() {
   const llm = state.runtimeSettings?.llm;
   if (!llm) return;
   settingsTranslationProvider.value = llm.translation?.provider || "deepseek";
-  settingsTranslationModel.value = llm.translation?.model || "";
-  settingsCodexChatModel.value = llm.codex_chat?.model || "";
+  populateModelSelect(
+    settingsTranslationModelSelect,
+    settingsTranslationModelCustom,
+    state.runtimeSettings?.model_catalogs?.translation,
+    llm.translation?.model || "",
+  );
+  populateModelSelect(
+    settingsCodexChatModelSelect,
+    settingsCodexChatModelCustom,
+    state.runtimeSettings?.model_catalogs?.codex_chat,
+    llm.codex_chat?.model || "",
+  );
+  if (settingsTranslationModelCurrent) {
+    const currentTranslationModel = (llm.translation?.model || "").trim();
+    settingsTranslationModelCurrent.textContent = currentTranslationModel
+      ? `当前使用：${currentTranslationModel}`
+      : "当前使用：DeepSeek 默认模型";
+  }
+  if (settingsCodexChatModelCurrent) {
+    const currentCodexModel = (llm.codex_chat?.model || "").trim();
+    settingsCodexChatModelCurrent.textContent = currentCodexModel
+      ? `当前使用：${currentCodexModel}`
+      : "当前使用：Codex 默认模型";
+  }
   settingsRestartHint.textContent = state.runtimeSettings?.restart_notice || "";
 }
 
@@ -739,7 +905,7 @@ function renderSettingsOverlay() {
     ? "读取中..."
     : state.settingsSaving
       ? "保存中..."
-      : state.settingsMessage || "翻译 / 总结模型与 Codex chat 模型保存到本机配置文件；DeepSeek API key 仅存 macOS Keychain，页面只显示是否已配置。";
+      : state.settingsMessage || "服务状态会做轻量检查；模型优先读取官方 / 本机目录，失败时自动回退候选列表。";
   const tone = state.settingsLoading || state.settingsSaving ? "pending" : (state.settingsMessageTone || "muted");
   settingsStatus.textContent = statusText;
   settingsStatus.className = `detail-status ${tone}`;
@@ -767,10 +933,14 @@ async function openSettingsOverlay() {
 
 function closeSettingsOverlay() {
   state.settingsOpen = false;
+  state.settingsSecretEditorProvider = "";
   renderSettingsOverlay();
 }
 
 async function saveRuntimeSettings() {
+  const draftTranslationProvider = settingsTranslationProvider.value || "deepseek";
+  const draftTranslationModel = readModelSetting(settingsTranslationModelSelect, settingsTranslationModelCustom);
+  const draftCodexChatModel = readModelSetting(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
@@ -778,11 +948,11 @@ async function saveRuntimeSettings() {
     const payload = {
       llm: {
         translation: {
-          provider: settingsTranslationProvider.value || "deepseek",
-          model: (settingsTranslationModel.value || "").trim(),
+          provider: draftTranslationProvider,
+          model: draftTranslationModel,
         },
         codex_chat: {
-          model: (settingsCodexChatModel.value || "").trim(),
+          model: draftCodexChatModel,
         },
       },
     };
@@ -801,7 +971,7 @@ async function saveRuntimeSettings() {
       state.detailChatMessages = [];
       state.detailChatStatus = "Codex chat 模型已切换，当前临时对话已清空。";
     }
-    state.settingsMessage = "保存成功。翻译 / 总结与 Codex chat 的新请求通常立即生效；如需与 worker 完全一致，可重启 Flask。";
+    state.settingsMessage = "保存成功。新请求通常立即生效；终验前建议重启 Flask。";
     state.settingsMessageTone = "ready";
   } catch {
     state.settingsMessage = "保存失败，请检查输入后重试。";
@@ -3496,6 +3666,18 @@ if (settingsCloseBtn) {
 if (settingsSaveBtn) {
   settingsSaveBtn.addEventListener("click", async () => {
     await saveRuntimeSettings();
+  });
+}
+
+if (settingsTranslationModelSelect) {
+  settingsTranslationModelSelect.addEventListener("change", () => {
+    syncModelCustomVisibility(settingsTranslationModelSelect, settingsTranslationModelCustom);
+  });
+}
+
+if (settingsCodexChatModelSelect) {
+  settingsCodexChatModelSelect.addEventListener("change", () => {
+    syncModelCustomVisibility(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
   });
 }
 

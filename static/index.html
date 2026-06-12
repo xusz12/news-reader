@@ -236,18 +236,18 @@
           <div>
             <div class="settings-eyebrow">Settings</div>
             <h2 class="settings-title">设置页</h2>
-            <p class="settings-subtitle">集中管理 DeepSeek key、翻译 / 总结模型与版本发布记录。</p>
+            <p class="settings-subtitle">集中管理服务状态、默认模型与版本发布记录。</p>
           </div>
           <button id="settingsCloseBtn" class="detail-retry-btn" type="button">关闭</button>
         </div>
         <div id="settingsStatus" class="detail-status muted">读取中...</div>
         <div class="settings-grid">
           <section class="settings-card">
-            <h3 class="settings-card-title">LLM API 管理</h3>
+            <h3 class="settings-card-title">服务管理</h3>
             <div id="settingsApiStatus" class="settings-api-status"></div>
           </section>
           <section class="settings-card">
-            <h3 class="settings-card-title">模型与功能路由</h3>
+            <h3 class="settings-card-title">模型管理</h3>
             <div class="settings-form">
               <div class="settings-field">
                 <label for="settingsTranslationProvider">翻译 / 总结 provider</label>
@@ -256,14 +256,18 @@
                 </select>
               </div>
               <div class="settings-field">
-                <label for="settingsTranslationModel">翻译 / 总结 model</label>
-                <input id="settingsTranslationModel" class="settings-input" type="text" maxlength="120" placeholder="默认：deepseek-chat 或环境变量" />
+                <label for="settingsTranslationModelSelect">翻译 / 总结默认模型</label>
+                <select id="settingsTranslationModelSelect" class="pref-select"></select>
+                <input id="settingsTranslationModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 DeepSeek 模型名" />
+                <div id="settingsTranslationModelCurrent" class="settings-field-current"></div>
               </div>
               <div class="settings-field">
-                <label for="settingsCodexChatModel">Codex Chat 模型</label>
-                <input id="settingsCodexChatModel" class="settings-input" type="text" maxlength="120" placeholder="留空则使用 Codex 默认模型" />
+                <label for="settingsCodexChatModelSelect">Codex chat 默认模型</label>
+                <select id="settingsCodexChatModelSelect" class="pref-select"></select>
+                <input id="settingsCodexChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Codex 模型名" />
+                <div id="settingsCodexChatModelCurrent" class="settings-field-current"></div>
               </div>
-              <p class="settings-hint">DeepSeek API 目前只用于新闻正文翻译和总结，不再用于 chatPage。</p>
+              <p class="settings-hint">DeepSeek 只用于正文翻译 / 总结；chatPage 主链路继续走 Codex exec。</p>
               <div class="settings-actions">
                 <button id="settingsSaveBtn" class="detail-retry-btn" type="button">保存设置</button>
               </div>

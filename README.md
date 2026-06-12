@@ -4,6 +4,29 @@
 
 ## What's Changed
 
+### 2026-06-12 — fix: 修复 v1.9.6.3 设置页模型管理显示
+- **文件**
+  - *app.py（+）*、*static/app.js（+）*
+    - Codex 模型目录改为直接使用 `codex debug models` 的原始 `name/slug` 作为下拉 label/value，不再做 `GPT/gpt` 美化或拼描述
+    - 设置页模型下拉在保存后会保持当前已保存值；即使目录失败或当前值不在候选中，也会把已保存 model 回填到下拉并显示为当前使用
+  - *tests/test_api.py（+）*
+    - 更新 Codex 模型目录断言，覆盖 label/value 保持源 name、不拼描述
+- **影响**：模型管理在保存后会立即显示可信的当前 model；Codex chat 模型下拉展示与 `codex debug models` 源返回保持一致。
+
+### 2026-06-12 — improve: 重构 v1.9.6.2 设置页服务管理与模型管理
+- **文件**
+  - *app.py（+）*
+    - `/api/settings` 新增 DeepSeek / Codex exec 轻量服务状态与模型目录返回
+    - DeepSeek 模型优先读取官方 `GET /models`，失败自动 fallback 到默认候选，并保留已保存模型展示
+    - Codex 模型改为解析本机 `codex debug models`，仅向前端暴露安全字段；同时补充 CLI / `codex exec` / models 可读状态
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 设置页文案改为“服务管理 / 模型管理”
+    - DeepSeek / Codex 模型配置改为“下拉优先 + 自定义输入兜底”
+    - 服务管理区展示 DeepSeek key、`/models` 可访问性、Codex CLI / exec / models 状态与 fallback 摘要
+  - *tests/test_api.py（+）*
+    - 覆盖 `/api/settings` 新字段、DeepSeek models 成功/失败 fallback、Codex models 解析成功/失败 fallback，以及 settings 响应不泄露 key
+- **影响**：设置页现在能直接看到 DeepSeek 与 Codex exec 的轻量健康状态，并优先使用真实模型目录配置默认模型；即便目录读取失败，已保存模型仍可显示和继续保存。
+
 ### 2026-06-12 — feat: 新增 v1.9.6 codex exec chatPage MVP
 - **文件**
   - *app.py（+）*、*settings.py（+）*

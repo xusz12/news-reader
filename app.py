@@ -4,6 +4,7 @@ import math
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -12,6 +13,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -22,7 +25,7 @@ from llm_client import (
 )
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
-from secret_store import SecretStoreError, delete_secret, has_secret, write_secret
+from secret_store import SecretStoreError, delete_secret, has_secret, read_secret, write_secret
 from settings import default_app_settings, load_app_settings, resolve_daily_news_dir, resolve_db_path, save_app_settings
 
 
@@ -92,6 +95,19 @@ SECRET_PROVIDER_MAP = {
     "deepseek": "DEEPSEEK_API_KEY",
     "openai": "OPENAI_API_KEY",
 }
+DEEPSEEK_MODEL_FALLBACKS = [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "deepseek-chat",
+    "deepseek-reasoner",
+]
+CODEX_MODEL_FALLBACKS = [
+    "gpt-5.5",
+    "gpt-5-codex",
+    "gpt-5",
+]
+SETTINGS_MODEL_OPTION_LIMIT = 40
+DEEPSEEK_MODELS_URL = "https://api.deepseek.com/models"
 
 
 def news_order_by_sql(collection: str) -> str:
@@ -388,6 +404,17 @@ def provider_has_configured_key(provider: str) -> bool:
         return False
 
 
+def provider_secret_value(provider: str) -> str:
+    secret_name = provider_secret_name(provider)
+    value = (os.getenv(secret_name) or "").strip()
+    if value:
+        return value
+    try:
+        return (read_secret(secret_name) or "").strip()
+    except SecretStoreError:
+        return ""
+
+
 def save_provider_secret(provider: str, value: object) -> None:
     secret_name = provider_secret_name(provider)
     if not isinstance(value, str) or not value.strip():
@@ -400,14 +427,270 @@ def remove_provider_secret(provider: str) -> None:
     delete_secret(secret_name)
 
 
+def build_model_option(value: str, *, label: str = "", description: str = "", source: str = "") -> dict:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise ValueError("empty_model_value")
+    return {
+        "value": normalized,
+        "label": (label or normalized).strip(),
+        "description": (description or "").strip(),
+        "source": (source or "").strip(),
+    }
+
+
+def merge_model_options(options: list[dict], saved_model: str) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for item in options:
+        if not isinstance(item, dict):
+            continue
+        value = (item.get("value") or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        merged.append(
+            {
+                "value": value,
+                "label": (item.get("label") or value).strip(),
+                "description": (item.get("description") or "").strip(),
+                "source": (item.get("source") or "").strip(),
+            }
+        )
+    saved = (saved_model or "").strip()
+    if saved and saved not in seen:
+        merged.append(build_model_option(saved, description="当前已保存模型", source="saved"))
+    return merged[:SETTINGS_MODEL_OPTION_LIMIT]
+
+
+def trim_settings_error(value: object, limit: int = 160) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit - 1]}…"
+
+
+def fallback_model_options(values: list[str], *, source: str) -> list[dict]:
+    return [build_model_option(value, source=source) for value in values]
+
+
+def sort_deepseek_model_ids(model_ids: list[str]) -> list[str]:
+    priority = {name: index for index, name in enumerate(DEEPSEEK_MODEL_FALLBACKS)}
+    return sorted(
+        {model_id.strip() for model_id in model_ids if model_id and model_id.strip()},
+        key=lambda model_id: (priority.get(model_id, len(priority)), model_id),
+    )
+
+
+def parse_deepseek_model_options(payload: object) -> list[dict]:
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        return []
+    ids: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        model_id = (row.get("id") or "").strip()
+        if model_id:
+            ids.append(model_id)
+    return [build_model_option(model_id, source="official") for model_id in sort_deepseek_model_ids(ids)]
+
+
+def deepseek_settings_snapshot(saved_model: str) -> dict:
+    configured = provider_has_configured_key("deepseek")
+    options = fallback_model_options(DEEPSEEK_MODEL_FALLBACKS, source="fallback")
+    status_text = "未配置 key，使用默认候选。"
+    last_error = ""
+    models_endpoint_reachable = None
+    used_fallback = True
+    source = "fallback"
+
+    if configured:
+        api_key = provider_secret_value("deepseek")
+        if not api_key:
+            status_text = "检测到已配置 key，但当前读取失败，使用默认候选。"
+            last_error = "read_failed"
+        else:
+            request = Request(
+                DEEPSEEK_MODELS_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                    "User-Agent": "news-reader-settings/1.0",
+                },
+            )
+            try:
+                with urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                parsed_options = parse_deepseek_model_options(payload)
+                if parsed_options:
+                    options = parsed_options
+                    models_endpoint_reachable = True
+                    used_fallback = False
+                    source = "official"
+                    status_text = "官方 /models 可访问。"
+                else:
+                    models_endpoint_reachable = False
+                    last_error = "empty_models"
+                    status_text = "官方 /models 返回空列表，使用默认候选。"
+            except HTTPError as exc:
+                models_endpoint_reachable = False
+                last_error = f"http_{exc.code}"
+                status_text = f"官方 /models 访问失败（HTTP {exc.code}），使用默认候选。"
+            except URLError as exc:
+                models_endpoint_reachable = False
+                last_error = trim_settings_error(getattr(exc, "reason", exc))
+                status_text = "官方 /models 暂不可达，使用默认候选。"
+            except Exception as exc:  # pragma: no cover - env-specific
+                models_endpoint_reachable = False
+                last_error = trim_settings_error(exc)
+                status_text = "官方 /models 检查失败，使用默认候选。"
+
+    return {
+        "service": {
+            "configured": configured,
+            "models_endpoint_reachable": models_endpoint_reachable,
+            "used_fallback": used_fallback,
+            "last_error": last_error,
+            "status_text": status_text,
+        },
+        "catalog": {
+            "source": source,
+            "saved_model": (saved_model or "").strip(),
+            "custom_allowed": True,
+            "default_label": "留空则使用 DeepSeek 默认模型",
+            "options": merge_model_options(options, saved_model),
+        },
+    }
+
+
+def parse_codex_model_options(payload: object) -> list[dict]:
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("models")
+    if not isinstance(rows, list):
+        return []
+
+    parsed_rows: list[tuple[int, str, dict]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        slug = (row.get("slug") or "").strip()
+        if not slug:
+            continue
+        visibility = (row.get("visibility") or "").strip().lower()
+        if visibility and visibility not in {"list", "default"}:
+            continue
+        label = slug
+        description = ""
+        priority = row.get("priority")
+        if not isinstance(priority, int):
+            priority = 9999
+        parsed_rows.append((priority, label.lower(), build_model_option(slug, label=label, description=description, source="codex_debug")))
+
+    parsed_rows.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in parsed_rows[:SETTINGS_MODEL_OPTION_LIMIT]]
+
+
+def codex_settings_snapshot(saved_model: str) -> dict:
+    cli_available = bool(shutil.which("codex"))
+    exec_available = False
+    models_readable = False
+    options = fallback_model_options(CODEX_MODEL_FALLBACKS, source="fallback")
+    used_fallback = True
+    last_error = ""
+    source = "fallback"
+    status_bits: list[str] = []
+
+    if not cli_available:
+        status_bits.append("未发现 Codex CLI，使用默认候选。")
+    else:
+        try:
+            exec_probe = subprocess.run(
+                ["codex", "exec", "--help"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                cwd=str(BASE_DIR),
+            )
+            exec_available = exec_probe.returncode == 0
+            status_bits.append("codex exec 可用。" if exec_available else "codex exec 不可用。")
+            if not exec_available and not last_error:
+                last_error = trim_settings_error(exec_probe.stderr or exec_probe.stdout or f"exit_{exec_probe.returncode}")
+        except Exception as exc:  # pragma: no cover - env-specific
+            last_error = trim_settings_error(exc)
+            status_bits.append("codex exec 检查失败。")
+
+        try:
+            models_probe = subprocess.run(
+                ["codex", "debug", "models"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+                cwd=str(BASE_DIR),
+            )
+            if models_probe.returncode == 0:
+                payload = json.loads(models_probe.stdout or "{}")
+                parsed_options = parse_codex_model_options(payload)
+                if parsed_options:
+                    options = parsed_options
+                    models_readable = True
+                    used_fallback = False
+                    source = "codex_debug"
+                    status_bits.append("codex debug models 可读取。")
+                else:
+                    if not last_error:
+                        last_error = "empty_models"
+                    status_bits.append("codex debug models 返回空列表，使用默认候选。")
+            else:
+                if not last_error:
+                    last_error = trim_settings_error(models_probe.stderr or models_probe.stdout or f"exit_{models_probe.returncode}")
+                status_bits.append("codex debug models 不可读取，使用默认候选。")
+        except Exception as exc:  # pragma: no cover - env-specific
+            if not last_error:
+                last_error = trim_settings_error(exc)
+            status_bits.append("codex debug models 检查失败，使用默认候选。")
+
+    return {
+        "service": {
+            "cli_available": cli_available,
+            "exec_available": exec_available,
+            "models_readable": models_readable,
+            "used_fallback": used_fallback,
+            "last_error": last_error,
+            "status_text": " ".join(status_bits).strip(),
+        },
+        "catalog": {
+            "source": source,
+            "saved_model": (saved_model or "").strip(),
+            "custom_allowed": True,
+            "default_label": "留空则使用 Codex 默认模型",
+            "options": merge_model_options(options, saved_model),
+        },
+    }
+
+
 def serialize_runtime_settings() -> dict:
     settings = current_runtime_settings()
+    translation_model = (settings["llm"]["translation"].get("model") or "").strip()
+    codex_chat_model = (settings["llm"]["codex_chat"].get("model") or "").strip()
+    deepseek_snapshot = deepseek_settings_snapshot(translation_model)
+    codex_snapshot = codex_settings_snapshot(codex_chat_model)
     return {
         "api_status": {
-            "deepseek": {"configured": provider_has_configured_key("deepseek")},
+            "deepseek": deepseek_snapshot["service"],
+            "codex": codex_snapshot["service"],
+        },
+        "model_catalogs": {
+            "translation": deepseek_snapshot["catalog"],
+            "codex_chat": codex_snapshot["catalog"],
         },
         "llm": settings["llm"],
-        "restart_notice": "翻译 / 总结模型与 Codex chat 模型对新请求通常立即生效；API key 保存或删除后，建议重启 Flask 再使用。",
+        "restart_notice": "翻译 / 总结与 Codex chat 的新请求通常立即生效；涉及 app.py 本版改动，终验前请重启 Flask。",
     }
 
 

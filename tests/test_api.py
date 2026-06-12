@@ -2061,6 +2061,47 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     import app as app_module
 
     importlib.reload(app_module)
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None)
+
+    class DummyResponse:
+        def __init__(self, payload):
+            self.payload = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        def read(self):
+            return self.payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        app_module,
+        "urlopen",
+        lambda request, timeout=0: DummyResponse({"data": [{"id": "deepseek-v4-pro"}, {"id": "deepseek-v4-flash"}]}),
+    )
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[:3] == ["codex", "exec", "--help"]:
+            return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        if cmd[:3] == ["codex", "debug", "models"]:
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "models": [
+                            {"slug": "gpt-5.5", "display_name": "GPT-5.5", "description": "Fast", "priority": 0, "visibility": "list"},
+                            {"slug": "hidden-model", "display_name": "Hidden", "description": "Ignore", "priority": 99, "visibility": "hidden"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected subprocess cmd: {cmd}")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_subprocess_run)
     app_module.ensure_db()
     client = app_module.app.test_client()
 
@@ -2069,6 +2110,19 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     data = initial.get_json()
     assert data["ok"] is True
     assert data["api_status"]["deepseek"]["configured"] is True
+    assert data["api_status"]["deepseek"]["models_endpoint_reachable"] is True
+    assert data["api_status"]["codex"]["cli_available"] is True
+    assert data["api_status"]["codex"]["exec_available"] is True
+    assert data["api_status"]["codex"]["models_readable"] is True
+    assert data["model_catalogs"]["translation"]["source"] == "official"
+    assert data["model_catalogs"]["translation"]["options"][0]["value"] == "deepseek-v4-flash"
+    assert data["model_catalogs"]["codex_chat"]["source"] == "codex_debug"
+    assert data["model_catalogs"]["codex_chat"]["options"][0] == {
+        "value": "gpt-5.5",
+        "label": "gpt-5.5",
+        "description": "",
+        "source": "codex_debug",
+    }
     assert data["llm"]["codex_chat"]["model"] == ""
     dumped = json.dumps(data, ensure_ascii=False)
     assert "sk-deepseek-test" not in dumped
@@ -2086,10 +2140,100 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     saved = save_res.get_json()
     assert saved["llm"]["translation"]["model"] == "deepseek-reasoner"
     assert saved["llm"]["codex_chat"]["model"] == "gpt-5-codex"
+    assert any(option["value"] == "gpt-5-codex" for option in saved["model_catalogs"]["codex_chat"]["options"])
     assert settings_path.exists() is True
     saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved_file["llm"]["translation"]["model"] == "deepseek-reasoner"
     assert saved_file["llm"]["codex_chat"]["model"] == "gpt-5-codex"
+
+
+def test_deepseek_model_catalog_fallback_keeps_saved_model(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "urlopen", lambda request, timeout=0: (_ for _ in ()).throw(app_module.HTTPError(app_module.DEEPSEEK_MODELS_URL, 503, "boom", None, None)))
+
+    snapshot = app_module.deepseek_settings_snapshot("deepseek-custom-x")
+    assert snapshot["service"]["configured"] is True
+    assert snapshot["service"]["models_endpoint_reachable"] is False
+    assert snapshot["service"]["used_fallback"] is True
+    assert snapshot["service"]["last_error"] == "http_503"
+    assert snapshot["catalog"]["source"] == "fallback"
+    assert snapshot["catalog"]["options"][0]["value"] == "deepseek-v4-flash"
+    assert snapshot["catalog"]["options"][-1]["value"] == "deepseek-custom-x"
+    assert snapshot["catalog"]["options"][-1]["source"] == "saved"
+
+
+def test_codex_model_catalog_parse_success_and_fallback(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None)
+
+    def success_run(cmd, **kwargs):
+        if cmd[:3] == ["codex", "exec", "--help"]:
+            return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        if cmd[:3] == ["codex", "debug", "models"]:
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "models": [
+                            {"slug": "gpt-5", "display_name": "GPT-5", "description": "General", "priority": 2, "visibility": "list"},
+                            {"slug": "gpt-5.5", "display_name": "GPT-5.5", "description": "Best", "priority": 0, "visibility": "list"},
+                            {"slug": "internal", "display_name": "Internal", "description": "Hidden", "priority": 1, "visibility": "hidden"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected subprocess cmd: {cmd}")
+
+    monkeypatch.setattr(app_module.subprocess, "run", success_run)
+    success_snapshot = app_module.codex_settings_snapshot("gpt-5.5")
+    assert success_snapshot["service"]["cli_available"] is True
+    assert success_snapshot["service"]["exec_available"] is True
+    assert success_snapshot["service"]["models_readable"] is True
+    assert success_snapshot["service"]["used_fallback"] is False
+    assert success_snapshot["catalog"]["source"] == "codex_debug"
+    assert [option["value"] for option in success_snapshot["catalog"]["options"]] == ["gpt-5.5", "gpt-5"]
+    assert [option["label"] for option in success_snapshot["catalog"]["options"]] == ["gpt-5.5", "gpt-5"]
+
+    def fallback_run(cmd, **kwargs):
+        if cmd[:3] == ["codex", "exec", "--help"]:
+            return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        if cmd[:3] == ["codex", "debug", "models"]:
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="catalog failed")
+        raise AssertionError(f"unexpected subprocess cmd: {cmd}")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fallback_run)
+    fallback_snapshot = app_module.codex_settings_snapshot("gpt-5-custom-x")
+    assert fallback_snapshot["service"]["cli_available"] is True
+    assert fallback_snapshot["service"]["exec_available"] is True
+    assert fallback_snapshot["service"]["models_readable"] is False
+    assert fallback_snapshot["service"]["used_fallback"] is True
+    assert fallback_snapshot["service"]["last_error"] == "catalog failed"
+    assert fallback_snapshot["catalog"]["source"] == "fallback"
+    assert fallback_snapshot["catalog"]["options"][0]["value"] == "gpt-5.5"
+    assert fallback_snapshot["catalog"]["options"][-1]["value"] == "gpt-5-custom-x"
 
 
 def test_settings_secret_api_save_and_delete(tmp_path: Path, monkeypatch):
