@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib
 import json
+import subprocess
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -214,3 +216,52 @@ def test_generate_article_ai_rejects_non_chinese_body(monkeypatch):
             content="Short english brief.",
         )
     assert str(exc.value) == "INVALID_BODY_ZH"
+
+
+def test_generate_codex_fallback_translation_uses_codex_exec(monkeypatch, tmp_path):
+    commands = []
+
+    def fake_run(command, capture_output, text, timeout, check):
+        commands.append(command)
+        output_path = command[command.index("--output-last-message") + 1]
+        Path(output_path).write_text("这是 Codex 译文。", encoding="utf-8")
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    import llm_client
+
+    importlib.reload(llm_client)
+    monkeypatch.setattr(llm_client.subprocess, "run", fake_run)
+
+    out = llm_client.generate_codex_fallback_translation(
+        title="Fallback Title",
+        source="Reuters",
+        content="English body",
+        model="gpt-5-codex",
+    )
+
+    assert out["model"] == "gpt-5-codex"
+    assert out["body_zh"] == "这是 Codex 译文。"
+    assert out["key_points_zh"] == []
+    assert commands[0][0:2] == ["codex", "exec"]
+    assert "opencli" not in commands[0]
+    assert "gemini" not in commands[0]
+    assert "--skip-git-repo-check" in commands[0]
+    assert "--model" in commands[0]
+
+
+def test_generate_codex_fallback_translation_timeout(monkeypatch):
+    def fake_run(command, capture_output, text, timeout, check):
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    import llm_client
+
+    importlib.reload(llm_client)
+    monkeypatch.setattr(llm_client.subprocess, "run", fake_run)
+
+    with pytest.raises(llm_client.LLMClientError) as exc:
+        llm_client.generate_codex_fallback_translation(
+            title="Fallback Title",
+            source="Reuters",
+            content="English body",
+        )
+    assert str(exc.value) == "CODEX_FALLBACK_TIMEOUT"

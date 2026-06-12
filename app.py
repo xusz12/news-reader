@@ -17,8 +17,8 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from llm_client import (
     LLMClientError,
+    generate_codex_fallback_translation,
     generate_article_ai,
-    generate_gemini_fallback_translation,
 )
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
@@ -472,14 +472,7 @@ def codex_chat_lock(item_id: str) -> threading.Lock:
 
 def build_codex_chat_prompt(*, title: str, source: str, published_at: str, content: str, question: str) -> str:
     return (
-        "你是一名新闻研究助手。请基于下面的新闻正文作为引用锚点来回答用户问题。\n"
-        "要求：\n"
-        "1. 用中文，简洁但信息充分。\n"
-        "2. 明确区分“正文事实”“外部补充”“推断/判断”。\n"
-        "3. 可以结合外部知识回答，但如果无法确认最新进展，必须直接说明不确定。\n"
-        "4. 不要假装看到了正文里没有的信息。\n\n"
-        f"新闻标题：{title}\n"
-        f"新闻来源：{source}\n"
+        "你是一名新闻研究助手。要求：使用中文，回答尽量简洁。\n"
         f"发布时间：{published_at}\n"
         "新闻正文：\n"
         f"{content}\n\n"
@@ -1148,10 +1141,11 @@ def process_pending_ai_once() -> bool:
         except LLMClientError as exc:
             primary_error = str(exc)
             try:
-                payload = generate_gemini_fallback_translation(
+                payload = generate_codex_fallback_translation(
                     title=(detail["title"] or "").strip(),
                     source=(detail["source"] or "").strip(),
                     content=(detail["content"] or "").strip(),
+                    model=(llm_settings.get("codex_chat", {}).get("model") or "").strip(),
                 )
                 ok = True
             except LLMClientError as fallback_exc:

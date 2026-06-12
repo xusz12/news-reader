@@ -1517,7 +1517,7 @@ def test_market_trend_tag_detail_overview(tmp_path: Path, monkeypatch):
     assert payload["items"][1]["note"]["note"] == "旧新闻想法"
 
 
-def test_ai_fallback_to_gemini_success(tmp_path: Path, monkeypatch):
+def test_ai_fallback_to_codex_success(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews"
     daily_dir.mkdir(parents=True)
     db_path = tmp_path / "news_index.sqlite3"
@@ -1562,15 +1562,15 @@ def test_ai_fallback_to_gemini_success(tmp_path: Path, monkeypatch):
 
     def succeed_fallback(**kwargs):
         return {
-            "model": "gemini-fallback",
+            "model": "codex-fallback",
             "key_points_zh": [],
             "conclusion_zh": "",
-            "body_zh": "这是 Gemini 保底译文。",
-            "raw_json": '{"provider":"gemini-fallback"}',
+            "body_zh": "这是 Codex 保底译文。",
+            "raw_json": '{"provider":"codex-fallback"}',
         }
 
     monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
-    monkeypatch.setattr(app_module, "generate_gemini_fallback_translation", succeed_fallback)
+    monkeypatch.setattr(app_module, "generate_codex_fallback_translation", succeed_fallback)
 
     assert app_module.process_pending_ai_once() is True
 
@@ -1584,15 +1584,15 @@ def test_ai_fallback_to_gemini_success(tmp_path: Path, monkeypatch):
             ("https://example.com/fallback",),
         ).fetchone()
 
-    assert ai_row["model"] == "gemini-fallback"
-    assert ai_row["body_zh"] == "这是 Gemini 保底译文。"
+    assert ai_row["model"] == "codex-fallback"
+    assert ai_row["body_zh"] == "这是 Codex 保底译文。"
     assert ai_row["key_points_zh"] == "[]"
     assert ai_row["conclusion_zh"] == ""
     assert job_row["status"] == "success"
     assert job_row["last_error"] is None
 
 
-def test_ai_fallback_to_gemini_failure_keeps_error(tmp_path: Path, monkeypatch):
+def test_ai_fallback_to_codex_failure_keeps_error(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews"
     daily_dir.mkdir(parents=True)
     db_path = tmp_path / "news_index.sqlite3"
@@ -1636,10 +1636,10 @@ def test_ai_fallback_to_gemini_failure_keeps_error(tmp_path: Path, monkeypatch):
         raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
 
     def fail_fallback(**kwargs):
-        raise app_module.LLMClientError("GEMINI_FALLBACK_FAILED: bridge down")
+        raise app_module.LLMClientError("CODEX_FALLBACK_FAILED: bridge down")
 
     monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
-    monkeypatch.setattr(app_module, "generate_gemini_fallback_translation", fail_fallback)
+    monkeypatch.setattr(app_module, "generate_codex_fallback_translation", fail_fallback)
 
     assert app_module.process_pending_ai_once() is True
 
@@ -1656,7 +1656,7 @@ def test_ai_fallback_to_gemini_failure_keeps_error(tmp_path: Path, monkeypatch):
     assert ai_row is None
     assert job_row["status"] == "failed"
     assert "INVALID_TOOL_ARGUMENTS_JSON" in job_row["last_error"]
-    assert "GEMINI_FALLBACK_FAILED" in job_row["last_error"]
+    assert "CODEX_FALLBACK_FAILED" in job_row["last_error"]
 
 
 def test_error_stats_today_with_and_without_errors(tmp_path: Path, monkeypatch):
@@ -2018,6 +2018,10 @@ def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypa
     assert commands[0][0:2] == ["codex", "exec"]
     assert "resume" not in commands[0]
     assert "--last" not in commands[0]
+    assert commands[0][2].startswith("你是一名新闻研究助手。要求：使用中文，回答尽量简洁。")
+    assert "发布时间：2026-06-11 09:00:00" in commands[0][2]
+    assert "新闻正文：\nBody" in commands[0][2]
+    assert "用户问题：什么是 codex exec？" in commands[0][2]
     assert commands[1][0:4] == ["codex", "exec", "resume", "first-session"]
     assert "--last" not in commands[1]
 

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from secret_store import SecretStoreError, read_secret
@@ -13,21 +14,17 @@ class LLMClientError(RuntimeError):
     pass
 
 
-_CJK_RE = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF]")
-_GEMINI_CHOICE_RE = re.compile(
-    r"Choice A(?P<a>.*?)Choice B(?P<b>.*?)(?:Gemini is AI|$)",
-    re.DOTALL,
-)
+def _contains_cjk(text: str) -> bool:
+    for char in text:
+        code = ord(char)
+        if 0x3400 <= code <= 0x4DBF or 0x4E00 <= code <= 0x9FFF:
+            return True
+    return False
 
 
 def _configured_model() -> str:
     value = (os.getenv("NEWS_READER_LLM_MODEL") or "").strip()
     return value or "deepseek-chat"
-
-
-def _configured_openai_chat_model() -> str:
-    value = (os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "").strip()
-    return value or "gpt-4.1-mini"
 
 
 def _resolve_api_key(env_name: str) -> str:
@@ -138,7 +135,7 @@ def generate_article_ai(*, title: str, source: str, content: str, model: str | N
     if not isinstance(body_zh, str):
         raise LLMClientError("INVALID_BODY_ZH")
     body_text = body_zh.strip()
-    if not body_text or not _CJK_RE.search(body_text):
+    if not body_text or not _contains_cjk(body_text):
         raise LLMClientError("INVALID_BODY_ZH")
 
     return {
@@ -150,215 +147,18 @@ def generate_article_ai(*, title: str, source: str, content: str, model: str | N
     }
 
 
-def build_news_chat_transcript(
+def generate_codex_fallback_translation(
     *,
     title: str,
     source: str,
-    published_at: str,
     content: str,
-    messages: list[dict[str, str]],
-) -> str:
-    body = (content or "").strip()
-    if len(body) > 12000:
-        body = body[:12000]
-    transcript_lines = []
-    for msg in messages:
-        role = (msg.get("role") or "").strip().lower()
-        text = (msg.get("content") or "").strip()
-        if role not in {"user", "assistant"} or not text:
-            continue
-        speaker = "用户" if role == "user" else "助手"
-        transcript_lines.append(f"{speaker}：{text}")
-    transcript = "\n".join(transcript_lines)
-    return (
-        "下面是一篇新闻正文，请把它作为背景材料和引用锚点，帮助理解用户问题。\n\n"
-        f"标题：{title or '无标题'}\n"
-        f"来源：{source or '未知来源'}\n"
-        f"时间：{published_at or '未知时间'}\n"
-        "正文：\n"
-        "<<<NEWS>>>\n"
-        f"{body}\n"
-        "<<<END>>>\n\n"
-        "以下是当前对话记录：\n"
-        f"{transcript or '（暂无）'}"
-    )
-
-
-def _news_chat_system_prompt(*, allow_web_search: bool) -> str:
-    capability_line = (
-        "你可以结合公开知识、背景信息以及你可获得的联网搜索结果来回答。"
-        if allow_web_search
-        else "你可以结合公开知识和背景信息来回答，但不要假装自己进行了实时联网搜索。"
-    )
-    return (
-        "你是新闻阅读助手。\n"
-        f"{capability_line}\n"
-        "回答要求：\n"
-        "1. 只用中文回答；\n"
-        "2. 新闻正文是背景材料和引用锚点，不是回答边界；\n"
-        "3. 必须尽量区分：正文事实、正文之外的补充信息、你自己的推断；\n"
-        "4. 如果用户问的是最新进展，但你无法确认，请明确说无法确认；\n"
-        "5. 回答尽量精炼，优先短要点，不要泛泛扩展。"
-    )
-
-
-def _extract_chat_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
-                    parts.append(text.strip())
-        return "\n".join(parts).strip()
-    return ""
-
-
-def ask_deepseek_news_chat(
-    *,
-    title: str,
-    source: str,
-    published_at: str,
-    content: str,
-    messages: list[dict[str, str]],
     model: str | None = None,
-    timeout: int = 90,
-) -> dict[str, Any]:
-    api_key = _resolve_api_key("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
-
-    try:
-        from openai import OpenAI
-    except Exception as exc:  # pragma: no cover - env-specific
-        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
-
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
-    model_name = (model or "").strip() or _configured_model()
-    payload_messages = [
-        {"role": "system", "content": _news_chat_system_prompt(allow_web_search=False)},
-        {
-            "role": "user",
-            "content": build_news_chat_transcript(
-                title=title,
-                source=source,
-                published_at=published_at,
-                content=content,
-                messages=messages,
-            ),
-        },
-    ]
-
-    try:
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=payload_messages,
-            temperature=0.2,
-            timeout=timeout,
-        )
-    except Exception as exc:
-        raise LLMClientError(f"DEEPSEEK_CHAT_FAILED: {exc}") from exc
-
-    choices = getattr(resp, "choices", None) or []
-    if not choices:
-        raise LLMClientError("DEEPSEEK_CHAT_EMPTY_CHOICES")
-    message = choices[0].message
-    text = _extract_chat_text(getattr(message, "content", ""))
-    if not text or not _CJK_RE.search(text):
-        raise LLMClientError("DEEPSEEK_CHAT_INVALID_OUTPUT")
-    return {
-        "provider": "deepseek",
-        "model": getattr(resp, "model", None) or model_name,
-        "answer": text,
-    }
-
-
-def ask_openai_news_chat(
-    *,
-    title: str,
-    source: str,
-    published_at: str,
-    content: str,
-    messages: list[dict[str, str]],
-    model: str | None = None,
-    timeout: int = 90,
-) -> dict[str, Any]:
-    api_key = _resolve_api_key("OPENAI_API_KEY")
-    if not api_key:
-        raise LLMClientError("MISSING_OPENAI_API_KEY")
-
-    try:
-        from openai import OpenAI
-    except Exception as exc:  # pragma: no cover - env-specific
-        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
-
-    model_name = (model or "").strip() or _configured_openai_chat_model()
-    client = OpenAI(api_key=api_key)
-    transcript = build_news_chat_transcript(
-        title=title,
-        source=source,
-        published_at=published_at,
-        content=content,
-        messages=messages,
-    )
-
-    try:
-        resp = client.responses.create(
-            model=model_name,
-            instructions=_news_chat_system_prompt(allow_web_search=True),
-            input=transcript,
-            tools=[{"type": "web_search"}],
-            temperature=0.2,
-            timeout=timeout,
-        )
-    except Exception as exc:
-        raise LLMClientError(f"OPENAI_CHAT_FAILED: {exc}") from exc
-
-    text = (getattr(resp, "output_text", None) or "").strip()
-    if not text or not _CJK_RE.search(text):
-        raise LLMClientError("OPENAI_CHAT_INVALID_OUTPUT")
-    return {
-        "provider": "openai",
-        "model": getattr(resp, "model", None) or model_name,
-        "answer": text,
-    }
-
-
-def _strip_opencli_update_noise(text: str) -> str:
-    head = text.split("\n\n  Update available:", 1)[0]
-    return head.strip()
-
-
-def _extract_gemini_translation(text: str) -> str:
-    cleaned = _strip_opencli_update_noise(text).strip()
-    if cleaned.startswith("💬"):
-        cleaned = cleaned[1:].strip()
-
-    match = _GEMINI_CHOICE_RE.search(cleaned)
-    if match:
-        choice_a = match.group("a").strip()
-        choice_b = match.group("b").strip()
-        if _CJK_RE.search(choice_a):
-            return choice_a
-        if _CJK_RE.search(choice_b):
-            return choice_b
-
-    return cleaned
-
-
-def generate_gemini_fallback_translation(
-    *,
-    title: str,
-    source: str,
-    content: str,
     timeout: int = 90,
     max_chars: int = 12000,
 ) -> dict[str, Any]:
     body = (content or "").strip()
     if not body:
-        raise LLMClientError("GEMINI_FALLBACK_EMPTY_CONTENT")
+        raise LLMClientError("CODEX_FALLBACK_EMPTY_CONTENT")
 
     truncated = False
     if len(body) > max_chars:
@@ -372,50 +172,53 @@ def generate_gemini_fallback_translation(
         f"{body}"
     )
 
-    cmd = [
-        "opencli",
-        "gemini",
-        "ask",
-        prompt,
-        "--new",
-        "true",
-        "--timeout",
-        str(timeout),
-        "-f",
-        "plain",
-    ]
+    command = ["codex", "exec", prompt, "--skip-git-repo-check"]
+    model_name = (model or "").strip()
+    if model_name:
+        command.extend(["--model", model_name])
+
+    with tempfile.NamedTemporaryFile(prefix="news-reader-codex-fallback-", suffix=".txt", delete=False) as handle:
+        output_path = handle.name
+    command.extend(["--output-last-message", output_path])
+
     try:
         proc = subprocess.run(
-            cmd,
+            command,
             capture_output=True,
             text=True,
             timeout=timeout + 15,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise LLMClientError("GEMINI_FALLBACK_TIMEOUT") from exc
+        raise LLMClientError("CODEX_FALLBACK_TIMEOUT") from exc
     except Exception as exc:
-        raise LLMClientError(f"GEMINI_FALLBACK_FAILED: {exc}") from exc
+        raise LLMClientError(f"CODEX_FALLBACK_FAILED: {exc}") from exc
 
-    output = (proc.stdout or "").strip()
-    error = (proc.stderr or "").strip()
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    try:
+        body_zh = Path(output_path).read_text(encoding="utf-8").strip()
+    except Exception:
+        body_zh = ""
+    finally:
+        Path(output_path).unlink(missing_ok=True)
+
     if proc.returncode != 0:
-        detail = error or output or f"exit={proc.returncode}"
-        raise LLMClientError(f"GEMINI_FALLBACK_FAILED: {detail[:300]}")
-
-    body_zh = _extract_gemini_translation(output)
-    if not body_zh or not _CJK_RE.search(body_zh):
-        raise LLMClientError("GEMINI_FALLBACK_INVALID_OUTPUT")
+        detail = stderr or stdout or f"exit={proc.returncode}"
+        raise LLMClientError(f"CODEX_FALLBACK_FAILED: {detail[:300]}")
+    if not body_zh or not _contains_cjk(body_zh):
+        raise LLMClientError("CODEX_FALLBACK_INVALID_OUTPUT")
 
     raw_payload = {
-        "provider": "gemini-fallback",
+        "provider": "codex-fallback",
         "truncated": truncated,
-        "raw_output": output[:4000],
+        "stdout": stdout[:4000],
+        "stderr": stderr[:1000],
     }
     return {
-        "model": "gemini-fallback",
+        "model": model_name or "codex-fallback",
         "key_points_zh": [],
         "conclusion_zh": "",
-        "body_zh": body_zh.strip(),
+        "body_zh": body_zh,
         "raw_json": json.dumps(raw_payload, ensure_ascii=False),
     }

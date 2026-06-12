@@ -2667,7 +2667,7 @@ function renderDetail(item) {
   const detailErr = cached?.job?.last_error || item.detail_error || "";
   const ai = cached?.ai || null;
   const aiStatus = cached?.ai_status || item.ai_status || "none";
-  const isGeminiFallback = (ai?.model || "").startsWith("gemini-fallback");
+  const isCodexFallback = (ai?.model || "") === "codex-fallback";
 
   detailAiBox.classList.add("hidden");
   detailAiPoints.innerHTML = "";
@@ -2705,22 +2705,22 @@ function renderDetail(item) {
       } catch {
         keyPoints = [];
       }
-      if (!isGeminiFallback && Array.isArray(keyPoints) && keyPoints.length) {
+      if (!isCodexFallback && Array.isArray(keyPoints) && keyPoints.length) {
         keyPoints.forEach((point) => {
           const li = document.createElement("li");
           li.textContent = point;
           detailAiPoints.appendChild(li);
         });
       }
-      if (!isGeminiFallback) {
+      if (!isCodexFallback) {
         detailAiConclusion.textContent = ai.conclusion_zh || "";
         detailAiBox.classList.remove("hidden");
       }
 
-      statusEl.textContent = isGeminiFallback
-        ? "Gemini 保底翻译，结果可能不稳定"
+      statusEl.textContent = isCodexFallback
+        ? "Codex exec 保底翻译"
         : "中文摘要与翻译已生成";
-      statusEl.className = isGeminiFallback ? "detail-status pending" : "detail-status ready";
+      statusEl.className = isCodexFallback ? "detail-status pending" : "detail-status ready";
       contentEl.textContent = ai.body_zh;
       contentEl.classList.remove("hidden");
       stopDetailPolling();
