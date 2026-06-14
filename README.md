@@ -4,6 +4,25 @@
 
 ## What's Changed
 
+### 2026-06-14 — feat: 新增 v2.0.0 推荐集合 MVP
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*llm_client.py（+）*、*scanner.py（+）*
+    - 推荐链路重构为 `recommendation_categories + recommendation_evals + recommendation_feedback + recommendation_meta`：旧 `recommendation_evals` 从 `item_id` 主键迁移为 `(item_id, schema_version)` 复合主键，旧 schema 结果保留但自动失效于当前推荐查询
+    - 新增“推荐类别库”初始化链路：从历史 `重要 / 想法 / 板块标签` 正样本生成 active category 集合，推荐状态能明确区分 `类别库未就绪 / 初始化失败 / 已就绪`
+    - LLM 现只做语义归类：输出 `category_matches / entities / event_type / sectors / regions / new_category_candidates / headline_signal`，不再输出“是否推荐”或推荐分数
+    - harness 现按 active category 权重、match confidence、source bonus、event_type bonus 做确定性打分，并用 `schema_version=category-v1` + 当前类别库做推荐决策
+    - `reindex` 会自动为“新 + 未读 + 缺少当前 schema eval”新闻入队推荐评估；`POST /api/recommendations/init` 会先初始化类别库，再为当前未读补队列
+    - 新增旧权重结果版本隔离与当前 schema 幂等保障；推荐状态继续支持失败快照与 `shown/opened/marked_important/noted/tagged/dismissed` 反馈记录
+  - *static/index.html（+）*、*static/app.js（+）*
+    - 左侧与手机集合入口新增 `推荐`
+    - 推荐集合支持空态区分：`类别库未就绪 / 初始化失败 / 评估中 / 评估失败 / 暂无命中`
+    - 初始化入口改为“类别库优先”：类别库未就绪时显示“初始化推荐类别库”，就绪后显示“初始化当前未读推荐”
+    - 推荐列表曝光会记录 `shown`，打开详情记录 `opened`
+    - 在推荐集合里标重要、写想法、打板块标签、dismiss 都会落反馈事件；标已读或 dismiss 后会从推荐集合中消失
+  - *tests/test_api.py（+）*
+    - 覆盖新 schema 自动入队、类别库未就绪时不评估、正样本生成类别库、active category 命中推荐、candidate-only 不推荐、旧 schema 隔离、反馈事件不回归
+- **影响**：推荐集合现在真正切到“类别库 + LLM 归类器 + harness 决策”架构，推荐依据从 LLM 主观打分改为用户历史正样本驱动的类别命中与确定性规则；旧 4 字段推荐结果不再污染当前终验口径。
+
 ### 2026-06-12 — improve: 收敛 v1.9.6.5 设置页与 chatPage 信息密度
 - **文件**
   - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*

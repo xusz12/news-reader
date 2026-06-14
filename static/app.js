@@ -6,7 +6,7 @@ let state = {
   readFilter: "unread", // all | unread
   feedReadFilter: "unread", // 仅新闻流记忆 all | unread
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
-  collection: "feed", // search | feed | important | read_later | notes | market_tags | trends
+  collection: "feed", // search | feed | recommendations | important | read_later | notes | market_tags | trends
   total: 0,
   loading: false,
   hasMore: true,
@@ -43,6 +43,8 @@ let state = {
   releaseNotes: [],
   settingsMessage: "",
   settingsMessageTone: "muted",
+  recommendationStatus: null,
+  recommendationInitRunning: false,
 };
 
 const mediaIconMap = {
@@ -61,6 +63,7 @@ const manageMarketTagsBtn = document.getElementById("manageMarketTagsBtn");
 
 const navSearchBtn = document.getElementById("navSearchBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
+const navRecommendationsBtn = document.getElementById("navRecommendationsBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
@@ -99,6 +102,7 @@ const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 const workspace = document.getElementById("workspace");
 const trendsView = document.getElementById("trendsView");
 const trendsTable = document.getElementById("trendsTable");
+const initRecommendationsBtn = document.getElementById("initRecommendationsBtn");
 
 const detailPanel = document.getElementById("detailPanel");
 const detailEmpty = document.getElementById("detailEmpty");
@@ -170,6 +174,7 @@ const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
 const detailReturnToTrendBtn = document.getElementById("detailReturnToTrendBtn");
 const detailBullishBtn = document.getElementById("detailBullishBtn");
 const detailBearishBtn = document.getElementById("detailBearishBtn");
+const detailDismissRecommendationBtn = document.getElementById("detailDismissRecommendationBtn");
 const detailInlineMarketTags = document.getElementById("detailInlineMarketTags");
 const detailMarketPicker = document.getElementById("detailMarketPicker");
 const detailMarketPickerTitle = document.getElementById("detailMarketPickerTitle");
@@ -196,6 +201,8 @@ const detailSwipeState = {
 };
 const enteredViewport = new Set();
 const writeInFlight = new Set();
+const recommendationShownIds = new Set();
+const recommendationOpenedIds = new Set();
 
 const THEME_KEY = "news_reader_theme_mode";
 const DETAIL_FONT_KEY = "news_reader_detail_font";
@@ -330,6 +337,52 @@ async function fetchErrorStats() {
   return Array.isArray(data.days) ? data.days : [];
 }
 
+async function fetchRecommendationStatus() {
+  const res = await fetch("/api/recommendations/status");
+  if (!res.ok) throw new Error("recommendation_status_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "recommendation_status_fetch_failed");
+  return data;
+}
+
+async function postRecommendationInit(limit = 200) {
+  const res = await fetch("/api/recommendations/init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ limit }),
+  });
+  if (!res.ok) throw new Error("recommendation_init_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "recommendation_init_failed");
+  return data;
+}
+
+async function recordRecommendationFeedback({ itemId = "", itemIds = [], eventType, sourceContext = "recommendations" }) {
+  const normalizedIds = Array.isArray(itemIds)
+    ? itemIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  const singleId = String(itemId || "").trim();
+  if (!singleId && !normalizedIds.length) return 0;
+  const body = {
+    event_type: eventType,
+    source_context: sourceContext,
+  };
+  if (normalizedIds.length) {
+    body.item_ids = normalizedIds;
+  } else {
+    body.item_id = singleId;
+  }
+  const res = await fetch("/api/recommendations/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("recommendation_feedback_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "recommendation_feedback_failed");
+  return Number(data.count || 0);
+}
+
 async function createMarketTagDefinition(displayName) {
   const res = await fetch("/api/market-tags", {
     method: "POST",
@@ -429,6 +482,7 @@ function itemMatchesCurrentDateCountScope(item) {
   if (!item || state.collection === "trends" || state.collection === "search") return false;
   let inCollection = false;
   if (state.collection === "feed") inCollection = true;
+  else if (state.collection === "recommendations") inCollection = !!item.recommendation_flag && !item.read_at;
   else if (state.collection === "important") inCollection = !!item.important_at;
   else if (state.collection === "read_later") inCollection = !!item.read_later_at;
   else if (state.collection === "notes") inCollection = !!item.has_note;
@@ -1286,6 +1340,7 @@ function applyResumeIcon(label = "回到上次阅读") {
 function updateBatchActionButton() {
   if (
     state.collection === "search" ||
+    state.collection === "recommendations" ||
     state.collection === "important" ||
     state.collection === "notes" ||
     state.collection === "market_tags" ||
@@ -1306,6 +1361,7 @@ function updateBatchActionButton() {
 function updateCollectionButtons() {
   if (navSearchBtn) navSearchBtn.classList.toggle("active", state.collection === "search");
   navFeedBtn.classList.toggle("active", state.collection === "feed");
+  if (navRecommendationsBtn) navRecommendationsBtn.classList.toggle("active", state.collection === "recommendations");
   navImportantBtn.classList.toggle("active", state.collection === "important");
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
   if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
@@ -1316,6 +1372,7 @@ function updateCollectionButtons() {
     const names = {
       search: "搜索",
       feed: "新闻流",
+      recommendations: "推荐",
       important: "重要",
       read_later: "稍后",
       notes: "想法",
@@ -1342,6 +1399,19 @@ function updateCollectionButtons() {
       });
     }
   }
+  if (initRecommendationsBtn) {
+    const visible = state.collection === "recommendations";
+    initRecommendationsBtn.classList.toggle("hidden", !visible);
+    initRecommendationsBtn.disabled = state.recommendationInitRunning;
+    if (visible) {
+      const ready = !!state.recommendationStatus?.category_library_ready;
+      if (state.recommendationInitRunning) {
+        initRecommendationsBtn.textContent = ready ? "初始化推荐中..." : "初始化类别库中...";
+      } else {
+        initRecommendationsBtn.textContent = ready ? "初始化当前未读推荐" : "初始化推荐类别库";
+      }
+    }
+  }
 }
 
 function updateMobileFilterCollectionText() {
@@ -1349,6 +1419,7 @@ function updateMobileFilterCollectionText() {
   const names = {
     search: "搜索",
     feed: "新闻流",
+    recommendations: "推荐",
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
@@ -1376,6 +1447,7 @@ function renderMobileCollectionOptions() {
   const options = [
     { key: "search", label: "搜索" },
     { key: "feed", label: "新闻流" },
+    { key: "recommendations", label: "推荐" },
     { key: "important", label: "重要" },
     { key: "read_later", label: "稍后阅读" },
     { key: "notes", label: "想法" },
@@ -1504,6 +1576,7 @@ function renderMeta() {
   }
   const names = {
     feed: "新闻流",
+    recommendations: "推荐",
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
@@ -1521,8 +1594,57 @@ function renderMeta() {
   };
   const readFilterName = state.collection === "feed" ? readNames[state.readFilter] : readNames.all;
   const sourceName = state.sourceFilter === "all" ? "全部来源" : sourceLabel(state.sourceFilter);
+  if (state.collection === "recommendations") {
+    const status = state.recommendationStatus || {};
+    const libraryText = status.category_library_ready
+      ? `类别库已就绪 · active ${status.active_category_count || 0}`
+      : `类别库未就绪 · 正样本 ${status.positive_sample_count || 0}`;
+    meta.textContent = `推荐 · ${sourceName} · 命中 ${state.total} 条 · ${libraryText} · 待评估 ${status.pending || 0} / 成功 ${status.success || 0} / 失败 ${status.failed || 0}`;
+    pageInfo.textContent = `${state.page} / ${state.pages}`;
+    return;
+  }
   meta.textContent = `${names[state.collection]} · ${readFilterName} · ${sourceName} · 共 ${state.total} 条`;
   pageInfo.textContent = `${state.page} / ${state.pages}`;
+}
+
+function recommendationEmptyHint(status) {
+  if (!status?.category_library_ready) {
+    if (status?.category_library_status === "failed") {
+      const latest = status?.latest_error?.error ? ` · 最近失败：${status.latest_error.error}` : "";
+      return `推荐类别库初始化失败，可点“初始化推荐类别库”重试${latest}`;
+    }
+    return "推荐类别库未就绪，请先初始化类别库";
+  }
+  const pending = Number(status?.pending || 0);
+  const failed = Number(status?.failed || 0);
+  if (pending > 0) {
+    return `推荐评估中 · 待评估 ${pending} 条`;
+  }
+  if (failed > 0) {
+    const latest = status?.latest_error?.error ? ` · 最近失败：${status.latest_error.error}` : "";
+    return `推荐评估失败 ${failed} 条，可点“初始化当前未读推荐”重试${latest}`;
+  }
+  return "暂无命中推荐";
+}
+
+async function recordRecommendationShownForVisibleItems(items) {
+  if (state.collection !== "recommendations") return;
+  const unseenIds = (Array.isArray(items) ? items : [])
+    .map((item) => String(item?.id || "").trim())
+    .filter((id) => id && !recommendationShownIds.has(id));
+  if (!unseenIds.length) return;
+  try {
+    await recordRecommendationFeedback({
+      itemIds: unseenIds,
+      eventType: "shown",
+      sourceContext: "recommendations",
+    });
+    unseenIds.forEach((id) => recommendationShownIds.add(id));
+  } catch {}
+}
+
+function shouldTrackRecommendationFeedback(item) {
+  return state.collection === "recommendations" && !!item;
 }
 
 function activeMarketTagChoices() {
@@ -2321,12 +2443,23 @@ async function patchStateWithRollback(itemId, payload) {
     const result = await patchState(itemId, payload);
     applyPatchToItem(item, result);
     rerenderOne(itemId);
+    if (shouldTrackRecommendationFeedback(item) && payload.important === true) {
+      recordRecommendationFeedback({
+        itemId,
+        eventType: "marked_important",
+        sourceContext: "recommendations",
+      }).catch(() => {});
+    }
     if ("read_later" in payload) {
       if (payload.read_later) {
         kickRowStatusPolling();
       } else {
         ensureRowStatusPolling();
       }
+    }
+    if (state.collection === "recommendations" && payload.read === true) {
+      await loadFirstPage();
+      return;
     }
   } catch {
     adjustDateCountForScopeTransition(item, backup);
@@ -2450,6 +2583,14 @@ function openItemDetail(item, { fromTrend = false } = {}) {
   renderDetail(state.itemsById.get(item.id) || item);
   loadDetail(item.id);
   startDetailPolling(item.id);
+  if (!fromTrend && state.collection === "recommendations" && !recommendationOpenedIds.has(String(item.id))) {
+    recommendationOpenedIds.add(String(item.id));
+    recordRecommendationFeedback({
+      itemId: item.id,
+      eventType: "opened",
+      sourceContext: "recommendations",
+    }).catch(() => {});
+  }
   if (!fromTrend) saveReadingCheckpoint(item).catch(() => {});
   openDetailOnMobile();
 }
@@ -2696,6 +2837,13 @@ async function upsertMarketTag(item, tag, direction) {
   state.itemsById.set(item.id, item);
   adjustDateCountForScopeTransition(beforeItem, item);
   rerenderOne(item.id);
+  if (shouldTrackRecommendationFeedback(item)) {
+    recordRecommendationFeedback({
+      itemId: item.id,
+      eventType: "tagged",
+      sourceContext: "recommendations",
+    }).catch(() => {});
+  }
 }
 
 async function deleteMarketTag(item, tag) {
@@ -2831,6 +2979,13 @@ async function saveDetailNote(item, noteText) {
   adjustDateCountForScopeTransition(beforeItem, item);
   rerenderOne(item.id);
   refreshDetailNoteUI(item);
+  if (shouldTrackRecommendationFeedback(item) && noteText.trim()) {
+    recordRecommendationFeedback({
+      itemId: item.id,
+      eventType: "noted",
+      sourceContext: "recommendations",
+    }).catch(() => {});
+  }
 }
 
 function renderDetail(item) {
@@ -3025,6 +3180,16 @@ function renderDetail(item) {
   });
   applyIcon(detailBullishBtn, "trend-up", { tone: "danger", label: "看多板块标记" });
   applyIcon(detailBearishBtn, "trend-down", { tone: "success", label: "看空板块标记" });
+  if (detailDismissRecommendationBtn) {
+    const canDismiss = state.collection === "recommendations";
+    detailDismissRecommendationBtn.classList.toggle("hidden", !canDismiss);
+    if (canDismiss) {
+      applyIcon(detailDismissRecommendationBtn, "close", {
+        tone: "warning",
+        label: "不再推荐",
+      });
+    }
+  }
   refreshDetailNoteUI(item);
   refreshDetailMarketTagsUI(item);
   updateWorkspaceLayout();
@@ -3332,6 +3497,7 @@ function resetList() {
   state.dateCounts = new Map();
   state.detailReturnToTrend = false;
   state.feedUnreadCursor = null;
+  state.recommendationStatus = null;
   resetDetailChatState();
   showTrendsView(false);
   syncSearchPageControls();
@@ -3450,6 +3616,37 @@ async function loadFirstPage() {
     }
     renderSourceFilters(sourceList);
 
+    if (state.collection === "recommendations") {
+      const [status, data] = await Promise.all([
+        fetchRecommendationStatus().catch(() => null),
+        fetchNewsPage(1),
+      ]);
+      state.recommendationStatus = status;
+      state.total = data.total;
+      setDateCounts(data.date_counts);
+      state.pages = data.pages;
+      state.page = 1;
+      state.feedUnreadCursor = null;
+      state.hasMore = state.page < state.pages;
+      data.items.forEach((item) => appendNewsRow(item, buildItemRow(item)));
+      renderMeta();
+      showTrendsView(false);
+      await recordRecommendationShownForVisibleItems(data.items);
+      if (state.total === 0) {
+        setHint(recommendationEmptyHint(status));
+      } else if (state.hasMore) {
+        setHint("继续下滑加载更多推荐");
+      } else {
+        setHint("已加载全部推荐");
+      }
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      stopRowStatusPolling();
+      return;
+    }
+
     const data = await fetchNewsPage(1);
     state.total = data.total;
     setDateCounts(data.date_counts);
@@ -3526,7 +3723,12 @@ async function loadNextPage() {
     state.feedUnreadCursor = isFeedUnreadCursorMode() ? (data.next_cursor || null) : null;
     state.hasMore = isFeedUnreadCursorMode() ? !!data.has_more : state.page < state.pages;
     renderMeta();
-    setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
+    if (state.collection === "recommendations") {
+      await recordRecommendationShownForVisibleItems(data.items);
+      setHint(state.hasMore ? "继续下滑加载更多推荐" : "已加载全部推荐");
+    } else {
+      setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部新闻");
+    }
     scheduleFeedEndAutoReadIfNeeded();
     ensureRowStatusPolling();
   } finally {
@@ -3611,6 +3813,12 @@ if (navSearchBtn) {
 navFeedBtn.addEventListener("click", async () => {
   await switchCollection("feed");
 });
+
+if (navRecommendationsBtn) {
+  navRecommendationsBtn.addEventListener("click", async () => {
+    await switchCollection("recommendations");
+  });
+}
 
 navImportantBtn.addEventListener("click", async () => {
   await switchCollection("important");
@@ -3777,6 +3985,7 @@ if (detailFontSelect) {
 
 markAllReadBtn.addEventListener("click", async () => {
   if (
+    state.collection === "recommendations" ||
     state.collection === "important" ||
     state.collection === "notes" ||
     state.collection === "market_tags" ||
@@ -3829,6 +4038,36 @@ refreshBtn.addEventListener("click", async () => {
   }
 });
 
+if (initRecommendationsBtn) {
+  initRecommendationsBtn.addEventListener("click", async () => {
+    if (state.collection !== "recommendations" || state.recommendationInitRunning) return;
+    state.recommendationInitRunning = true;
+    updateCollectionButtons();
+    setHint(state.recommendationStatus?.category_library_ready ? "正在初始化当前未读推荐..." : "正在初始化推荐类别库...");
+    try {
+      const payload = await postRecommendationInit(200);
+      state.recommendationStatus = payload;
+      await loadFirstPage();
+      if (!payload.ok) {
+        setHint(recommendationEmptyHint(payload));
+      } else if (payload.category_created > 0 && payload.queued > 0) {
+        setHint(`已建立 ${payload.category_created} 个推荐类别，并加入 ${payload.queued} 条评估任务`);
+      } else if (payload.category_created > 0) {
+        setHint(`已建立 ${payload.category_created} 个推荐类别`);
+      } else if (payload.queued > 0) {
+        setHint(`已加入 ${payload.queued} 条推荐评估任务`);
+      } else {
+        setHint(recommendationEmptyHint(payload));
+      }
+    } catch {
+      setHint("初始化推荐失败，请稍后重试。");
+    } finally {
+      state.recommendationInitRunning = false;
+      updateCollectionButtons();
+    }
+  });
+}
+
 detailCloseBtn.addEventListener("click", () => {
   if (canReturnToTrendDetail()) {
     restoreTrendDetailFromDetail();
@@ -3870,6 +4109,23 @@ detailImportantBtn.addEventListener("click", async () => {
   const current = !!state.itemsById.get(state.selectedId)?.important_at;
   await patchStateWithRollback(state.selectedId, { important: !current });
 });
+
+if (detailDismissRecommendationBtn) {
+  detailDismissRecommendationBtn.addEventListener("click", async () => {
+    if (!state.selectedId || state.collection !== "recommendations") return;
+    detailDismissRecommendationBtn.disabled = true;
+    try {
+      await recordRecommendationFeedback({
+        itemId: state.selectedId,
+        eventType: "dismissed",
+        sourceContext: "recommendations",
+      });
+      await loadFirstPage();
+    } finally {
+      detailDismissRecommendationBtn.disabled = false;
+    }
+  });
+}
 
 detailBullishBtn.addEventListener("click", () => {
   if (!state.selectedId) return;

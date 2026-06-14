@@ -15,6 +15,7 @@ class ReindexStats:
     changed_files: int = 0
     upserted: int = 0
     deleted_stale: int = 0
+    new_item_ids: list[str] | None = None
 
 
 def now_iso() -> str:
@@ -59,7 +60,7 @@ def reindex(
     *,
     full: bool = False,
 ) -> ReindexStats:
-    stats = ReindexStats()
+    stats = ReindexStats(new_item_ids=[])
     files = list_daily_files(daily_root)
     stats.scanned_files = len(files)
 
@@ -80,11 +81,17 @@ def reindex(
         parsed = parse_daily_file(path)
         ts = now_iso()
         new_ids: list[str] = []
+        existing_ids = {
+            row[0]
+            for row in conn.execute("SELECT id FROM items WHERE source_file=?", (rel_path,)).fetchall()
+        }
 
         with conn:
             for it in parsed:
                 item_id = make_item_id(it.date, it.source, it.title, it.url)
                 new_ids.append(item_id)
+                if item_id not in existing_ids:
+                    stats.new_item_ids.append(item_id)
                 conn.execute(
                     """
                     INSERT INTO items (
@@ -147,6 +154,14 @@ def reindex(
                 """,
                 (rel_path, current[0], current[1], ts, len(parsed)),
             )
+
+    with conn:
+        conn.execute(
+            "DELETE FROM recommendation_feedback WHERE item_id NOT IN (SELECT id FROM items)"
+        )
+        conn.execute(
+            "DELETE FROM recommendation_evals WHERE item_id NOT IN (SELECT id FROM items)"
+        )
 
     conn.commit()
     return stats

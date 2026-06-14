@@ -22,6 +22,8 @@ from llm_client import (
     LLMClientError,
     generate_codex_fallback_translation,
     generate_article_ai,
+    generate_recommendation_categories,
+    generate_recommendation_classification,
     resolve_translation_default_model,
 )
 from parser import parse_daily_errors
@@ -109,9 +111,41 @@ CODEX_MODEL_FALLBACKS = [
 ]
 SETTINGS_MODEL_OPTION_LIMIT = 40
 DEEPSEEK_MODELS_URL = "https://api.deepseek.com/models"
+RECOMMENDATION_PROMPT_VERSION = "recommendation-category-v1"
+RECOMMENDATION_SCHEMA_VERSION = "category-v1"
+RECOMMENDATION_WEIGHTS_VERSION = "category-v1"
+RECOMMENDATION_CATEGORY_VERSION = "1"
+RECOMMENDATION_INIT_LIMIT = 200
+RECOMMENDATION_CATEGORY_SAMPLE_LIMIT = 120
+RECOMMENDATION_SCORE_THRESHOLD = 70
+RECOMMENDATION_FEEDBACK_TYPES = {
+    "shown",
+    "opened",
+    "marked_important",
+    "noted",
+    "tagged",
+    "dismissed",
+}
+RECOMMENDATION_CONFIDENCE_MULTIPLIERS = {
+    "high": 1.0,
+    "medium": 0.55,
+    "low": 0.2,
+}
+RECOMMENDATION_EVENT_TYPE_WEIGHTS = {
+    "regulation": 6,
+    "product": 4,
+    "funding": 4,
+    "earnings": 4,
+    "geopolitics": 6,
+    "policy": 6,
+    "market": 2,
+    "other": 0,
+}
 
 
 def news_order_by_sql(collection: str) -> str:
+    if collection == "recommendations":
+        return "COALESCE(re.score, 0) DESC, items.published_at DESC, items.id DESC"
     return FEED_NEWS_ORDER_BY_SQL if collection in ("feed", "read_later") else NON_FEED_NEWS_ORDER_BY_SQL
 
 
@@ -248,6 +282,14 @@ def _build_news_where_clause(
         where.append("st.important_at IS NOT NULL")
     elif collection == "read_later":
         where.append("st.read_later_at IS NOT NULL")
+    elif collection == "recommendations":
+        where.append("st.read_at IS NULL")
+        where.append(
+            f"EXISTS (SELECT 1 FROM recommendation_evals re WHERE re.item_id = items.id AND re.schema_version='{RECOMMENDATION_SCHEMA_VERSION}' AND re.status='success' AND re.recommended=1)"
+        )
+        where.append(
+            "NOT EXISTS (SELECT 1 FROM recommendation_feedback rf WHERE rf.item_id = items.id AND rf.event_type='dismissed' AND rf.source_context='recommendations')"
+        )
     elif collection == "notes":
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
     elif collection == "market_tags":
@@ -295,6 +337,7 @@ def ensure_db() -> None:
     try:
         apply_schema(conn, SCHEMA_PATH)
         migrate_market_trend_notes(conn)
+        migrate_recommendation_tables(conn)
         seed_market_tag_definitions(conn)
     finally:
         conn.close()
@@ -302,6 +345,386 @@ def ensure_db() -> None:
 
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def current_recommendation_join_sql(alias: str = "re") -> str:
+    return (
+        f"LEFT JOIN recommendation_evals {alias} "
+        f"ON {alias}.item_id = items.id AND {alias}.schema_version = '{RECOMMENDATION_SCHEMA_VERSION}'"
+    )
+
+
+def serialize_recommendation_features(features: dict[str, object]) -> str:
+    return json.dumps(features, ensure_ascii=False, sort_keys=True)
+
+
+def parse_recommendation_features(raw_json: str | None) -> dict[str, object] | None:
+    if not isinstance(raw_json, str) or not raw_json.strip():
+        return None
+    try:
+        return _coerce_recommendation_features(json.loads(raw_json))
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+
+
+def _clean_string_list(raw: object, *, limit: int) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    cleaned: list[str] = []
+    for item in raw:
+        text = str(item or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def _coerce_recommendation_features(parsed: object) -> dict[str, object]:
+    if not isinstance(parsed, dict):
+        raise ValueError("INVALID_RECOMMENDATION_FEATURES")
+    normalized: dict[str, object] = {}
+    raw_matches = parsed.get("category_matches")
+    matches = []
+    if isinstance(raw_matches, list):
+        seen_keys: set[str] = set()
+        for raw in raw_matches[:8]:
+            if not isinstance(raw, dict):
+                continue
+            key = str(raw.get("key") or "").strip()
+            confidence = str(raw.get("confidence") or "").strip().lower()
+            if not key or confidence not in RECOMMENDATION_CONFIDENCE_MULTIPLIERS or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            matches.append({"key": key, "confidence": confidence})
+    normalized["category_matches"] = matches
+    event_type = str(parsed.get("event_type") or "").strip().lower()
+    normalized["event_type"] = event_type if event_type in RECOMMENDATION_EVENT_TYPE_WEIGHTS else "other"
+    normalized["entities"] = _clean_string_list(parsed.get("entities"), limit=6)
+    normalized["sectors"] = _clean_string_list(parsed.get("sectors"), limit=5)
+    normalized["regions"] = _clean_string_list(parsed.get("regions"), limit=5)
+    raw_candidates = parsed.get("new_category_candidates")
+    candidates = []
+    if isinstance(raw_candidates, list):
+        for raw in raw_candidates[:5]:
+            if not isinstance(raw, dict):
+                continue
+            label = str(raw.get("label") or "").strip()
+            description = str(raw.get("description") or "").strip()
+            confidence = str(raw.get("confidence") or "").strip().lower()
+            if not (label and description and confidence in RECOMMENDATION_CONFIDENCE_MULTIPLIERS):
+                continue
+            candidates.append(
+                {
+                    "label": label[:80],
+                    "description": description[:200],
+                    "confidence": confidence,
+                }
+            )
+    normalized["new_category_candidates"] = candidates
+    headline_signal = str(parsed.get("headline_signal") or "").strip()
+    normalized["headline_signal"] = headline_signal[:120]
+    return normalized
+
+
+def load_active_recommendation_categories(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    rows = conn.execute(
+        """
+        SELECT key, label, description, positive_count, weight, active, version, seed_item_ids_json
+        FROM recommendation_categories
+        WHERE active=1 AND version=?
+        ORDER BY weight DESC, positive_count DESC, key ASC
+        """,
+        (RECOMMENDATION_CATEGORY_VERSION,),
+    ).fetchall()
+    categories = []
+    for row in rows:
+        try:
+            seed_item_ids = json.loads(row["seed_item_ids_json"] or "[]")
+        except json.JSONDecodeError:
+            seed_item_ids = []
+        categories.append(
+            {
+                "key": row["key"],
+                "label": row["label"],
+                "description": row["description"],
+                "positive_count": int(row["positive_count"] or 0),
+                "weight": int(row["weight"] or 0),
+                "active": int(row["active"] or 0),
+                "version": row["version"],
+                "seed_item_ids": [str(item).strip() for item in seed_item_ids if str(item).strip()],
+            }
+        )
+    return categories
+
+
+def recommendation_category_ready(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM recommendation_categories WHERE active=1 AND version=? LIMIT 1",
+        (RECOMMENDATION_CATEGORY_VERSION,),
+    ).fetchone()
+    return bool(row)
+
+
+def recommendation_meta_get(conn: sqlite3.Connection, key: str) -> str:
+    row = conn.execute("SELECT value_text FROM recommendation_meta WHERE key=?", (key,)).fetchone()
+    return str(row["value_text"] or "") if row else ""
+
+
+def recommendation_meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO recommendation_meta(key, value_text, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value_text=excluded.value_text,
+          updated_at=excluded.updated_at
+        """,
+        (key, value, now_ts()),
+    )
+
+
+def recommendation_category_weight(positive_count: int) -> int:
+    return max(50, min(70, 50 + max(0, positive_count) * 5))
+
+
+def current_recommendation_positive_samples(conn: sqlite3.Connection, limit: int = RECOMMENDATION_CATEGORY_SAMPLE_LIMIT) -> list[dict[str, str]]:
+    rows = conn.execute(
+        """
+        SELECT items.id AS item_id,
+               items.source,
+               items.title,
+               items.summary,
+               COALESCE(an.note, '') AS note,
+               GROUP_CONCAT(DISTINCT mt.tag) AS tags,
+               CASE WHEN st.important_at IS NOT NULL THEN 1 ELSE 0 END AS is_important,
+               CASE WHEN an.url IS NOT NULL THEN 1 ELSE 0 END AS has_note,
+               COUNT(DISTINCT mt.tag) AS tag_count
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN article_notes an ON an.url = items.url
+        LEFT JOIN article_market_tags mt ON mt.url = items.url
+        WHERE st.important_at IS NOT NULL
+           OR an.url IS NOT NULL
+           OR mt.url IS NOT NULL
+        GROUP BY items.id
+        ORDER BY is_important DESC, has_note DESC, tag_count DESC, items.published_at DESC
+        LIMIT ?
+        """,
+        (max(1, limit),),
+    ).fetchall()
+    samples = []
+    for row in rows:
+        samples.append(
+            {
+                "item_id": row["item_id"],
+                "source": (row["source"] or "").strip(),
+                "title": (row["title"] or "").strip(),
+                "summary": (row["summary"] or "").strip(),
+                "note": (row["note"] or "").strip(),
+                "tags": (row["tags"] or "").strip(),
+            }
+        )
+    return samples
+
+
+def recommendation_source_bonus_map(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT items.url, items.source, items.source_type, COUNT(*) AS total
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN article_notes an ON an.url = items.url
+        LEFT JOIN article_market_tags mt ON mt.url = items.url
+        WHERE st.important_at IS NOT NULL
+           OR an.url IS NOT NULL
+           OR mt.url IS NOT NULL
+        GROUP BY items.url, items.source, items.source_type
+        """
+    ).fetchall()
+    bonuses: dict[str, int] = {}
+    for row in rows:
+        key = derive_source_key(row["url"], row["source_type"], row["source"])
+        bonuses[key] = max(bonuses.get(key, 0), min(8, int(row["total"] or 0) * 2))
+    return bonuses
+
+
+def score_recommendation_features(
+    features: dict[str, object],
+    *,
+    categories_by_key: dict[str, dict[str, object]],
+    source_bonus: int,
+) -> int:
+    score = 0.0
+    for match in features.get("category_matches", []):
+        if not isinstance(match, dict):
+            continue
+        key = str(match.get("key") or "").strip()
+        confidence = str(match.get("confidence") or "").strip().lower()
+        category = categories_by_key.get(key)
+        if not category:
+            continue
+        multiplier = RECOMMENDATION_CONFIDENCE_MULTIPLIERS.get(confidence, 0.0)
+        score += int(category["weight"]) * multiplier
+    score += int(RECOMMENDATION_EVENT_TYPE_WEIGHTS.get(str(features.get("event_type") or "").strip().lower(), 0))
+    score += int(source_bonus)
+    return int(round(score))
+
+
+def recommendation_passes_gate(features: dict[str, object], score: int) -> bool:
+    matches = features.get("category_matches", [])
+    if not isinstance(matches, list) or not matches:
+        return False
+    high_count = 0
+    medium_count = 0
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+        confidence = str(match.get("confidence") or "").strip().lower()
+        if confidence == "high":
+            high_count += 1
+        elif confidence == "medium":
+            medium_count += 1
+    if high_count < 1 and medium_count < 2:
+        return False
+    if score < RECOMMENDATION_SCORE_THRESHOLD:
+        return False
+    return True
+
+
+def recommendation_bucket_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT
+          CASE
+            WHEN COALESCE(score, 0) >= 90 THEN '90+'
+            WHEN COALESCE(score, 0) >= 75 THEN '75-89'
+            WHEN COALESCE(score, 0) >= 50 THEN '50-74'
+            ELSE '<50'
+          END AS bucket,
+          COUNT(*) AS total
+        FROM recommendation_evals
+        WHERE status='success'
+          AND schema_version=?
+        GROUP BY bucket
+        """,
+        (RECOMMENDATION_SCHEMA_VERSION,),
+    ).fetchall()
+    counts = {"90+": 0, "75-89": 0, "50-74": 0, "<50": 0}
+    for row in rows:
+        counts[row["bucket"]] = int(row["total"] or 0)
+    return counts
+
+
+def recompute_recommendation_eval_row(conn: sqlite3.Connection, row: sqlite3.Row, ts: str | None = None) -> bool:
+    features = parse_recommendation_features(row["features_json"])
+    if not features:
+        return False
+    categories_by_key = {category["key"]: category for category in load_active_recommendation_categories(conn)}
+    source_bonus = recommendation_source_bonus_map(conn).get(
+        derive_source_key(row["url"], row["source_type"], row["source"]),
+        0,
+    )
+    current_ts = ts or now_ts()
+    score = score_recommendation_features(
+        features,
+        categories_by_key=categories_by_key,
+        source_bonus=source_bonus,
+    )
+    recommended = 1 if recommendation_passes_gate(features, score) else 0
+    conn.execute(
+        """
+        UPDATE recommendation_evals
+        SET score=?,
+            recommended=?,
+            weights_version=?,
+            updated_at=?
+        WHERE item_id=? AND schema_version=?
+        """,
+        (score, recommended, RECOMMENDATION_WEIGHTS_VERSION, current_ts, row["item_id"], row["schema_version"]),
+    )
+    return True
+
+
+def recompute_stale_recommendation_evals(conn: sqlite3.Connection) -> int:
+    rows = conn.execute(
+        """
+        SELECT re.item_id, re.features_json, re.schema_version, items.url, items.source, items.source_type
+        FROM recommendation_evals re
+        LEFT JOIN items ON items.id = re.item_id
+        WHERE re.status='success'
+          AND COALESCE(re.features_json, '') <> ''
+          AND re.schema_version=?
+          AND COALESCE(re.weights_version, '') <> ?
+        ORDER BY re.updated_at ASC, re.item_id ASC
+        """,
+        (RECOMMENDATION_SCHEMA_VERSION, RECOMMENDATION_WEIGHTS_VERSION),
+    ).fetchall()
+    if not rows:
+        return 0
+    ts = now_ts()
+    updated = 0
+    for row in rows:
+        if recompute_recommendation_eval_row(conn, row, ts=ts):
+            updated += 1
+    return updated
+
+
+def recommendation_status_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
+    recomputed = recompute_stale_recommendation_evals(conn)
+    category_ready = recommendation_category_ready(conn)
+    categories = load_active_recommendation_categories(conn)
+    counts_rows = conn.execute(
+        """
+        SELECT status, COUNT(*) AS total
+        FROM recommendation_evals
+        WHERE schema_version=?
+        GROUP BY status
+        """,
+        (RECOMMENDATION_SCHEMA_VERSION,),
+    ).fetchall()
+    counts = {row["status"]: int(row["total"] or 0) for row in counts_rows}
+    recommended_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM recommendation_evals
+        WHERE schema_version=?
+          AND status='success'
+          AND recommended=1
+        """,
+        (RECOMMENDATION_SCHEMA_VERSION,),
+    ).fetchone()[0]
+    latest_failed = conn.execute(
+        """
+        SELECT item_id, error, updated_at
+        FROM recommendation_evals
+        WHERE schema_version=?
+          AND status='failed'
+          AND COALESCE(error, '') <> ''
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (RECOMMENDATION_SCHEMA_VERSION,),
+    ).fetchone()
+    latest_error = dict(latest_failed) if latest_failed else None
+    category_error = recommendation_meta_get(conn, "category_init_error")
+    if not latest_error and category_error:
+        latest_error = {"item_id": "", "error": category_error, "updated_at": ""}
+    return {
+        "schema_version": RECOMMENDATION_SCHEMA_VERSION,
+        "category_library_ready": category_ready,
+        "category_library_status": "ready" if category_ready else ("failed" if category_error else "not_ready"),
+        "active_category_count": len(categories),
+        "positive_sample_count": len(current_recommendation_positive_samples(conn)),
+        "pending": counts.get("pending", 0),
+        "success": counts.get("success", 0),
+        "failed": counts.get("failed", 0),
+        "skipped": counts.get("skipped", 0),
+        "recommended": int(recommended_count or 0),
+        "recomputed": recomputed,
+        "score_buckets": recommendation_bucket_counts(conn),
+        "latest_error": latest_error,
+    }
 
 
 def build_note_preview(note_text: str | None, limit: int = 120) -> str:
@@ -991,6 +1414,70 @@ def migrate_market_trend_notes(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE market_trend_notes_v2 RENAME TO market_trend_notes")
 
 
+def migrate_recommendation_tables(conn: sqlite3.Connection) -> None:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recommendation_evals'"
+    ).fetchone()
+    if not exists:
+        return
+
+    pk_columns = [
+        row["name"]
+        for row in conn.execute("PRAGMA table_info('recommendation_evals')").fetchall()
+        if int(row["pk"] or 0) > 0
+    ]
+    if pk_columns != ["item_id"]:
+        return
+
+    with conn:
+        conn.execute("ALTER TABLE recommendation_evals RENAME TO recommendation_evals_legacy")
+        conn.executescript(
+            """
+            CREATE TABLE recommendation_evals (
+              item_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              features_json TEXT,
+              score INTEGER,
+              recommended INTEGER NOT NULL DEFAULT 0,
+              error TEXT,
+              prompt_version TEXT,
+              schema_version TEXT,
+              weights_version TEXT,
+              model TEXT,
+              evaluated_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (item_id, schema_version)
+            );
+            CREATE INDEX idx_recommendation_evals_status ON recommendation_evals(status);
+            CREATE INDEX idx_recommendation_evals_recommended ON recommendation_evals(schema_version, recommended, status);
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO recommendation_evals(
+              item_id, status, features_json, score, recommended, error,
+              prompt_version, schema_version, weights_version, model, evaluated_at, created_at, updated_at
+            )
+            SELECT item_id,
+                   status,
+                   features_json,
+                   score,
+                   recommended,
+                   error,
+                   prompt_version,
+                   COALESCE(NULLIF(schema_version, ''), 'legacy-v1'),
+                   weights_version,
+                   model,
+                   evaluated_at,
+                   created_at,
+                   updated_at
+            FROM recommendation_evals_legacy
+            """
+        )
+        conn.execute("DROP TABLE recommendation_evals_legacy")
+
+
 def create_market_tag_key(conn: sqlite3.Connection, display_name: str) -> str:
     base = display_name.strip()
     candidate = base
@@ -1373,6 +1860,298 @@ def enqueue_ai_job(conn: sqlite3.Connection, url: str) -> bool:
     return True
 
 
+def initialize_recommendation_categories(conn: sqlite3.Connection) -> dict[str, object]:
+    samples = current_recommendation_positive_samples(conn)
+    if not samples:
+        recommendation_meta_set(conn, "category_init_error", "NO_POSITIVE_SAMPLES")
+        return {"ok": False, "error": "NO_POSITIVE_SAMPLES", "created": 0}
+
+    llm_settings = current_runtime_settings()["llm"]
+    try:
+        payload = generate_recommendation_categories(
+            positive_samples=samples,
+            model=llm_settings["translation"]["model"],
+        )
+    except LLMClientError as exc:
+        recommendation_meta_set(conn, "category_init_error", str(exc)[:500])
+        return {"ok": False, "error": str(exc)[:500], "created": 0}
+
+    categories = payload.get("categories") or []
+    if not categories:
+        recommendation_meta_set(conn, "category_init_error", "EMPTY_RECOMMENDATION_CATEGORIES")
+        return {"ok": False, "error": "EMPTY_RECOMMENDATION_CATEGORIES", "created": 0}
+
+    ts = now_ts()
+    returned_keys = {str(category["key"]) for category in categories}
+    with conn:
+        conn.execute(
+            "UPDATE recommendation_categories SET active=0, updated_at=? WHERE version=?",
+            (ts, RECOMMENDATION_CATEGORY_VERSION),
+        )
+        for category in categories:
+            positive_count = len(category["seed_item_ids"])
+            conn.execute(
+                """
+                INSERT INTO recommendation_categories(
+                  key, label, description, positive_count, weight, active, version, seed_item_ids_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                  label=excluded.label,
+                  description=excluded.description,
+                  positive_count=excluded.positive_count,
+                  weight=excluded.weight,
+                  active=excluded.active,
+                  version=excluded.version,
+                  seed_item_ids_json=excluded.seed_item_ids_json,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    category["key"],
+                    category["label"],
+                    category["description"],
+                    positive_count,
+                    recommendation_category_weight(positive_count),
+                    RECOMMENDATION_CATEGORY_VERSION,
+                    json.dumps(category["seed_item_ids"], ensure_ascii=False),
+                    ts,
+                    ts,
+                ),
+            )
+        if returned_keys:
+            placeholders = ",".join("?" for _ in returned_keys)
+            conn.execute(
+                f"""
+                UPDATE recommendation_categories
+                SET active=0, updated_at=?
+                WHERE version=?
+                  AND key NOT IN ({placeholders})
+                """,
+                [ts, RECOMMENDATION_CATEGORY_VERSION, *sorted(returned_keys)],
+            )
+        recommendation_meta_set(conn, "category_init_error", "")
+    return {"ok": True, "error": "", "created": len(categories), "model": payload.get("model", "")}
+
+
+def enqueue_recommendation_eval(conn: sqlite3.Connection, item_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT items.id
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        WHERE items.id=? AND st.read_at IS NULL
+        """,
+        (item_id,),
+    ).fetchone()
+    if not row:
+        return False
+
+    existing = conn.execute(
+        "SELECT status FROM recommendation_evals WHERE item_id=? AND schema_version=?",
+        (item_id, RECOMMENDATION_SCHEMA_VERSION),
+    ).fetchone()
+    if existing:
+        return False
+
+    ts = now_ts()
+    conn.execute(
+        """
+        INSERT INTO recommendation_evals(
+          item_id, status, recommended, prompt_version, schema_version, weights_version, created_at, updated_at
+        )
+        VALUES (?, 'pending', 0, ?, ?, ?, ?, ?)
+        """,
+        (
+            item_id,
+            RECOMMENDATION_PROMPT_VERSION,
+            RECOMMENDATION_SCHEMA_VERSION,
+            RECOMMENDATION_WEIGHTS_VERSION,
+            ts,
+            ts,
+        ),
+    )
+    return True
+
+
+def enqueue_recommendation_evals_for_new_items(conn: sqlite3.Connection, item_ids: list[str]) -> int:
+    queued = 0
+    for item_id in item_ids:
+        if enqueue_recommendation_eval(conn, item_id):
+            queued += 1
+    return queued
+
+
+def enqueue_recommendation_init_jobs(conn: sqlite3.Connection, limit: int = RECOMMENDATION_INIT_LIMIT) -> int:
+    capped = max(1, min(RECOMMENDATION_INIT_LIMIT, int(limit or RECOMMENDATION_INIT_LIMIT)))
+    rows = conn.execute(
+        """
+        SELECT items.id
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN recommendation_evals re
+          ON re.item_id = items.id
+         AND re.schema_version = ?
+        WHERE st.read_at IS NULL
+          AND re.item_id IS NULL
+        ORDER BY items.published_at DESC, items.id DESC
+        LIMIT ?
+        """,
+        (RECOMMENDATION_SCHEMA_VERSION, capped),
+    ).fetchall()
+    queued = 0
+    for row in rows:
+        if enqueue_recommendation_eval(conn, row["id"]):
+            queued += 1
+    return queued
+
+
+def process_pending_recommendation_once() -> bool:
+    conn = db_conn()
+    try:
+        if not recommendation_category_ready(conn):
+            return False
+
+        row = conn.execute(
+            """
+            SELECT re.item_id,
+                   re.schema_version,
+                   items.title,
+                   items.source,
+                   items.source_type,
+                   items.summary,
+                   items.published_at,
+                   items.url,
+                   st.read_at,
+                   ad.content AS detail_content
+            FROM recommendation_evals re
+            LEFT JOIN items ON items.id = re.item_id
+            LEFT JOIN item_state st ON st.item_id = items.id
+            LEFT JOIN article_details ad ON ad.url = items.url
+            WHERE re.schema_version=?
+              AND re.status='pending'
+            ORDER BY re.created_at ASC, re.item_id ASC
+            LIMIT 1
+            """
+        ,
+            (RECOMMENDATION_SCHEMA_VERSION,),
+        ).fetchone()
+        if not row:
+            return False
+
+        item_id = row["item_id"]
+        schema_version = row["schema_version"]
+        ts = now_ts()
+        if not row["title"]:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE recommendation_evals
+                    SET status='skipped', error='ITEM_NOT_FOUND', evaluated_at=?, updated_at=?
+                    WHERE item_id=? AND schema_version=?
+                    """,
+                    (ts, ts, item_id, schema_version),
+                )
+            return True
+
+        if row["read_at"]:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE recommendation_evals
+                    SET status='skipped', error='ALREADY_READ', evaluated_at=?, updated_at=?
+                    WHERE item_id=? AND schema_version=?
+                    """,
+                    (ts, ts, item_id, schema_version),
+                )
+            return True
+
+        llm_settings = current_runtime_settings()["llm"]
+        categories = load_active_recommendation_categories(conn)
+        categories_for_prompt = [
+            {
+                "key": category["key"],
+                "label": category["label"],
+                "description": category["description"],
+            }
+            for category in categories
+        ]
+        categories_by_key = {category["key"]: category for category in categories}
+        source_bonus_map = recommendation_source_bonus_map(conn)
+        try:
+            payload = generate_recommendation_classification(
+                title=(row["title"] or "").strip(),
+                source=(row["source"] or "").strip(),
+                published_at=(row["published_at"] or "").strip(),
+                summary=(row["summary"] or "").strip(),
+                detail_excerpt=((row["detail_content"] or "").strip())[:2000],
+                categories=categories_for_prompt,
+                model=llm_settings["translation"]["model"],
+            )
+            features = {
+                "category_matches": payload["category_matches"],
+                "entities": payload["entities"],
+                "event_type": payload["event_type"],
+                "sectors": payload["sectors"],
+                "regions": payload["regions"],
+                "new_category_candidates": payload["new_category_candidates"],
+                "headline_signal": payload["headline_signal"],
+            }
+            score = score_recommendation_features(
+                features,
+                categories_by_key=categories_by_key,
+                source_bonus=source_bonus_map.get(
+                    derive_source_key(row["url"], row["source_type"], row["source"]),
+                    0,
+                ),
+            )
+            recommended = 1 if recommendation_passes_gate(features, score) else 0
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE recommendation_evals
+                    SET status='success',
+                        features_json=?,
+                        score=?,
+                        recommended=?,
+                        error=NULL,
+                        prompt_version=?,
+                        schema_version=?,
+                        weights_version=?,
+                        model=?,
+                        evaluated_at=?,
+                        updated_at=?
+                    WHERE item_id=? AND schema_version=?
+                    """,
+                    (
+                        serialize_recommendation_features(features),
+                        score,
+                        recommended,
+                        RECOMMENDATION_PROMPT_VERSION,
+                        RECOMMENDATION_SCHEMA_VERSION,
+                        RECOMMENDATION_WEIGHTS_VERSION,
+                        payload.get("model", ""),
+                        ts,
+                        ts,
+                        item_id,
+                        schema_version,
+                    ),
+                )
+            return True
+        except LLMClientError as exc:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE recommendation_evals
+                    SET status='failed', error=?, evaluated_at=?, updated_at=?
+                    WHERE item_id=? AND schema_version=?
+                    """,
+                    (str(exc)[:500], ts, ts, item_id, schema_version),
+                )
+            return True
+    finally:
+        conn.close()
+
+
 def process_pending_ai_once() -> bool:
     conn = db_conn()
     try:
@@ -1502,6 +2281,11 @@ def detail_worker_loop() -> None:
                 processed = process_pending_ai_once()
             except Exception:
                 pass
+        if not processed:
+            try:
+                processed = process_pending_recommendation_once()
+            except Exception:
+                pass
         if processed:
             time.sleep(2)
         else:
@@ -1536,17 +2320,23 @@ def api_news():
         cursor = parse_feed_unread_cursor(request.args) if cursor_mode else None
     except ValueError:
         return jsonify({"ok": False, "error": "invalid_cursor"}), 400
-    join_sql = """
+    join_sql = f"""
     LEFT JOIN item_state st ON st.item_id = items.id
     LEFT JOIN detail_jobs dj ON dj.url = items.url
     LEFT JOIN article_details ad ON ad.url = items.url
     LEFT JOIN article_notes an ON an.url = items.url
+    LEFT JOIN recommendation_evals re
+      ON re.item_id = items.id
+     AND re.schema_version = '{RECOMMENDATION_SCHEMA_VERSION}'
     """
     where_sql, args = _build_news_where_clause(q, read_filter, collection, source_filter)
     order_by_sql = news_order_by_sql(collection)
 
     conn = db_conn()
     try:
+        if collection == "recommendations":
+            recompute_stale_recommendation_evals(conn)
+            conn.commit()
         total = conn.execute(
             f"SELECT COUNT(*) FROM items {join_sql} {where_sql}",
             args,
@@ -1577,6 +2367,8 @@ def api_news():
                aj.status AS ai_status,
                aj.last_error AS ai_error,
                CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
+               re.score AS recommendation_score,
+               re.recommended AS recommendation_flag,
                {ITEM_DATE_SQL} AS date_key
         FROM items
         {join_sql}
@@ -1804,6 +2596,14 @@ def api_sources():
         where.append("st.important_at IS NOT NULL")
     elif collection == "read_later":
         where.append("st.read_later_at IS NOT NULL")
+    elif collection == "recommendations":
+        where.append("st.read_at IS NULL")
+        where.append(
+            f"EXISTS (SELECT 1 FROM recommendation_evals re WHERE re.item_id = items.id AND re.schema_version='{RECOMMENDATION_SCHEMA_VERSION}' AND re.status='success' AND re.recommended=1)"
+        )
+        where.append(
+            "NOT EXISTS (SELECT 1 FROM recommendation_feedback rf WHERE rf.item_id = items.id AND rf.event_type='dismissed' AND rf.source_context='recommendations')"
+        )
     elif collection == "notes":
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
     elif collection == "market_tags":
@@ -2491,6 +3291,8 @@ def api_reindex():
     conn = db_conn()
     try:
         stats = reindex(conn, DAILY_NEWS_DIR, full=full)
+        queued_recommendations = enqueue_recommendation_evals_for_new_items(conn, stats.new_item_ids or [])
+        conn.commit()
     finally:
         conn.close()
     return jsonify(
@@ -2500,8 +3302,91 @@ def api_reindex():
             "changed_files": stats.changed_files,
             "upserted": stats.upserted,
             "deleted_stale": stats.deleted_stale,
+            "queued_recommendations": queued_recommendations,
         }
     )
+
+
+@app.get("/api/recommendations/status")
+def api_recommendation_status():
+    conn = db_conn()
+    try:
+        snapshot = recommendation_status_snapshot(conn)
+        if snapshot.get("recomputed"):
+            conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, **snapshot})
+
+
+@app.post("/api/recommendations/init")
+def api_recommendation_init():
+    body = request.get_json(silent=True) or {}
+    raw_limit = body.get("limit", RECOMMENDATION_INIT_LIMIT)
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid_limit"}), 400
+    conn = db_conn()
+    try:
+        category_result = {"ok": True, "created": 0, "error": ""}
+        if not recommendation_category_ready(conn):
+            category_result = initialize_recommendation_categories(conn)
+        queued = enqueue_recommendation_init_jobs(conn, limit)
+        snapshot = recommendation_status_snapshot(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify(
+        {
+            "ok": category_result.get("ok", True),
+            "queued": queued,
+            "category_created": int(category_result.get("created", 0) or 0),
+            "category_init_error": category_result.get("error", ""),
+            "limit": max(1, min(RECOMMENDATION_INIT_LIMIT, limit)),
+            **snapshot,
+        }
+    )
+
+
+@app.post("/api/recommendations/feedback")
+def api_recommendation_feedback():
+    body = request.get_json(silent=True) or {}
+    event_type = (body.get("event_type") or "").strip().lower()
+    source_context = (body.get("source_context") or "recommendations").strip().lower() or "recommendations"
+    if event_type not in RECOMMENDATION_FEEDBACK_TYPES:
+        return jsonify({"ok": False, "error": "invalid_event_type"}), 400
+    raw_ids = body.get("item_ids")
+    item_id = (body.get("item_id") or "").strip()
+    item_ids = []
+    if isinstance(raw_ids, list):
+        item_ids = [str(x).strip() for x in raw_ids if str(x).strip()]
+    elif item_id:
+        item_ids = [item_id]
+    if not item_ids:
+        return jsonify({"ok": False, "error": "missing_item_ids"}), 400
+
+    ts = now_ts()
+    conn = db_conn()
+    try:
+        valid_rows = conn.execute(
+            f"SELECT id FROM items WHERE id IN ({','.join('?' for _ in item_ids)})",
+            item_ids,
+        ).fetchall()
+        valid_ids = [row["id"] for row in valid_rows]
+        if not valid_ids:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO recommendation_feedback(item_id, event_type, source_context, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [(item, event_type, source_context, ts) for item in valid_ids],
+            )
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "count": len(valid_ids)})
 
 
 @app.patch("/api/news/<item_id>/state")

@@ -133,3 +133,54 @@ CREATE TABLE IF NOT EXISTS market_trend_notes (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS recommendation_evals (
+  item_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  features_json TEXT,
+  score INTEGER,
+  recommended INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  prompt_version TEXT,
+  schema_version TEXT,
+  weights_version TEXT,
+  model TEXT,
+  evaluated_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (item_id, schema_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_recommendation_evals_status ON recommendation_evals(status);
+CREATE INDEX IF NOT EXISTS idx_recommendation_evals_recommended ON recommendation_evals(schema_version, recommended, status);
+
+CREATE TABLE IF NOT EXISTS recommendation_feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  source_context TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_item ON recommendation_feedback(item_id, event_type, source_context);
+
+CREATE TABLE IF NOT EXISTS recommendation_categories (
+  key TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  description TEXT NOT NULL,
+  positive_count INTEGER NOT NULL DEFAULT 0,
+  weight INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  version TEXT NOT NULL,
+  seed_item_ids_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recommendation_categories_active ON recommendation_categories(active, version);
+
+CREATE TABLE IF NOT EXISTS recommendation_meta (
+  key TEXT PRIMARY KEY,
+  value_text TEXT,
+  updated_at TEXT NOT NULL
+);
