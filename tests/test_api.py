@@ -2728,20 +2728,165 @@ def test_recommendation_init_builds_category_library(tmp_path: Path, monkeypatch
         }
 
     monkeypatch.setattr(app_module, "generate_recommendation_categories", fake_generate_recommendation_categories)
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_classification",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "category_matches": [{"key": "ai_infra", "confidence": "medium"}]
+            if kwargs["title"] == "Fresh Eval"
+            else [],
+            "entities": [],
+            "event_type": "other",
+            "sectors": [],
+            "regions": [],
+            "new_category_candidates": [],
+            "headline_signal": "background",
+            "raw_json": "{}",
+        },
+    )
 
     payload = client.post("/api/recommendations/init", json={"limit": 10}).get_json()
     assert payload["ok"] is True
     assert payload["category_created"] == 1
     assert payload["category_library_ready"] is True
     assert payload["active_category_count"] == 1
+    assert payload["background_samples"] == 1
 
     with app_module.db_conn() as conn:
         row = conn.execute(
-            "SELECT key, label, positive_count, active FROM recommendation_categories WHERE key='ai_infra'"
+            """
+            SELECT key, label, positive_count, background_count, positive_rate, background_rate, lift_score, weight, active
+            FROM recommendation_categories
+            WHERE key='ai_infra'
+            """
         ).fetchone()
     assert row["label"] == "AI 基础设施"
     assert row["positive_count"] == 2
+    assert row["background_count"] == 1
+    assert row["positive_rate"] == 1.0
+    assert row["background_rate"] == 1.0
+    assert row["lift_score"] > 0
+    assert 35 <= row["weight"] <= 85
     assert row["active"] == 1
+
+
+def test_recommendation_weight_uses_background_distribution():
+    import app as app_module
+
+    high_weight, _, high_lift = app_module.recommendation_category_weight_from_stats(
+        positive_count=2,
+        background_count=0,
+        positive_rate=0.25,
+        background_rate=0.01,
+    )
+    low_weight, _, low_lift = app_module.recommendation_category_weight_from_stats(
+        positive_count=2,
+        background_count=6,
+        positive_rate=0.25,
+        background_rate=0.25,
+    )
+
+    assert high_lift > low_lift
+    assert high_weight > low_weight
+    assert 35 <= low_weight <= 85
+
+
+def test_recommendation_rebuild_resets_current_schema_unread_evals(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Reuters · World（3条）
+### [Seed Important](https://example.com/rebuild-important)
+- 发布时间：2026-06-14 08:00:00
+### [Seed Note](https://example.com/rebuild-note)
+- 发布时间：2026-06-14 09:00:00
+### [Unread Eval](https://example.com/rebuild-target)
+- 发布时间：2026-06-14 10:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    important_item = next(item for item in items if item["title"] == "Seed Important")
+    note_item = next(item for item in items if item["title"] == "Seed Note")
+    unread_item = next(item for item in items if item["title"] == "Unread Eval")
+    assert client.patch(f"/api/news/{important_item['id']}/state", json={"important": True}).status_code == 200
+    assert client.put(f"/api/news/{note_item['id']}/note", json={"note": "继续关注 AI infra"}).status_code == 200
+
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_categories",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "categories": [
+                {
+                    "key": "ai_infra",
+                    "label": "AI 基础设施",
+                    "description": "围绕模型公司、算力和 AI infra 的新闻。",
+                    "seed_item_ids": [important_item["id"], note_item["id"]],
+                }
+            ],
+            "raw_json": "{}",
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_classification",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "category_matches": [{"key": "ai_infra", "confidence": "medium"}]
+            if kwargs["title"] == "Unread Eval"
+            else [],
+            "entities": [],
+            "event_type": "other",
+            "sectors": [],
+            "regions": [],
+            "new_category_candidates": [],
+            "headline_signal": "rebuild",
+            "raw_json": "{}",
+        },
+    )
+
+    first = client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+    assert first["ok"] is True
+    with app_module.db_conn() as conn:
+        conn.execute(
+            """
+            UPDATE recommendation_evals
+            SET status='success', recommended=1, score=88, features_json='{}'
+            WHERE item_id=? AND schema_version=?
+            """,
+            (unread_item["id"], app_module.RECOMMENDATION_SCHEMA_VERSION),
+        )
+        conn.commit()
+
+    rebuilt = client.post("/api/recommendations/init", json={"limit": 10, "rebuild": True}).get_json()
+    assert rebuilt["ok"] is True
+    assert rebuilt["rebuild"] is True
+    assert rebuilt["reset"] >= 1
+    with app_module.db_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT status, recommended
+            FROM recommendation_evals
+            WHERE item_id=? AND schema_version=?
+            """,
+            (unread_item["id"], app_module.RECOMMENDATION_SCHEMA_VERSION),
+        ).fetchone()
+    assert row["status"] == "pending"
+    assert row["recommended"] == 0
 
 
 def test_recommendation_process_success_and_feedback_with_category_match(tmp_path: Path, monkeypatch):

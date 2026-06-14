@@ -111,12 +111,15 @@ CODEX_MODEL_FALLBACKS = [
 ]
 SETTINGS_MODEL_OPTION_LIMIT = 40
 DEEPSEEK_MODELS_URL = "https://api.deepseek.com/models"
-RECOMMENDATION_PROMPT_VERSION = "recommendation-category-v1"
-RECOMMENDATION_SCHEMA_VERSION = "category-v1"
-RECOMMENDATION_WEIGHTS_VERSION = "category-v1"
-RECOMMENDATION_CATEGORY_VERSION = "1"
+RECOMMENDATION_PROMPT_VERSION = "recommendation-category-v2"
+RECOMMENDATION_SCHEMA_VERSION = "category-v2"
+RECOMMENDATION_WEIGHTS_VERSION = "category-v2"
+RECOMMENDATION_CATEGORY_VERSION = "2"
 RECOMMENDATION_INIT_LIMIT = 200
 RECOMMENDATION_CATEGORY_SAMPLE_LIMIT = 120
+RECOMMENDATION_BACKGROUND_SAMPLE_LIMIT = 180
+RECOMMENDATION_BACKGROUND_FETCH_LIMIT = 720
+RECOMMENDATION_TREND_CONTEXT_LIMIT = 24
 RECOMMENDATION_SCORE_THRESHOLD = 70
 RECOMMENDATION_FEEDBACK_TYPES = {
     "shown",
@@ -338,6 +341,7 @@ def ensure_db() -> None:
         apply_schema(conn, SCHEMA_PATH)
         migrate_market_trend_notes(conn)
         migrate_recommendation_tables(conn)
+        migrate_recommendation_categories(conn)
         seed_market_tag_definitions(conn)
     finally:
         conn.close()
@@ -430,7 +434,19 @@ def _coerce_recommendation_features(parsed: object) -> dict[str, object]:
 def load_active_recommendation_categories(conn: sqlite3.Connection) -> list[dict[str, object]]:
     rows = conn.execute(
         """
-        SELECT key, label, description, positive_count, weight, active, version, seed_item_ids_json
+        SELECT key,
+               label,
+               description,
+               positive_count,
+               background_count,
+               positive_rate,
+               background_rate,
+               lift_score,
+               weight_reason,
+               weight,
+               active,
+               version,
+               seed_item_ids_json
         FROM recommendation_categories
         WHERE active=1 AND version=?
         ORDER BY weight DESC, positive_count DESC, key ASC
@@ -449,6 +465,11 @@ def load_active_recommendation_categories(conn: sqlite3.Connection) -> list[dict
                 "label": row["label"],
                 "description": row["description"],
                 "positive_count": int(row["positive_count"] or 0),
+                "background_count": int(row["background_count"] or 0),
+                "positive_rate": float(row["positive_rate"] or 0.0),
+                "background_rate": float(row["background_rate"] or 0.0),
+                "lift_score": float(row["lift_score"] or 0.0),
+                "weight_reason": (row["weight_reason"] or "").strip(),
                 "weight": int(row["weight"] or 0),
                 "active": int(row["active"] or 0),
                 "version": row["version"],
@@ -526,6 +547,161 @@ def current_recommendation_positive_samples(conn: sqlite3.Connection, limit: int
             }
         )
     return samples
+
+
+def current_recommendation_trend_contexts(
+    conn: sqlite3.Connection,
+    limit: int = RECOMMENDATION_TREND_CONTEXT_LIMIT,
+) -> list[dict[str, str]]:
+    rows = conn.execute(
+        """
+        SELECT mtn.date_key,
+               mtn.direction,
+               mtn.note,
+               mtd.display_name,
+               mtn.tag
+        FROM market_trend_notes mtn
+        LEFT JOIN market_tag_definitions mtd ON mtd.key = mtn.tag
+        WHERE COALESCE(mtn.note, '') <> ''
+        ORDER BY mtn.updated_at DESC, mtn.id DESC
+        LIMIT ?
+        """,
+        (max(1, limit),),
+    ).fetchall()
+    contexts: list[dict[str, str]] = []
+    for row in rows:
+        contexts.append(
+            {
+                "date_key": (row["date_key"] or "").strip(),
+                "direction": (row["direction"] or "").strip(),
+                "tag": (row["display_name"] or row["tag"] or "").strip(),
+                "note": (row["note"] or "").strip(),
+            }
+        )
+    return contexts
+
+
+def current_recommendation_background_samples(
+    conn: sqlite3.Connection,
+    limit: int = RECOMMENDATION_BACKGROUND_SAMPLE_LIMIT,
+) -> list[dict[str, str]]:
+    fetch_limit = max(limit, RECOMMENDATION_BACKGROUND_FETCH_LIMIT)
+    rows = conn.execute(
+        """
+        SELECT items.id AS item_id,
+               items.url,
+               items.source,
+               items.source_type,
+               items.title,
+               items.summary,
+               items.published_at,
+               ad.content AS detail_content
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN article_notes an ON an.url = items.url
+        LEFT JOIN article_market_tags mt ON mt.url = items.url
+        LEFT JOIN article_details ad ON ad.url = items.url
+        WHERE st.important_at IS NULL
+          AND an.url IS NULL
+          AND mt.url IS NULL
+        GROUP BY items.id
+        ORDER BY items.published_at DESC, items.id DESC
+        LIMIT ?
+        """,
+        (max(1, fetch_limit),),
+    ).fetchall()
+    if not rows:
+        return []
+
+    per_source_cap = max(6, math.ceil(max(1, limit) / 8))
+    per_source_counts: dict[str, int] = {}
+    samples: list[dict[str, str]] = []
+    for row in rows:
+        source_key = derive_source_key(row["url"], row["source_type"], row["source"])
+        if per_source_counts.get(source_key, 0) >= per_source_cap:
+            continue
+        per_source_counts[source_key] = per_source_counts.get(source_key, 0) + 1
+        samples.append(
+            {
+                "item_id": row["item_id"],
+                "source": (row["source"] or "").strip(),
+                "title": (row["title"] or "").strip(),
+                "summary": (row["summary"] or "").strip(),
+                "published_at": (row["published_at"] or "").strip(),
+                "detail_excerpt": ((row["detail_content"] or "").strip())[:2000],
+            }
+        )
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def recommendation_category_weight_from_stats(
+    *,
+    positive_count: int,
+    background_count: int,
+    positive_rate: float,
+    background_rate: float,
+) -> tuple[int, str, float]:
+    epsilon = 0.01
+    lift_score = (positive_rate + epsilon) / (background_rate + epsilon)
+    positive_bonus = min(18, int(round(positive_rate * 120)))
+    background_penalty = min(18, int(round(background_rate * 90)))
+    lift_bonus = min(20, int(round(max(0.0, lift_score - 1.0) * 6)))
+    count_bonus = min(6, max(0, positive_count - 1) * 2)
+    weight = 45 + positive_bonus + count_bonus + lift_bonus - background_penalty
+    bounded = max(35, min(85, weight))
+    reason = json.dumps(
+        {
+            "positive_count": positive_count,
+            "background_count": background_count,
+            "positive_rate": round(positive_rate, 4),
+            "background_rate": round(background_rate, 4),
+            "lift_score": round(lift_score, 4),
+            "positive_bonus": positive_bonus,
+            "background_penalty": background_penalty,
+            "lift_bonus": lift_bonus,
+            "count_bonus": count_bonus,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return bounded, reason, lift_score
+
+
+def classify_background_samples(
+    conn: sqlite3.Connection,
+    *,
+    categories_for_prompt: list[dict[str, str]],
+    model: str,
+    samples: list[dict[str, str]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    if not samples:
+        return counts
+    for sample in samples:
+        try:
+            payload = generate_recommendation_classification(
+                title=sample["title"],
+                source=sample["source"],
+                published_at=sample["published_at"],
+                summary=sample["summary"],
+                detail_excerpt=sample["detail_excerpt"],
+                categories=categories_for_prompt,
+                model=model,
+            )
+        except LLMClientError:
+            continue
+        seen_keys: set[str] = set()
+        for match in payload.get("category_matches", []):
+            if not isinstance(match, dict):
+                continue
+            key = str(match.get("key") or "").strip()
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def recommendation_source_bonus_map(conn: sqlite3.Connection) -> dict[str, int]:
@@ -712,10 +888,14 @@ def recommendation_status_snapshot(conn: sqlite3.Connection) -> dict[str, object
         latest_error = {"item_id": "", "error": category_error, "updated_at": ""}
     return {
         "schema_version": RECOMMENDATION_SCHEMA_VERSION,
+        "weights_version": RECOMMENDATION_WEIGHTS_VERSION,
+        "category_version": RECOMMENDATION_CATEGORY_VERSION,
         "category_library_ready": category_ready,
         "category_library_status": "ready" if category_ready else ("failed" if category_error else "not_ready"),
         "active_category_count": len(categories),
         "positive_sample_count": len(current_recommendation_positive_samples(conn)),
+        "background_sample_count": len(current_recommendation_background_samples(conn)),
+        "trend_context_count": len(current_recommendation_trend_contexts(conn)),
         "pending": counts.get("pending", 0),
         "success": counts.get("success", 0),
         "failed": counts.get("failed", 0),
@@ -1478,6 +1658,44 @@ def migrate_recommendation_tables(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE recommendation_evals_legacy")
 
 
+def migrate_recommendation_categories(conn: sqlite3.Connection) -> None:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recommendation_categories'"
+    ).fetchone()
+    if not exists:
+        return
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info('recommendation_categories')").fetchall()
+    }
+    statements: list[str] = []
+    if "background_count" not in columns:
+        statements.append(
+            "ALTER TABLE recommendation_categories ADD COLUMN background_count INTEGER NOT NULL DEFAULT 0"
+        )
+    if "positive_rate" not in columns:
+        statements.append(
+            "ALTER TABLE recommendation_categories ADD COLUMN positive_rate REAL NOT NULL DEFAULT 0"
+        )
+    if "background_rate" not in columns:
+        statements.append(
+            "ALTER TABLE recommendation_categories ADD COLUMN background_rate REAL NOT NULL DEFAULT 0"
+        )
+    if "lift_score" not in columns:
+        statements.append(
+            "ALTER TABLE recommendation_categories ADD COLUMN lift_score REAL NOT NULL DEFAULT 0"
+        )
+    if "weight_reason" not in columns:
+        statements.append(
+            "ALTER TABLE recommendation_categories ADD COLUMN weight_reason TEXT NOT NULL DEFAULT ''"
+        )
+    if not statements:
+        return
+    with conn:
+        for statement in statements:
+            conn.execute(statement)
+
+
 def create_market_tag_key(conn: sqlite3.Connection, display_name: str) -> str:
     base = display_name.strip()
     candidate = base
@@ -1860,17 +2078,45 @@ def enqueue_ai_job(conn: sqlite3.Connection, url: str) -> bool:
     return True
 
 
+def reset_current_recommendation_evals(conn: sqlite3.Connection) -> int:
+    rows = conn.execute(
+        """
+        SELECT re.item_id
+        FROM recommendation_evals re
+        LEFT JOIN item_state st ON st.item_id = re.item_id
+        WHERE re.schema_version=?
+          AND st.read_at IS NULL
+        """,
+        (RECOMMENDATION_SCHEMA_VERSION,),
+    ).fetchall()
+    if not rows:
+        return 0
+    item_ids = [row["item_id"] for row in rows if row["item_id"]]
+    if not item_ids:
+        return 0
+    placeholders = ",".join("?" for _ in item_ids)
+    conn.execute(
+        f"DELETE FROM recommendation_evals WHERE schema_version=? AND item_id IN ({placeholders})",
+        [RECOMMENDATION_SCHEMA_VERSION, *item_ids],
+    )
+    return len(item_ids)
+
+
 def initialize_recommendation_categories(conn: sqlite3.Connection) -> dict[str, object]:
     samples = current_recommendation_positive_samples(conn)
     if not samples:
         recommendation_meta_set(conn, "category_init_error", "NO_POSITIVE_SAMPLES")
         return {"ok": False, "error": "NO_POSITIVE_SAMPLES", "created": 0}
+    trend_contexts = current_recommendation_trend_contexts(conn)
+    background_samples = current_recommendation_background_samples(conn)
 
     llm_settings = current_runtime_settings()["llm"]
+    model_name = llm_settings["translation"]["model"]
     try:
         payload = generate_recommendation_categories(
             positive_samples=samples,
-            model=llm_settings["translation"]["model"],
+            trend_contexts=trend_contexts,
+            model=model_name,
         )
     except LLMClientError as exc:
         recommendation_meta_set(conn, "category_init_error", str(exc)[:500])
@@ -1883,6 +2129,22 @@ def initialize_recommendation_categories(conn: sqlite3.Connection) -> dict[str, 
 
     ts = now_ts()
     returned_keys = {str(category["key"]) for category in categories}
+    categories_for_prompt = [
+        {
+            "key": category["key"],
+            "label": category["label"],
+            "description": category["description"],
+        }
+        for category in categories
+    ]
+    background_counts = classify_background_samples(
+        conn,
+        categories_for_prompt=categories_for_prompt,
+        model=model_name,
+        samples=background_samples,
+    )
+    total_positive = max(1, len(samples))
+    total_background = max(1, len(background_samples))
     with conn:
         conn.execute(
             "UPDATE recommendation_categories SET active=0, updated_at=? WHERE version=?",
@@ -1890,16 +2152,31 @@ def initialize_recommendation_categories(conn: sqlite3.Connection) -> dict[str, 
         )
         for category in categories:
             positive_count = len(category["seed_item_ids"])
+            background_count = int(background_counts.get(category["key"], 0))
+            positive_rate = positive_count / total_positive
+            background_rate = background_count / total_background
+            weight, weight_reason, lift_score = recommendation_category_weight_from_stats(
+                positive_count=positive_count,
+                background_count=background_count,
+                positive_rate=positive_rate,
+                background_rate=background_rate,
+            )
             conn.execute(
                 """
                 INSERT INTO recommendation_categories(
-                  key, label, description, positive_count, weight, active, version, seed_item_ids_json, created_at, updated_at
+                  key, label, description, positive_count, background_count, positive_rate, background_rate,
+                  lift_score, weight_reason, weight, active, version, seed_item_ids_json, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET
                   label=excluded.label,
                   description=excluded.description,
                   positive_count=excluded.positive_count,
+                  background_count=excluded.background_count,
+                  positive_rate=excluded.positive_rate,
+                  background_rate=excluded.background_rate,
+                  lift_score=excluded.lift_score,
+                  weight_reason=excluded.weight_reason,
                   weight=excluded.weight,
                   active=excluded.active,
                   version=excluded.version,
@@ -1911,7 +2188,12 @@ def initialize_recommendation_categories(conn: sqlite3.Connection) -> dict[str, 
                     category["label"],
                     category["description"],
                     positive_count,
-                    recommendation_category_weight(positive_count),
+                    background_count,
+                    positive_rate,
+                    background_rate,
+                    lift_score,
+                    weight_reason,
+                    weight,
                     RECOMMENDATION_CATEGORY_VERSION,
                     json.dumps(category["seed_item_ids"], ensure_ascii=False),
                     ts,
@@ -1930,7 +2212,14 @@ def initialize_recommendation_categories(conn: sqlite3.Connection) -> dict[str, 
                 [ts, RECOMMENDATION_CATEGORY_VERSION, *sorted(returned_keys)],
             )
         recommendation_meta_set(conn, "category_init_error", "")
-    return {"ok": True, "error": "", "created": len(categories), "model": payload.get("model", "")}
+    return {
+        "ok": True,
+        "error": "",
+        "created": len(categories),
+        "model": payload.get("model", ""),
+        "background_samples": len(background_samples),
+        "trend_contexts": len(trend_contexts),
+    }
 
 
 def enqueue_recommendation_eval(conn: sqlite3.Connection, item_id: str) -> bool:
@@ -3323,6 +3612,7 @@ def api_recommendation_status():
 def api_recommendation_init():
     body = request.get_json(silent=True) or {}
     raw_limit = body.get("limit", RECOMMENDATION_INIT_LIMIT)
+    rebuild = bool(body.get("rebuild"))
     try:
         limit = int(raw_limit)
     except (TypeError, ValueError):
@@ -3330,8 +3620,11 @@ def api_recommendation_init():
     conn = db_conn()
     try:
         category_result = {"ok": True, "created": 0, "error": ""}
-        if not recommendation_category_ready(conn):
+        reset_count = 0
+        if rebuild or not recommendation_category_ready(conn):
             category_result = initialize_recommendation_categories(conn)
+            if category_result.get("ok", True):
+                reset_count = reset_current_recommendation_evals(conn)
         queued = enqueue_recommendation_init_jobs(conn, limit)
         snapshot = recommendation_status_snapshot(conn)
         conn.commit()
@@ -3341,8 +3634,12 @@ def api_recommendation_init():
         {
             "ok": category_result.get("ok", True),
             "queued": queued,
+            "rebuild": rebuild,
+            "reset": reset_count,
             "category_created": int(category_result.get("created", 0) or 0),
             "category_init_error": category_result.get("error", ""),
+            "background_samples": int(category_result.get("background_samples", 0) or 0),
+            "trend_contexts": int(category_result.get("trend_contexts", 0) or 0),
             "limit": max(1, min(RECOMMENDATION_INIT_LIMIT, limit)),
             **snapshot,
         }

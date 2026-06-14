@@ -209,7 +209,11 @@ def _build_messages(*, title: str, source: str, content: str) -> list[dict[str, 
     ]
 
 
-def _build_recommendation_category_messages(*, positive_samples: list[dict[str, str]]) -> list[dict[str, str]]:
+def _build_recommendation_category_messages(
+    *,
+    positive_samples: list[dict[str, str]],
+    trend_contexts: list[dict[str, str]],
+) -> list[dict[str, str]]:
     system = (
         "你是用户新闻兴趣类别库生成器。"
         "你必须调用给定函数并严格输出结构化类别定义，不要输出解释。"
@@ -237,6 +241,23 @@ def _build_recommendation_category_messages(*, positive_samples: list[dict[str, 
         "以下是用户历史正样本，请总结为稳定的兴趣类别库，并为每个类别附上对应 seed_item_ids：\n\n"
         + "\n\n---\n\n".join(sample_blocks)
     )
+    if trend_contexts:
+        trend_blocks = []
+        for ctx in trend_contexts:
+            trend_blocks.append(
+                "\n".join(
+                    [
+                        f"日期: {ctx['date_key'] or '未知'}",
+                        f"板块: {ctx['tag'] or '未知'}",
+                        f"方向: {ctx['direction'] or '未知'}",
+                        f"趋势想法: {ctx['note'] or '无'}",
+                    ]
+                )
+            )
+        user += (
+            "\n\n补充弱正样本上下文（趋势想法/手动趋势信号，只用于帮助理解长期偏好，不要把它们当成 seed_item_ids）：\n\n"
+            + "\n\n---\n\n".join(trend_blocks)
+        )
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -354,6 +375,7 @@ def generate_article_ai(*, title: str, source: str, content: str, model: str | N
 def generate_recommendation_categories(
     *,
     positive_samples: list[dict[str, str]],
+    trend_contexts: list[dict[str, str]] | None = None,
     model: str | None = None,
 ) -> dict[str, Any]:
     api_key = _resolve_api_key("DEEPSEEK_API_KEY")
@@ -410,7 +432,10 @@ def generate_recommendation_categories(
     try:
         resp = client.chat.completions.create(
             model=model_name,
-            messages=_build_recommendation_category_messages(positive_samples=positive_samples),
+            messages=_build_recommendation_category_messages(
+                positive_samples=positive_samples,
+                trend_contexts=trend_contexts or [],
+            ),
             tools=tools,
             tool_choice={"type": "function", "function": {"name": "save_recommendation_categories"}},
             temperature=0.1,

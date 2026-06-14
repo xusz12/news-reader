@@ -345,15 +345,14 @@ async function fetchRecommendationStatus() {
   return data;
 }
 
-async function postRecommendationInit(limit = 200) {
+async function postRecommendationInit(limit = 200, rebuild = false) {
   const res = await fetch("/api/recommendations/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ limit }),
+    body: JSON.stringify({ limit, rebuild }),
   });
   if (!res.ok) throw new Error("recommendation_init_failed");
   const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "recommendation_init_failed");
   return data;
 }
 
@@ -1406,9 +1405,9 @@ function updateCollectionButtons() {
     if (visible) {
       const ready = !!state.recommendationStatus?.category_library_ready;
       if (state.recommendationInitRunning) {
-        initRecommendationsBtn.textContent = ready ? "初始化推荐中..." : "初始化类别库中...";
+        initRecommendationsBtn.textContent = ready ? "重建推荐中..." : "初始化类别库中...";
       } else {
-        initRecommendationsBtn.textContent = ready ? "初始化当前未读推荐" : "初始化推荐类别库";
+        initRecommendationsBtn.textContent = ready ? "重建推荐类别库" : "初始化推荐类别库";
       }
     }
   }
@@ -1597,7 +1596,7 @@ function renderMeta() {
   if (state.collection === "recommendations") {
     const status = state.recommendationStatus || {};
     const libraryText = status.category_library_ready
-      ? `类别库已就绪 · active ${status.active_category_count || 0}`
+      ? `类别库已就绪 · active ${status.active_category_count || 0} · 背景样本 ${status.background_sample_count || 0}`
       : `类别库未就绪 · 正样本 ${status.positive_sample_count || 0}`;
     meta.textContent = `推荐 · ${sourceName} · 命中 ${state.total} 条 · ${libraryText} · 待评估 ${status.pending || 0} / 成功 ${status.success || 0} / 失败 ${status.failed || 0}`;
     pageInfo.textContent = `${state.page} / ${state.pages}`;
@@ -1611,7 +1610,7 @@ function recommendationEmptyHint(status) {
   if (!status?.category_library_ready) {
     if (status?.category_library_status === "failed") {
       const latest = status?.latest_error?.error ? ` · 最近失败：${status.latest_error.error}` : "";
-      return `推荐类别库初始化失败，可点“初始化推荐类别库”重试${latest}`;
+      return `推荐类别库重建失败，可点“重建推荐类别库”重试${latest}`;
     }
     return "推荐类别库未就绪，请先初始化类别库";
   }
@@ -1622,7 +1621,7 @@ function recommendationEmptyHint(status) {
   }
   if (failed > 0) {
     const latest = status?.latest_error?.error ? ` · 最近失败：${status.latest_error.error}` : "";
-    return `推荐评估失败 ${failed} 条，可点“初始化当前未读推荐”重试${latest}`;
+    return `推荐评估失败 ${failed} 条，可点“重建推荐类别库”重试${latest}`;
   }
   return "暂无命中推荐";
 }
@@ -4041,15 +4040,20 @@ refreshBtn.addEventListener("click", async () => {
 if (initRecommendationsBtn) {
   initRecommendationsBtn.addEventListener("click", async () => {
     if (state.collection !== "recommendations" || state.recommendationInitRunning) return;
+    const rebuild = !!state.recommendationStatus?.category_library_ready;
     state.recommendationInitRunning = true;
     updateCollectionButtons();
-    setHint(state.recommendationStatus?.category_library_ready ? "正在初始化当前未读推荐..." : "正在初始化推荐类别库...");
+    setHint(rebuild ? "正在重建推荐类别库并重算当前未读推荐..." : "正在初始化推荐类别库...");
     try {
-      const payload = await postRecommendationInit(200);
+      const payload = await postRecommendationInit(200, rebuild);
       state.recommendationStatus = payload;
       await loadFirstPage();
       if (!payload.ok) {
         setHint(recommendationEmptyHint(payload));
+      } else if (payload.rebuild) {
+        setHint(
+          `已重建 ${payload.category_created} 个推荐类别，重置 ${payload.reset || 0} 条旧评估，并加入 ${payload.queued} 条重评估任务`
+        );
       } else if (payload.category_created > 0 && payload.queued > 0) {
         setHint(`已建立 ${payload.category_created} 个推荐类别，并加入 ${payload.queued} 条评估任务`);
       } else if (payload.category_created > 0) {
@@ -4060,7 +4064,7 @@ if (initRecommendationsBtn) {
         setHint(recommendationEmptyHint(payload));
       }
     } catch {
-      setHint("初始化推荐失败，请稍后重试。");
+      setHint(rebuild ? "重建推荐失败，请稍后重试。" : "初始化推荐失败，请稍后重试。");
     } finally {
       state.recommendationInitRunning = false;
       updateCollectionButtons();

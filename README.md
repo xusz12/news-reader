@@ -4,6 +4,22 @@
 
 ## What's Changed
 
+### 2026-06-14 — feat: 新增 v2.0.1 推荐初始权重重建
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*llm_client.py（+）*
+    - 推荐版本升级到 `schema_version=category-v2 / weights_version=category-v2 / category_version=2`，旧 v2.0.0 eval 与类别库自动失效于当前推荐集合，避免旧权重继续污染当前命中
+    - `recommendation_categories` 新增 `background_count / positive_rate / background_rate / lift_score / weight_reason`，类别权重不再只看 `positive_count`
+    - 推荐类别库初始化现在会同时采样：`重要 / 新闻想法 / 板块标签` 正样本、`趋势想法` 弱正样本上下文，以及“无重要/无想法/无板块标签”的背景样本
+    - 类别仍由正样本生成，但会额外把背景样本归类到 active categories，再按 `positive_rate vs background_rate` 与 `lift_score` 计算 `35-85` 区间权重
+    - `POST /api/recommendations/init` 新增 `rebuild` 模式：可重建类别库、重算初始权重、清空当前 schema 下未读旧 eval 并重新排队，推荐状态会返回背景样本数与重置数量
+  - *static/app.js（+）*
+    - 推荐页按钮从“初始化当前未读推荐”升级为显式“重建推荐类别库”
+    - 推荐页状态栏增加背景样本信息；重建失败与评估失败文案统一指向“重建推荐类别库”重试
+    - 初始化接口现在支持 `rebuild`，并在前端显示“重建了多少类别 / 重置了多少旧评估 / 重新加入多少任务”
+  - *tests/test_api.py（+）*
+    - 新增背景分布影响权重、重建会重置当前 schema 未读 eval、类别库初始化写入背景统计字段等回归测试
+- **影响**：推荐系统的初始权重从“只看正样本数量”升级为“正样本 + 背景样本对比”；高频公共主题会被压权，小众但正样本集中的类别会被抬权，同时用户可以显式重建推荐偏好而不必依赖首次初始化结果。
+
 ### 2026-06-14 — feat: 新增 v2.0.0 推荐集合 MVP
 - **文件**
   - *schema.sql（+）*、*app.py（+）*、*llm_client.py（+）*、*scanner.py（+）*
