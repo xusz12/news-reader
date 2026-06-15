@@ -2924,6 +2924,225 @@ def test_recommendation_keyword_disable_requeues_existing_matches(tmp_path: Path
     assert keyword_links == 0
 
 
+def test_recommendation_keyword_create_and_dedupe_aliases(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    created = client.post(
+        "/api/recommendation-keywords",
+        json={
+            "label": "AI 芯片",
+            "type": "domain",
+            "aliases": "AI 芯片, ai 芯片，AI晶片\nAI 芯片 ",
+            "active": True,
+        },
+    )
+    assert created.status_code == 200
+    payload = created.get_json()
+    assert payload["ok"] is True
+    keyword = next(item for item in payload["active_keywords"] if item["label"] == "AI 芯片")
+    assert keyword["aliases"] == ["AI 芯片", "AI晶片"]
+
+    duplicate = client.post(
+        "/api/recommendation-keywords",
+        json={"label": "AI 芯片", "type": "domain", "aliases": "", "active": True},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.get_json()["error"] == "keyword_label_exists"
+
+
+def test_recommendation_keyword_edit_requeues_existing_matches(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Bloomberg · Markets（1条）
+### [Singapore Gold Clearing Push](https://example.com/singapore-gold)
+- 发布时间：2026-06-14 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_keywords",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "canonical_keywords": [{"key": "gold", "confidence": "high", "raw_keyword": "黄金"}],
+            "candidate_keywords": [],
+            "needs_keyword_reason": "",
+            "raw_json": "{}",
+        },
+    )
+    assert app_module.process_pending_recommendation_keyword_once() is True
+
+    updated = client.patch(
+        "/api/recommendation-keywords/gold",
+        json={"label": "黄金资产", "type": "domain", "aliases": "黄金, 金价, 黄金", "active": True},
+    )
+    assert updated.status_code == 200
+    payload = updated.get_json()
+    assert payload["ok"] is True
+    assert payload["requeued"] == 1
+    keyword = next(item for item in payload["active_keywords"] if item["key"] == "gold")
+    assert keyword["label"] == "黄金资产"
+    assert keyword["aliases"] == ["黄金", "金价"]
+
+    with app_module.db_conn() as conn:
+        job_row = conn.execute("SELECT status, keyword_count FROM recommendation_keyword_jobs").fetchone()
+        keyword_links = conn.execute("SELECT COUNT(*) FROM item_recommendation_keywords").fetchone()[0]
+    assert job_row["status"] == "pending"
+    assert job_row["keyword_count"] == 0
+    assert keyword_links == 0
+
+
+def test_recommendation_keyword_delete_seed_soft_removes_and_requeues(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Bloomberg · Markets（1条）
+### [Singapore Gold Clearing Push](https://example.com/singapore-gold)
+- 发布时间：2026-06-14 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_keywords",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "canonical_keywords": [{"key": "gold", "confidence": "high", "raw_keyword": "黄金"}],
+            "candidate_keywords": [],
+            "needs_keyword_reason": "",
+            "raw_json": "{}",
+        },
+    )
+    assert app_module.process_pending_recommendation_keyword_once() is True
+
+    deleted = client.delete("/api/recommendation-keywords/gold")
+    assert deleted.status_code == 200
+    payload = deleted.get_json()
+    assert payload["ok"] is True
+    assert payload["requeued"] == 1
+    assert all(item["key"] != "gold" for item in payload["active_keywords"])
+    assert all(item["key"] != "gold" for item in payload["disabled_keywords"])
+
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+    library = client.get("/api/recommendation-keywords").get_json()
+    assert all(item["key"] != "gold" for item in library["active_keywords"])
+    assert all(item["key"] != "gold" for item in library["disabled_keywords"])
+
+    with app_module.db_conn() as conn:
+        row = conn.execute("SELECT source, active FROM recommendation_keywords WHERE key='gold'").fetchone()
+        job_row = conn.execute("SELECT status FROM recommendation_keyword_jobs").fetchone()
+    assert row["source"].startswith(app_module.RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX)
+    assert row["active"] == 0
+    assert job_row["status"] == "pending"
+
+
+def test_market_tag_source_keyword_active_state_persists_after_restart(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO recommendation_keywords(
+                  key, label, type, aliases_json, active, source, created_at, updated_at
+                )
+                VALUES (?, ?, ?, '[]', 1, 'market_tag', ?, ?)
+                """,
+                ("medical", "医疗", "concept", ts, ts),
+            )
+
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    library = client.get("/api/recommendation-keywords").get_json()
+    active = next(item for item in library["active_keywords"] if item["label"] == "医疗")
+    assert active["source"] == "market_tag"
+    assert active["active"] is True
+
+
+def test_market_tag_source_keyword_user_enable_survives_restart(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO recommendation_keywords(
+                  key, label, type, aliases_json, active, source, created_at, updated_at
+                )
+                VALUES (?, ?, ?, '[]', 0, 'market_tag', ?, ?)
+                """,
+                ("regulation_cn", "监管", "concept", ts, ts),
+            )
+    client = app_module.app.test_client()
+    enabled = client.patch(
+        "/api/recommendation-keywords/regulation_cn",
+        json={"active": True},
+    )
+    assert enabled.status_code == 200
+    assert any(item["key"] == "regulation_cn" for item in enabled.get_json()["active_keywords"])
+
+    app_module.ensure_db()
+    library = client.get("/api/recommendation-keywords").get_json()
+    active = next(item for item in library["active_keywords"] if item["key"] == "regulation_cn")
+    assert active["label"] == "监管"
+
+
 def test_recommendation_keyword_rebuild_resets_jobs_and_candidates(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)

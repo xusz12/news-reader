@@ -43,6 +43,12 @@ let state = {
   settingsDraft: null,
   settingsSection: "services",
   settingsKeywordTab: "active",
+  settingsKeywordQuery: "",
+  settingsKeywordSearchDraft: "",
+  settingsKeywordEditorMode: "",
+  settingsKeywordEditingKey: "",
+  settingsKeywordEditorDraft: null,
+  recommendationKeywordConfirmDeleteKey: "",
   runtimeSettings: null,
   releaseNotes: [],
   recommendationKeywordLibrary: null,
@@ -61,6 +67,16 @@ const mediaIconMap = {
   "Ars Technica": "/static/source-icons/arstechnica.ico",
 };
 const SETTINGS_CUSTOM_MODEL_VALUE = "__custom__";
+const RECOMMENDATION_KEYWORD_TYPE_LABELS = {
+  entity: "实体",
+  concept: "概念",
+  domain: "领域",
+  event: "事件",
+  region: "地区",
+  source_form: "来源形态",
+  content_form: "内容形态",
+};
+const RECOMMENDATION_KEYWORD_TYPE_ORDER = ["entity", "concept", "domain", "event", "region", "source_form", "content_form"];
 
 const refreshBtn = document.getElementById("refreshBtn");
 const resumeAnchorBtn = document.getElementById("resumeAnchorBtn");
@@ -622,6 +638,26 @@ async function updateRecommendationKeyword(keywordKey, payload) {
   return data;
 }
 
+async function createRecommendationKeyword(payload) {
+  const res = await fetch("/api/recommendation-keywords", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) throw new Error(data.error || "recommendation_keyword_create_failed");
+  return data;
+}
+
+async function deleteRecommendationKeyword(keywordKey) {
+  const res = await fetch(`/api/recommendation-keywords/${encodeURIComponent(keywordKey)}`, {
+    method: "DELETE",
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) throw new Error(data.error || "recommendation_keyword_delete_failed");
+  return data;
+}
+
 async function reviewRecommendationKeywordCandidate(candidateId, payload) {
   const res = await fetch(`/api/recommendation-keywords/candidates/${candidateId}/review`, {
     method: "POST",
@@ -930,6 +966,60 @@ function recommendationKeywordTabCounts() {
   };
 }
 
+function recommendationKeywordTypeLabel(type) {
+  return RECOMMENDATION_KEYWORD_TYPE_LABELS[type] || type || "未分类";
+}
+
+function recommendationKeywordSearchValue(item, kind) {
+  const aliases = Array.isArray(item.aliases) ? item.aliases.join(" ") : "";
+  const fields = [item.label, item.key, aliases, item.type];
+  if (kind === "candidate") fields.push(item.reason || "");
+  return fields.join(" ").toLowerCase();
+}
+
+function filterRecommendationKeywordRows(rows, kind) {
+  const query = (state.settingsKeywordQuery || "").trim().toLowerCase();
+  if (!query) return rows;
+  return rows.filter((item) => recommendationKeywordSearchValue(item, kind).includes(query));
+}
+
+function groupedRecommendationKeywordRows(rows) {
+  const groups = new Map();
+  RECOMMENDATION_KEYWORD_TYPE_ORDER.forEach((type) => groups.set(type, []));
+  rows.forEach((item) => {
+    const type = item.type || "other";
+    if (!groups.has(type)) groups.set(type, []);
+    groups.get(type).push(item);
+  });
+  return Array.from(groups.entries()).filter(([, items]) => items.length > 0);
+}
+
+function buildRecommendationKeywordEditorDraft(item = null, overrides = {}) {
+  return {
+    label: item?.label || "",
+    type: item?.type || "domain",
+    aliases: Array.isArray(item?.aliases) ? item.aliases.join(", ") : "",
+    active: typeof item?.active === "boolean" ? item.active : true,
+    ...overrides,
+  };
+}
+
+function openRecommendationKeywordEditor(mode, item = null, overrides = {}) {
+  state.settingsKeywordEditorMode = mode;
+  state.settingsKeywordEditingKey = item?.key || "";
+  state.settingsKeywordEditorDraft = buildRecommendationKeywordEditorDraft(item, overrides);
+}
+
+function closeRecommendationKeywordEditor() {
+  state.settingsKeywordEditorMode = "";
+  state.settingsKeywordEditingKey = "";
+  state.settingsKeywordEditorDraft = null;
+}
+
+function setRecommendationKeywordSearchQuery(value) {
+  state.settingsKeywordQuery = (value || "").trim();
+}
+
 function renderSettingsNav() {
   const navButtons = [
     [settingsNavServices, "services"],
@@ -975,6 +1065,66 @@ function renderRecommendationKeywordTabs() {
   });
 }
 
+async function submitRecommendationKeywordEditor() {
+  const draft = state.settingsKeywordEditorDraft;
+  if (!draft) return;
+  const payload = {
+    label: (draft.label || "").trim(),
+    type: draft.type || "domain",
+    aliases: draft.aliases || "",
+    active: Boolean(draft.active),
+  };
+  if (!payload.label) {
+    state.settingsMessage = "请先填写关键词名称。";
+    state.settingsMessageTone = "failed";
+    renderSettingsOverlay();
+    return;
+  }
+  state.settingsSaving = true;
+  state.settingsMessage = state.settingsKeywordEditorMode === "edit" ? "保存关键词中..." : "新建关键词中...";
+  state.settingsMessageTone = "pending";
+  renderSettingsOverlay();
+  try {
+    state.recommendationKeywordLibrary = state.settingsKeywordEditorMode === "edit"
+      ? await updateRecommendationKeyword(state.settingsKeywordEditingKey, payload)
+      : await createRecommendationKeyword(payload);
+    state.settingsMessage = state.settingsKeywordEditorMode === "edit" ? "关键词已更新。" : "关键词已创建。";
+    state.settingsMessageTone = "ready";
+    closeRecommendationKeywordEditor();
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    state.settingsMessage = code === "keyword_label_exists"
+      ? "已存在同名关键词，请换一个名称。"
+      : "保存关键词失败，请稍后重试。";
+    state.settingsMessageTone = "failed";
+  } finally {
+    state.settingsSaving = false;
+    renderSettingsOverlay();
+  }
+}
+
+async function removeRecommendationKeyword(item) {
+  if (!item?.key) return;
+  state.recommendationKeywordBusyKey = item.key;
+  state.settingsMessage = "删除关键词中...";
+  state.settingsMessageTone = "pending";
+  renderSettingsOverlay();
+  try {
+    const payload = await deleteRecommendationKeyword(item.key);
+    state.recommendationKeywordLibrary = payload;
+    state.settingsMessage = `已删除关键词，并重新排队 ${payload.requeued || 0} 条相关新闻。`;
+    state.settingsMessageTone = "ready";
+    state.recommendationKeywordConfirmDeleteKey = "";
+    if (state.settingsKeywordEditingKey === item.key) closeRecommendationKeywordEditor();
+  } catch {
+    state.settingsMessage = "删除关键词失败，请稍后重试。";
+    state.settingsMessageTone = "failed";
+  } finally {
+    state.recommendationKeywordBusyKey = "";
+    renderSettingsOverlay();
+  }
+}
+
 function renderRecommendationKeywordLibrary() {
   if (!settingsKeywordLibrary) return;
   settingsKeywordLibrary.innerHTML = "";
@@ -989,6 +1139,152 @@ function renderRecommendationKeywordLibrary() {
   }
 
   const mergeOptions = recommendationKeywordOptions(true);
+  const toolbar = document.createElement("div");
+  toolbar.className = "settings-keyword-toolbar";
+  const searchInput = document.createElement("input");
+  searchInput.className = "settings-input settings-keyword-search";
+  searchInput.type = "search";
+  searchInput.placeholder = "搜索 label / key / aliases / type";
+  searchInput.value = state.settingsKeywordSearchDraft || "";
+  searchInput.addEventListener("input", () => {
+    state.settingsKeywordSearchDraft = searchInput.value || "";
+  });
+  searchInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    setRecommendationKeywordSearchQuery(state.settingsKeywordSearchDraft || "");
+    renderRecommendationKeywordLibrary();
+  });
+  toolbar.appendChild(searchInput);
+  const searchBtn = document.createElement("button");
+  searchBtn.className = "detail-retry-btn settings-keyword-search-btn";
+  searchBtn.type = "button";
+  searchBtn.textContent = "搜索";
+  searchBtn.addEventListener("click", () => {
+    setRecommendationKeywordSearchQuery(state.settingsKeywordSearchDraft || "");
+    renderRecommendationKeywordLibrary();
+  });
+  toolbar.appendChild(searchBtn);
+  const clearBtn = document.createElement("button");
+  clearBtn.className = "detail-retry-btn settings-keyword-search-clear";
+  clearBtn.type = "button";
+  clearBtn.textContent = "清空";
+  clearBtn.disabled = !state.settingsKeywordQuery && !state.settingsKeywordSearchDraft;
+  clearBtn.addEventListener("click", () => {
+    state.settingsKeywordSearchDraft = "";
+    setRecommendationKeywordSearchQuery("");
+    renderRecommendationKeywordLibrary();
+  });
+  toolbar.appendChild(clearBtn);
+  const createBtn = document.createElement("button");
+  createBtn.className = "detail-retry-btn settings-keyword-create-btn";
+  createBtn.type = "button";
+  createBtn.textContent = "新增 keyword";
+  createBtn.disabled = state.settingsSaving;
+  createBtn.addEventListener("click", () => {
+    openRecommendationKeywordEditor("create", null, { active: state.settingsKeywordTab !== "disabled" });
+    renderSettingsOverlay();
+  });
+  toolbar.appendChild(createBtn);
+  settingsKeywordLibrary.appendChild(toolbar);
+
+  if (state.settingsKeywordEditorDraft) {
+    const editor = document.createElement("section");
+    editor.className = "settings-keyword-editor";
+    const title = document.createElement("div");
+    title.className = "settings-keyword-editor-title";
+    title.textContent = state.settingsKeywordEditorMode === "edit" ? "编辑关键词" : "新增关键词";
+    editor.appendChild(title);
+
+    const form = document.createElement("div");
+    form.className = "settings-keyword-editor-grid";
+    const draft = state.settingsKeywordEditorDraft;
+
+    const labelField = document.createElement("label");
+    labelField.className = "settings-field";
+    labelField.innerHTML = "<span>名称</span>";
+    const labelInput = document.createElement("input");
+    labelInput.className = "settings-input";
+    labelInput.type = "text";
+    labelInput.maxLength = 80;
+    labelInput.value = draft.label || "";
+    labelInput.addEventListener("input", () => {
+      state.settingsKeywordEditorDraft.label = labelInput.value;
+    });
+    labelField.appendChild(labelInput);
+    form.appendChild(labelField);
+
+    const typeField = document.createElement("label");
+    typeField.className = "settings-field";
+    typeField.innerHTML = "<span>分类</span>";
+    const typeSelect = document.createElement("select");
+    typeSelect.className = "pref-select";
+    RECOMMENDATION_KEYWORD_TYPE_ORDER.forEach((type) => {
+      const option = document.createElement("option");
+      option.value = type;
+      option.textContent = recommendationKeywordTypeLabel(type);
+      typeSelect.appendChild(option);
+    });
+    typeSelect.value = draft.type || "domain";
+    typeSelect.addEventListener("change", () => {
+      state.settingsKeywordEditorDraft.type = typeSelect.value || "domain";
+    });
+    typeField.appendChild(typeSelect);
+    form.appendChild(typeField);
+
+    const aliasField = document.createElement("label");
+    aliasField.className = "settings-field settings-keyword-editor-wide";
+    aliasField.innerHTML = "<span>别名</span>";
+    const aliasInput = document.createElement("textarea");
+    aliasInput.className = "settings-keyword-alias-input";
+    aliasInput.rows = 3;
+    aliasInput.placeholder = "支持逗号、顿号、分号或换行分隔";
+    aliasInput.value = draft.aliases || "";
+    aliasInput.addEventListener("input", () => {
+      state.settingsKeywordEditorDraft.aliases = aliasInput.value;
+    });
+    aliasField.appendChild(aliasInput);
+    form.appendChild(aliasField);
+
+    const activeField = document.createElement("label");
+    activeField.className = "settings-keyword-checkbox";
+    const activeInput = document.createElement("input");
+    activeInput.type = "checkbox";
+    activeInput.checked = Boolean(draft.active);
+    activeInput.addEventListener("change", () => {
+      state.settingsKeywordEditorDraft.active = activeInput.checked;
+    });
+    const activeText = document.createElement("span");
+    activeText.textContent = "创建后立即启用";
+    activeField.appendChild(activeInput);
+    activeField.appendChild(activeText);
+    form.appendChild(activeField);
+    editor.appendChild(form);
+
+    const editorActions = document.createElement("div");
+    editorActions.className = "settings-keyword-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "detail-retry-btn";
+    cancelBtn.type = "button";
+    cancelBtn.textContent = "取消";
+    cancelBtn.addEventListener("click", () => {
+      closeRecommendationKeywordEditor();
+      renderSettingsOverlay();
+    });
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "detail-retry-btn";
+    saveBtn.type = "button";
+    saveBtn.textContent = state.settingsKeywordEditorMode === "edit" ? "保存" : "创建";
+    saveBtn.disabled = state.settingsSaving;
+    saveBtn.addEventListener("click", async () => {
+      await submitRecommendationKeywordEditor();
+    });
+    editorActions.appendChild(cancelBtn);
+    editorActions.appendChild(saveBtn);
+    editor.appendChild(editorActions);
+    settingsKeywordLibrary.appendChild(editor);
+  }
+
   const tabConfig = {
     active: {
       rows: Array.isArray(library.active_keywords) ? library.active_keywords : [],
@@ -1004,20 +1300,19 @@ function renderRecommendationKeywordLibrary() {
     },
   };
   const kind = state.settingsKeywordTab || "active";
-  const rows = tabConfig[kind]?.rows || [];
+  const rows = filterRecommendationKeywordRows(tabConfig[kind]?.rows || [], kind);
 
   if (!rows.length) {
     const empty = document.createElement("div");
     empty.className = "detail-status muted";
-    empty.textContent = tabConfig[kind]?.emptyText || "当前为空。";
+    empty.textContent = state.settingsKeywordQuery
+      ? "没有匹配的关键词。"
+      : (tabConfig[kind]?.emptyText || "当前为空。");
     settingsKeywordLibrary.appendChild(empty);
     return;
   }
 
-  const wrapper = document.createElement("div");
-  wrapper.className = kind === "candidate" ? "settings-keyword-candidate-list" : "settings-keyword-grid";
-
-  rows.forEach((item) => {
+  const renderKeywordCard = (item) => {
     const card = document.createElement("article");
     card.className = `settings-keyword-item ${kind === "candidate" ? "candidate" : "compact"}`;
     const top = document.createElement("div");
@@ -1169,8 +1464,19 @@ function renderRecommendationKeywordLibrary() {
       mergeRow.appendChild(mergeBtn);
       card.appendChild(mergeRow);
     } else {
+      const editBtn = document.createElement("button");
+      editBtn.className = "detail-retry-btn settings-btn-neutral";
+      editBtn.type = "button";
+      editBtn.textContent = "编辑";
+      editBtn.disabled = busy || state.settingsSaving;
+      editBtn.addEventListener("click", () => {
+        openRecommendationKeywordEditor("edit", item);
+        renderSettingsOverlay();
+      });
+      actions.appendChild(editBtn);
+
       const toggleBtn = document.createElement("button");
-      toggleBtn.className = "detail-retry-btn";
+      toggleBtn.className = `detail-retry-btn ${kind === "active" ? "settings-btn-warn" : "settings-btn-success"}`;
       toggleBtn.type = "button";
       toggleBtn.textContent = kind === "active" ? "禁用" : "启用";
       toggleBtn.disabled = busy || state.settingsSaving;
@@ -1194,10 +1500,67 @@ function renderRecommendationKeywordLibrary() {
         }
       });
       actions.appendChild(toggleBtn);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "detail-retry-btn settings-btn-danger";
+      deleteBtn.type = "button";
+      const confirmingDelete = state.recommendationKeywordConfirmDeleteKey === item.key;
+      deleteBtn.textContent = confirmingDelete ? "确认删除" : "删除";
+      deleteBtn.disabled = busy || state.settingsSaving;
+      deleteBtn.addEventListener("click", async () => {
+        if (!confirmingDelete) {
+          state.recommendationKeywordConfirmDeleteKey = item.key;
+          state.settingsMessage = "再次点击“确认删除”后会删除该关键词并重新抽取相关新闻。";
+          state.settingsMessageTone = "pending";
+          renderSettingsOverlay();
+          return;
+        }
+        await removeRecommendationKeyword(item);
+      });
+      actions.appendChild(deleteBtn);
+      if (confirmingDelete) {
+        const cancelDeleteBtn = document.createElement("button");
+        cancelDeleteBtn.className = "detail-retry-btn";
+        cancelDeleteBtn.type = "button";
+        cancelDeleteBtn.textContent = "取消";
+        cancelDeleteBtn.disabled = busy || state.settingsSaving;
+        cancelDeleteBtn.addEventListener("click", () => {
+          state.recommendationKeywordConfirmDeleteKey = "";
+          state.settingsMessage = "";
+          state.settingsMessageTone = "muted";
+          renderSettingsOverlay();
+        });
+        actions.appendChild(cancelDeleteBtn);
+      }
     }
 
     card.appendChild(actions);
-    wrapper.appendChild(card);
+    return card;
+  };
+
+  if (kind === "candidate") {
+    const wrapper = document.createElement("div");
+    wrapper.className = "settings-keyword-candidate-list";
+    rows.forEach((item) => wrapper.appendChild(renderKeywordCard(item)));
+    settingsKeywordLibrary.appendChild(wrapper);
+    return;
+  }
+
+  const groups = groupedRecommendationKeywordRows(rows);
+  const wrapper = document.createElement("div");
+  wrapper.className = "settings-keyword-group-list";
+  groups.forEach(([type, items]) => {
+    const group = document.createElement("section");
+    group.className = "settings-keyword-group";
+    const heading = document.createElement("div");
+    heading.className = "settings-keyword-group-title";
+    heading.textContent = `${recommendationKeywordTypeLabel(type)} · ${items.length}`;
+    group.appendChild(heading);
+    const grid = document.createElement("div");
+    grid.className = "settings-keyword-grid";
+    items.forEach((item) => grid.appendChild(renderKeywordCard(item)));
+    group.appendChild(grid);
+    wrapper.appendChild(group);
   });
   settingsKeywordLibrary.appendChild(wrapper);
 }
@@ -1348,6 +1711,10 @@ async function openSettingsOverlay() {
     state.recommendationKeywordLibrary = recommendationKeywordLibrary;
     state.settingsDraft = buildSettingsDraftFromRuntime();
     state.settingsSecretDrafts = {};
+    state.settingsKeywordQuery = "";
+    state.settingsKeywordSearchDraft = "";
+    state.recommendationKeywordConfirmDeleteKey = "";
+    closeRecommendationKeywordEditor();
     const counts = recommendationKeywordTabCounts();
     state.settingsKeywordTab = counts.candidate > 0 ? "candidate" : "active";
   } catch {

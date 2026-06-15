@@ -65,19 +65,19 @@ SOURCE_LABELS = {
 }
 
 DEFAULT_RECOMMENDATION_KEYWORD_SEEDS = [
-    {"key": "ai", "label": "AI", "type": "domain", "aliases": ["人工智能"]},
-    {"key": "chip", "label": "芯片", "type": "domain", "aliases": ["半导体"]},
-    {"key": "memory", "label": "存储", "type": "domain", "aliases": ["内存"]},
-    {"key": "consumer_electronics", "label": "消费电子", "type": "domain", "aliases": ["智能手机", "电子消费"]},
-    {"key": "supply_chain", "label": "供应链", "type": "domain", "aliases": []},
-    {"key": "cloud", "label": "云计算", "type": "domain", "aliases": ["数据中心"]},
-    {"key": "robotics", "label": "机器人", "type": "domain", "aliases": []},
-    {"key": "biotech", "label": "生物科技", "type": "domain", "aliases": ["医药"]},
-    {"key": "energy", "label": "能源", "type": "domain", "aliases": []},
-    {"key": "crypto", "label": "加密货币", "type": "domain", "aliases": []},
-    {"key": "banking", "label": "银行业", "type": "domain", "aliases": ["银行"]},
-    {"key": "gold", "label": "黄金", "type": "domain", "aliases": []},
-    {"key": "sports", "label": "体育赛事", "type": "domain", "aliases": ["体育"]},
+    {"key": "ai", "label": "AI", "type": "concept", "aliases": ["人工智能"]},
+    {"key": "chip", "label": "芯片", "type": "concept", "aliases": ["半导体"]},
+    {"key": "memory", "label": "存储", "type": "concept", "aliases": ["内存"]},
+    {"key": "consumer_electronics", "label": "消费电子", "type": "concept", "aliases": ["智能手机", "电子消费"]},
+    {"key": "supply_chain", "label": "供应链", "type": "concept", "aliases": []},
+    {"key": "cloud", "label": "云计算", "type": "concept", "aliases": ["数据中心"]},
+    {"key": "robotics", "label": "机器人", "type": "concept", "aliases": []},
+    {"key": "biotech", "label": "生物科技", "type": "concept", "aliases": ["医药"]},
+    {"key": "energy", "label": "能源", "type": "concept", "aliases": []},
+    {"key": "crypto", "label": "加密货币", "type": "concept", "aliases": []},
+    {"key": "banking", "label": "银行业", "type": "concept", "aliases": ["银行"]},
+    {"key": "gold", "label": "黄金", "type": "concept", "aliases": []},
+    {"key": "sports", "label": "体育赛事", "type": "concept", "aliases": ["体育"]},
     {"key": "ipo", "label": "IPO", "type": "event", "aliases": ["上市"]},
     {"key": "funding", "label": "融资", "type": "event", "aliases": []},
     {"key": "earnings", "label": "财报", "type": "event", "aliases": []},
@@ -209,12 +209,14 @@ RECOMMENDATION_EVENT_TYPE_WEIGHTS = {
 }
 RECOMMENDATION_KEYWORD_TYPES = {
     "entity",
+    "concept",
     "domain",
     "event",
     "region",
     "source_form",
     "content_form",
 }
+RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX = "deleted:"
 
 
 def news_order_by_sql(collection: str) -> str:
@@ -491,20 +493,17 @@ def seed_recommendation_keywords(conn: sqlite3.Connection) -> None:
 
     with conn:
         for key, row in existing.items():
-            should_disable = (
-                key in RECOMMENDATION_KEYWORD_DISABLED_KEYS
-                or row.get("source") == "market_tag"
-            )
-            if should_disable and int(row.get("active") or 0) != 0:
-                conn.execute(
-                    "UPDATE recommendation_keywords SET active=0, updated_at=? WHERE key=?",
-                    (ts, key),
-                )
+            source = str(row.get("source") or "")
+            if source.startswith(RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX):
+                continue
 
         for keyword in seeded_keywords:
             key = str(keyword["key"])
             aliases_json = json.dumps(keyword["aliases"], ensure_ascii=False)
             if key in existing:
+                existing_source = str(existing[key].get("source") or "")
+                if existing_source.startswith(RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX):
+                    continue
                 try:
                     current_aliases = json.loads(existing[key].get("aliases_json") or "[]")
                 except json.JSONDecodeError:
@@ -514,14 +513,13 @@ def seed_recommendation_keywords(conn: sqlite3.Connection) -> None:
                 conn.execute(
                     """
                     UPDATE recommendation_keywords
-                    SET label=?, type=?, aliases_json=?, active=?, source=?, updated_at=?
+                    SET label=?, type=?, aliases_json=?, source=?, updated_at=?
                     WHERE key=?
                     """,
                     (
                         keyword["label"],
                         keyword["type"],
                         json.dumps(merged, ensure_ascii=False),
-                        active,
                         keyword["source"],
                         ts,
                         key,
@@ -538,16 +536,6 @@ def seed_recommendation_keywords(conn: sqlite3.Connection) -> None:
                 """,
                 (key, keyword["label"], keyword["type"], aliases_json, active, keyword["source"], ts, ts),
             )
-
-        for key, row in existing.items():
-            if key in seeded_by_key:
-                continue
-            if row.get("source") == "market_tag":
-                conn.execute(
-                    "UPDATE recommendation_keywords SET active=0, updated_at=? WHERE key=?",
-                    (ts, key),
-                )
-
 
 def load_active_recommendation_keywords(conn: sqlite3.Connection) -> list[dict[str, object]]:
     rows = conn.execute(
@@ -827,6 +815,72 @@ def parse_json_array(value: object) -> list[object]:
     return parsed if isinstance(parsed, list) else []
 
 
+def normalize_recommendation_keyword_aliases(value: object, *, limit: int = 12) -> list[str]:
+    if isinstance(value, str):
+        raw_items = re.split(r"[\n,，、;；]+", value)
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = []
+    return merge_unique_texts(raw_items, limit=limit)
+
+
+def normalize_recommendation_keyword_type(value: object) -> str:
+    keyword_type = str(value or "").strip().lower()
+    return keyword_type if keyword_type in RECOMMENDATION_KEYWORD_TYPES else ""
+
+
+def keyword_is_soft_deleted(source: object) -> bool:
+    return str(source or "").startswith(RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX)
+
+
+def collect_recommendation_keyword_item_ids(conn: sqlite3.Connection, keyword_key: str) -> list[str]:
+    rows = conn.execute(
+        "SELECT item_id FROM item_recommendation_keywords WHERE keyword_key=? ORDER BY item_id ASC",
+        (keyword_key,),
+    ).fetchall()
+    return [str(row["item_id"]).strip() for row in rows if str(row["item_id"] or "").strip()]
+
+
+def recommendation_keyword_row_exists(
+    conn: sqlite3.Connection,
+    *,
+    label: str,
+    exclude_key: str = "",
+) -> bool:
+    query = """
+        SELECT 1
+        FROM recommendation_keywords
+        WHERE label=? COLLATE NOCASE
+          AND source NOT LIKE ?
+    """
+    args: list[object] = [label, f"{RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX}%"]
+    if exclude_key:
+        query += " AND key<>?"
+        args.append(exclude_key)
+    query += " LIMIT 1"
+    return bool(conn.execute(query, args).fetchone())
+
+
+def parse_recommendation_keyword_body(body: dict[str, object]) -> tuple[dict[str, object] | None, str | None]:
+    label = str(body.get("label") or "").strip()
+    keyword_type = normalize_recommendation_keyword_type(body.get("type"))
+    active = body.get("active")
+    if not label:
+        return None, "invalid_label"
+    if not keyword_type:
+        return None, "invalid_type"
+    if not isinstance(active, bool):
+        return None, "invalid_active"
+    aliases = normalize_recommendation_keyword_aliases(body.get("aliases"))
+    return {
+        "label": label[:80],
+        "type": keyword_type,
+        "active": active,
+        "aliases": aliases,
+    }, None
+
+
 def merge_unique_texts(*groups: object, limit: int = 12) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
@@ -985,10 +1039,11 @@ def load_recommendation_keyword_library(conn: sqlite3.Connection) -> dict[str, o
                COUNT(DISTINCT irk.item_id) AS linked_item_count
         FROM recommendation_keywords rk
         LEFT JOIN item_recommendation_keywords irk ON irk.keyword_key = rk.key
+        WHERE rk.source NOT LIKE ?
         GROUP BY rk.key, rk.label, rk.type, rk.aliases_json, rk.active, rk.source, rk.created_at, rk.updated_at
         ORDER BY rk.active DESC, rk.type ASC, rk.label COLLATE NOCASE ASC
         """
-    ).fetchall()
+    , (f"{RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX}%",)).fetchall()
     keywords: list[dict[str, object]] = []
     all_keywords: list[dict[str, object]] = []
     for row in keyword_rows:
@@ -4561,38 +4616,144 @@ def api_recommendation_keywords():
     return jsonify({"ok": True, **library})
 
 
+@app.post("/api/recommendation-keywords")
+def api_recommendation_keyword_create():
+    body = request.get_json(silent=True) or {}
+    payload, error = parse_recommendation_keyword_body(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+
+    conn = db_conn()
+    try:
+        if recommendation_keyword_row_exists(conn, label=str(payload["label"])):
+            return jsonify({"ok": False, "error": "keyword_label_exists"}), 409
+        ts = now_ts()
+        keyword_key = create_recommendation_keyword_key(conn, str(payload["label"]))
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO recommendation_keywords(
+                  key, label, type, aliases_json, active, source, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'manual', ?, ?)
+                """,
+                (
+                    keyword_key,
+                    payload["label"],
+                    payload["type"],
+                    json.dumps(payload["aliases"], ensure_ascii=False),
+                    1 if payload["active"] else 0,
+                    ts,
+                    ts,
+                ),
+            )
+        library = load_recommendation_keyword_library(conn)
+        snapshot = recommendation_status_snapshot(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "key": keyword_key, "requeued": 0, **library, **snapshot})
+
+
 @app.patch("/api/recommendation-keywords/<keyword_key>")
 def api_recommendation_keyword_update(keyword_key: str):
     body = request.get_json(silent=True) or {}
-    active = body.get("active")
-    if not isinstance(active, bool):
-        return jsonify({"ok": False, "error": "invalid_active"}), 400
 
     conn = db_conn()
     try:
         existing = conn.execute(
-            "SELECT key, active FROM recommendation_keywords WHERE key=?",
-            (keyword_key,),
+            """
+            SELECT key, label, type, aliases_json, active, source
+            FROM recommendation_keywords
+            WHERE key=? AND source NOT LIKE ?
+            """,
+            (keyword_key, f"{RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX}%"),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "keyword_not_found"}), 404
+        merged_body = {
+            "label": body.get("label", existing["label"]),
+            "type": body.get("type", existing["type"]),
+            "aliases": body.get("aliases", parse_json_array(existing["aliases_json"])),
+            "active": body.get("active", bool(existing["active"])),
+        }
+        payload, error = parse_recommendation_keyword_body(merged_body)
+        if error:
+            return jsonify({"ok": False, "error": error}), 400
+        if recommendation_keyword_row_exists(conn, label=str(payload["label"]), exclude_key=keyword_key):
+            return jsonify({"ok": False, "error": "keyword_label_exists"}), 409
+
+        current_aliases = [str(alias).strip() for alias in parse_json_array(existing["aliases_json"]) if str(alias).strip()]
+        current_active = bool(existing["active"])
+        semantic_changed = (
+            str(existing["label"] or "").strip() != str(payload["label"])
+            or str(existing["type"] or "").strip() != str(payload["type"])
+            or current_aliases != list(payload["aliases"])
+        )
+
+        ts = now_ts()
+        requeued = 0
+        item_ids = collect_recommendation_keyword_item_ids(conn, keyword_key) if (semantic_changed or (current_active and not payload["active"])) else []
+        with conn:
+            conn.execute(
+                """
+                UPDATE recommendation_keywords
+                SET label=?, type=?, aliases_json=?, active=?, updated_at=?
+                WHERE key=?
+                """,
+                (
+                    payload["label"],
+                    payload["type"],
+                    json.dumps(payload["aliases"], ensure_ascii=False),
+                    1 if payload["active"] else 0,
+                    ts,
+                    keyword_key,
+                ),
+            )
+            if item_ids:
+                requeued = reset_recommendation_keyword_jobs_for_items(conn, item_ids)
+        library = load_recommendation_keyword_library(conn)
+        snapshot = recommendation_status_snapshot(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "requeued": requeued, **library, **snapshot})
+
+
+@app.delete("/api/recommendation-keywords/<keyword_key>")
+def api_recommendation_keyword_delete(keyword_key: str):
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            """
+            SELECT key, source
+            FROM recommendation_keywords
+            WHERE key=? AND source NOT LIKE ?
+            """,
+            (keyword_key, f"{RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX}%"),
         ).fetchone()
         if not existing:
             return jsonify({"ok": False, "error": "keyword_not_found"}), 404
 
+        item_ids = collect_recommendation_keyword_item_ids(conn, keyword_key)
         ts = now_ts()
-        requeued = 0
         with conn:
             conn.execute(
-                "UPDATE recommendation_keywords SET active=?, updated_at=? WHERE key=?",
-                (1 if active else 0, ts, keyword_key),
+                "UPDATE recommendation_keyword_candidates SET merged_keyword_key=NULL WHERE merged_keyword_key=?",
+                (keyword_key,),
             )
-            if not active:
-                item_rows = conn.execute(
-                    "SELECT item_id FROM item_recommendation_keywords WHERE keyword_key=?",
-                    (keyword_key,),
-                ).fetchall()
-                requeued = reset_recommendation_keyword_jobs_for_items(
-                    conn,
-                    [row["item_id"] for row in item_rows if row["item_id"]],
+            if str(existing["source"] or "") == "seed":
+                conn.execute(
+                    """
+                    UPDATE recommendation_keywords
+                    SET active=0, source=?, updated_at=?
+                    WHERE key=?
+                    """,
+                    (f"{RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX}seed", ts, keyword_key),
                 )
+            else:
+                conn.execute("DELETE FROM recommendation_keywords WHERE key=?", (keyword_key,))
+            requeued = reset_recommendation_keyword_jobs_for_items(conn, item_ids)
         library = load_recommendation_keyword_library(conn)
         snapshot = recommendation_status_snapshot(conn)
         conn.commit()
@@ -4645,8 +4806,13 @@ def api_recommendation_keyword_candidate_review(candidate_id: int):
                 )
             elif action == "accept_new":
                 duplicate = conn.execute(
-                    "SELECT key, aliases_json FROM recommendation_keywords WHERE label=? COLLATE NOCASE",
-                    (label,),
+                    """
+                    SELECT key, aliases_json
+                    FROM recommendation_keywords
+                    WHERE label=? COLLATE NOCASE
+                      AND source NOT LIKE ?
+                    """,
+                    (label, f"{RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX}%"),
                 ).fetchone()
                 if duplicate:
                     merged_keyword_key = duplicate["key"]
@@ -4700,8 +4866,12 @@ def api_recommendation_keyword_candidate_review(candidate_id: int):
                 requeued = reset_recommendation_keyword_jobs_for_items(conn, sample_item_ids)
             else:
                 target = conn.execute(
-                    "SELECT key, label, aliases_json FROM recommendation_keywords WHERE key=?",
-                    (target_keyword_key,),
+                    """
+                    SELECT key, label, aliases_json
+                    FROM recommendation_keywords
+                    WHERE key=? AND source NOT LIKE ?
+                    """,
+                    (target_keyword_key, f"{RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX}%"),
                 ).fetchone()
                 if not target:
                     return jsonify({"ok": False, "error": "target_keyword_not_found"}), 404

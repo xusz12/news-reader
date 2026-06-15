@@ -266,15 +266,18 @@ body.search-bar-open .topbar-search {
 
 .settings-panel {
   position: relative;
-  width: min(1120px, calc(100vw - 28px));
-  max-height: calc(100vh - 28px);
-  margin: 14px auto;
+  width: calc(100vw - 16px);
+  height: calc(100vh - 16px);
+  max-height: calc(100vh - 16px);
+  margin: 8px auto;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 18px;
   padding: 18px;
   overflow: auto;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+  display: flex;
+  flex-direction: column;
 }
 
 .settings-header {
@@ -303,6 +306,8 @@ body.search-bar-open .topbar-search {
   grid-template-columns: 96px minmax(0, 1fr);
   gap: 14px;
   margin-top: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .settings-nav {
@@ -348,6 +353,8 @@ body.search-bar-open .topbar-search {
 
 .settings-content {
   min-width: 0;
+  min-height: 0;
+  display: grid;
 }
 
 .settings-section-panel.hidden {
@@ -359,6 +366,11 @@ body.search-bar-open .topbar-search {
   border-radius: 14px;
   background: color-mix(in srgb, var(--panel) 92%, var(--bg));
   padding: 14px;
+}
+
+.settings-section-panel {
+  min-height: 100%;
+  align-content: start;
 }
 
 .settings-card-title {
@@ -468,6 +480,84 @@ body.search-bar-open .topbar-search {
   gap: 14px;
 }
 
+.settings-keyword-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.settings-keyword-search {
+  min-width: min(420px, 100%);
+  flex: 1 1 320px;
+}
+
+.settings-keyword-search-btn,
+.settings-keyword-search-clear,
+.settings-keyword-create-btn {
+  flex: 0 0 auto;
+}
+
+.settings-keyword-editor {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--panel);
+  display: grid;
+  gap: 12px;
+}
+
+.settings-keyword-editor-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-keyword-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-keyword-editor-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-keyword-alias-input {
+  min-height: 84px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 8px 10px;
+  resize: vertical;
+  font: inherit;
+}
+
+.settings-keyword-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings-keyword-group-list {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-keyword-group {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-keyword-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
 .settings-keyword-tabs {
   display: flex;
   gap: 8px;
@@ -499,6 +589,7 @@ body.search-bar-open .topbar-search {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
+  align-items: stretch;
 }
 
 .settings-keyword-candidate-list {
@@ -511,13 +602,14 @@ body.search-bar-open .topbar-search {
   border-radius: 10px;
   padding: 10px;
   background: color-mix(in srgb, var(--panel) 92%, var(--bg));
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  height: 100%;
 }
 
 .settings-keyword-item.compact {
   min-height: 100%;
-  align-content: start;
 }
 
 .settings-keyword-top {
@@ -545,6 +637,31 @@ body.search-bar-open .topbar-search {
   gap: 8px;
   flex-wrap: wrap;
   margin-top: auto;
+  align-items: flex-end;
+}
+
+.settings-btn-neutral {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #1d4ed8;
+}
+
+.settings-btn-success {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #15803d;
+}
+
+.settings-btn-warn {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #b45309;
+}
+
+.settings-btn-danger {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #b91c1c;
 }
 
 .settings-keyword-merge-row {
@@ -2245,6 +2362,7 @@ html[data-detail-font="large"] {
 
   .settings-panel {
     width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
     max-height: calc(100vh - 16px);
     margin: 8px auto;
     padding: 14px;
@@ -2271,6 +2389,10 @@ html[data-detail-font="large"] {
 
   .settings-nav-btn {
     min-width: 88px;
+  }
+
+  .settings-keyword-editor-grid {
+    grid-template-columns: 1fr;
   }
 
   .topbar-brand {
