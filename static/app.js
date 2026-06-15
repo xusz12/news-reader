@@ -39,6 +39,10 @@ let state = {
   settingsSaving: false,
   settingsSecretBusyProvider: "",
   settingsSecretEditorProvider: "",
+  settingsSecretDrafts: {},
+  settingsDraft: null,
+  settingsSection: "services",
+  settingsKeywordTab: "active",
   runtimeSettings: null,
   releaseNotes: [],
   recommendationKeywordLibrary: null,
@@ -152,6 +156,14 @@ const settingsBackdrop = document.getElementById("settingsBackdrop");
 const settingsCloseBtn = document.getElementById("settingsCloseBtn");
 const settingsStatus = document.getElementById("settingsStatus");
 const settingsApiStatus = document.getElementById("settingsApiStatus");
+const settingsNavServices = document.getElementById("settingsNavServices");
+const settingsNavModels = document.getElementById("settingsNavModels");
+const settingsNavKeywords = document.getElementById("settingsNavKeywords");
+const settingsNavRelease = document.getElementById("settingsNavRelease");
+const settingsSectionServices = document.getElementById("settingsSectionServices");
+const settingsSectionModels = document.getElementById("settingsSectionModels");
+const settingsSectionKeywords = document.getElementById("settingsSectionKeywords");
+const settingsSectionRelease = document.getElementById("settingsSectionRelease");
 const settingsTranslationProvider = document.getElementById("settingsTranslationProvider");
 const settingsTranslationModelSelect = document.getElementById("settingsTranslationModelSelect");
 const settingsTranslationModelCustom = document.getElementById("settingsTranslationModelCustom");
@@ -160,6 +172,9 @@ const settingsCodexChatModelSelect = document.getElementById("settingsCodexChatM
 const settingsCodexChatModelCustom = document.getElementById("settingsCodexChatModelCustom");
 const settingsCodexChatModelCurrent = document.getElementById("settingsCodexChatModelCurrent");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
+const settingsKeywordTabActive = document.getElementById("settingsKeywordTabActive");
+const settingsKeywordTabDisabled = document.getElementById("settingsKeywordTabDisabled");
+const settingsKeywordTabCandidate = document.getElementById("settingsKeywordTabCandidate");
 const settingsKeywordLibrary = document.getElementById("settingsKeywordLibrary");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
@@ -638,6 +653,43 @@ async function deleteApiSecret(provider) {
   return data;
 }
 
+function buildSettingsDraftFromRuntime() {
+  const llm = state.runtimeSettings?.llm || {};
+  return {
+    translationProvider: llm.translation?.provider || "deepseek",
+    translationModel: llm.translation?.model || "",
+    codexChatModel: llm.codex_chat?.model || "",
+  };
+}
+
+function ensureSettingsDraft() {
+  if (!state.settingsDraft) {
+    state.settingsDraft = buildSettingsDraftFromRuntime();
+  }
+  return state.settingsDraft;
+}
+
+function captureSettingsDraftFromDom() {
+  if (!state.settingsOpen) return;
+  const draft = ensureSettingsDraft();
+  if (settingsTranslationProvider) {
+    draft.translationProvider = settingsTranslationProvider.value || draft.translationProvider || "deepseek";
+  }
+  if (settingsTranslationModelSelect) {
+    draft.translationModel = readModelSetting(settingsTranslationModelSelect, settingsTranslationModelCustom) || "";
+  }
+  if (settingsCodexChatModelSelect) {
+    draft.codexChatModel = readModelSetting(settingsCodexChatModelSelect, settingsCodexChatModelCustom) || "";
+  }
+  if (settingsApiStatus) {
+    settingsApiStatus.querySelectorAll("[data-secret-provider]").forEach((input) => {
+      const provider = input.getAttribute("data-secret-provider") || "";
+      if (!provider) return;
+      state.settingsSecretDrafts[provider] = input.value || "";
+    });
+  }
+}
+
 function renderSettingsApiStatus() {
   if (!settingsApiStatus) return;
   settingsApiStatus.innerHTML = "";
@@ -707,7 +759,12 @@ function renderSettingsApiStatus() {
         input.type = "password";
         input.autocomplete = "off";
         input.placeholder = configured ? "输入新 key 后保存" : "粘贴 API key";
+        input.setAttribute("data-secret-provider", key);
+        input.value = state.settingsSecretDrafts[key] || "";
         input.disabled = state.settingsSaving || state.settingsSecretBusyProvider === key;
+        input.addEventListener("input", () => {
+          state.settingsSecretDrafts[key] = input.value || "";
+        });
         row.appendChild(input);
 
         const saveBtn = document.createElement("button");
@@ -730,6 +787,7 @@ function renderSettingsApiStatus() {
           try {
             state.runtimeSettings = await saveApiSecret(key, draft);
             state.settingsSecretEditorProvider = "";
+            state.settingsSecretDrafts[key] = "";
             state.settingsMessage = "已保存，重启 Flask 后生效。";
             state.settingsMessageTone = "ready";
           } catch (error) {
@@ -784,6 +842,7 @@ function renderSettingsApiStatus() {
         renderSettingsOverlay();
         try {
           state.runtimeSettings = await deleteApiSecret(key);
+          state.settingsSecretDrafts[key] = "";
           state.settingsMessage = "已删除，重启 Flask 后生效。";
           state.settingsMessageTone = "ready";
         } catch (error) {
@@ -862,10 +921,65 @@ function recommendationKeywordOptions(includeInactive = true) {
   return options.filter((item) => includeInactive || item.active);
 }
 
+function recommendationKeywordTabCounts() {
+  const library = state.recommendationKeywordLibrary || {};
+  return {
+    active: Array.isArray(library.active_keywords) ? library.active_keywords.length : 0,
+    disabled: Array.isArray(library.disabled_keywords) ? library.disabled_keywords.length : 0,
+    candidate: Array.isArray(library.candidate_keywords) ? library.candidate_keywords.length : 0,
+  };
+}
+
+function renderSettingsNav() {
+  const navButtons = [
+    [settingsNavServices, "services"],
+    [settingsNavModels, "models"],
+    [settingsNavKeywords, "keywords"],
+    [settingsNavRelease, "release"],
+  ];
+  navButtons.forEach(([button, section]) => {
+    if (!button) return;
+    const active = state.settingsSection === section;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-current", active ? "page" : "false");
+  });
+}
+
+function renderSettingsSections() {
+  const sections = [
+    [settingsSectionServices, "services"],
+    [settingsSectionModels, "models"],
+    [settingsSectionKeywords, "keywords"],
+    [settingsSectionRelease, "release"],
+  ];
+  sections.forEach(([sectionEl, section]) => {
+    if (!sectionEl) return;
+    sectionEl.classList.toggle("hidden", state.settingsSection !== section);
+  });
+}
+
+function renderRecommendationKeywordTabs() {
+  const counts = recommendationKeywordTabCounts();
+  const configs = [
+    [settingsKeywordTabActive, "active", "启用中", counts.active],
+    [settingsKeywordTabDisabled, "disabled", "已禁用", counts.disabled],
+    [settingsKeywordTabCandidate, "candidate", "待审核", counts.candidate],
+  ];
+  configs.forEach(([button, key, label, count]) => {
+    if (!button) return;
+    const active = state.settingsKeywordTab === key;
+    button.classList.toggle("active", active);
+    button.classList.toggle("alert", key === "candidate" && count > 0);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.textContent = `${label} ${count}`;
+  });
+}
+
 function renderRecommendationKeywordLibrary() {
   if (!settingsKeywordLibrary) return;
   settingsKeywordLibrary.innerHTML = "";
   const library = state.recommendationKeywordLibrary;
+  renderRecommendationKeywordTabs();
   if (!library) {
     const empty = document.createElement("div");
     empty.className = "detail-status muted";
@@ -874,215 +988,218 @@ function renderRecommendationKeywordLibrary() {
     return;
   }
 
-  const sections = [
-    ["active_keywords", "启用中", "active"],
-    ["disabled_keywords", "已禁用", "disabled"],
-    ["candidate_keywords", "待审核 candidate", "candidate"],
-  ];
   const mergeOptions = recommendationKeywordOptions(true);
+  const tabConfig = {
+    active: {
+      rows: Array.isArray(library.active_keywords) ? library.active_keywords : [],
+      emptyText: "当前没有启用中的关键词。",
+    },
+    disabled: {
+      rows: Array.isArray(library.disabled_keywords) ? library.disabled_keywords : [],
+      emptyText: "当前没有已禁用关键词。",
+    },
+    candidate: {
+      rows: Array.isArray(library.candidate_keywords) ? library.candidate_keywords : [],
+      emptyText: "当前没有待审核 candidate。",
+    },
+  };
+  const kind = state.settingsKeywordTab || "active";
+  const rows = tabConfig[kind]?.rows || [];
 
-  sections.forEach(([key, title, kind]) => {
-    const rows = Array.isArray(library[key]) ? library[key] : [];
-    const section = document.createElement("section");
-    section.className = "settings-keyword-section";
-    const header = document.createElement("div");
-    header.className = "settings-keyword-section-header";
-    header.innerHTML = `<strong>${title}</strong><span>${rows.length}</span>`;
-    section.appendChild(header);
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "detail-status muted";
+    empty.textContent = tabConfig[kind]?.emptyText || "当前为空。";
+    settingsKeywordLibrary.appendChild(empty);
+    return;
+  }
 
-    if (!rows.length) {
-      const empty = document.createElement("div");
-      empty.className = "detail-status muted";
-      empty.textContent = kind === "candidate" ? "当前没有待审核 candidate。" : "当前为空。";
-      section.appendChild(empty);
-      settingsKeywordLibrary.appendChild(section);
-      return;
+  const wrapper = document.createElement("div");
+  wrapper.className = kind === "candidate" ? "settings-keyword-candidate-list" : "settings-keyword-grid";
+
+  rows.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = `settings-keyword-item ${kind === "candidate" ? "candidate" : "compact"}`;
+    const top = document.createElement("div");
+    top.className = "settings-keyword-top";
+    const titleWrap = document.createElement("div");
+    const label = document.createElement("div");
+    label.className = "settings-keyword-label";
+    label.textContent = item.label || item.key || item.id;
+    const meta = document.createElement("div");
+    meta.className = "settings-keyword-meta";
+    if (kind === "candidate") {
+      meta.textContent = `${item.type || "domain"} · ${item.occurrence_count || 0} 次`;
+    } else {
+      meta.textContent = `${item.type || "domain"} · ${item.linked_item_count || 0} 条新闻`;
+    }
+    titleWrap.appendChild(label);
+    titleWrap.appendChild(meta);
+    top.appendChild(titleWrap);
+    card.appendChild(top);
+
+    const aliasList = Array.isArray(item.aliases) ? item.aliases : [];
+    if (aliasList.length) {
+      const aliases = document.createElement("div");
+      aliases.className = "settings-keyword-aliases";
+      aliases.textContent = `别名：${aliasList.join(" / ")}`;
+      card.appendChild(aliases);
     }
 
-    rows.forEach((item) => {
-      const card = document.createElement("article");
-      card.className = "settings-keyword-item";
-      const top = document.createElement("div");
-      top.className = "settings-keyword-top";
-      const titleWrap = document.createElement("div");
-      const label = document.createElement("div");
-      label.className = "settings-keyword-label";
-      label.textContent = item.label || item.key || item.id;
-      const meta = document.createElement("div");
-      meta.className = "settings-keyword-meta";
-      if (kind === "candidate") {
-        meta.textContent = `${item.type || "domain"} · ${item.occurrence_count || 0} 次`;
-      } else {
-        meta.textContent = `${item.type || "domain"} · ${item.linked_item_count || 0} 条新闻`;
+    if (kind === "candidate") {
+      if (item.reason) {
+        const reason = document.createElement("div");
+        reason.className = "settings-keyword-meta";
+        reason.textContent = `原因：${item.reason}`;
+        card.appendChild(reason);
       }
-      titleWrap.appendChild(label);
-      titleWrap.appendChild(meta);
-      top.appendChild(titleWrap);
-      card.appendChild(top);
-
-      const aliasList = Array.isArray(item.aliases) ? item.aliases : [];
-      if (aliasList.length) {
-        const aliases = document.createElement("div");
-        aliases.className = "settings-keyword-aliases";
-        aliases.textContent = `别名：${aliasList.join(" / ")}`;
-        card.appendChild(aliases);
+      const sampleItems = Array.isArray(item.sample_items) ? item.sample_items : [];
+      if (sampleItems.length) {
+        const samples = document.createElement("div");
+        samples.className = "settings-keyword-samples";
+        sampleItems.forEach((sample) => {
+          const line = document.createElement("div");
+          line.className = "settings-keyword-sample";
+          line.textContent = sample.title || sample.id;
+          samples.appendChild(line);
+        });
+        card.appendChild(samples);
       }
+    }
 
-      if (kind === "candidate") {
-        if (item.reason) {
-          const reason = document.createElement("div");
-          reason.className = "settings-keyword-meta";
-          reason.textContent = `原因：${item.reason}`;
-          card.appendChild(reason);
+    const actions = document.createElement("div");
+    actions.className = "settings-keyword-actions";
+    const busy = state.recommendationKeywordBusyKey === item.key || String(state.recommendationKeywordBusyCandidateId) === String(item.id);
+
+    if (kind === "candidate") {
+      const acceptBtn = document.createElement("button");
+      acceptBtn.className = "detail-retry-btn";
+      acceptBtn.type = "button";
+      acceptBtn.textContent = "接受为新关键词";
+      acceptBtn.disabled = busy || state.settingsSaving;
+      acceptBtn.addEventListener("click", async () => {
+        state.recommendationKeywordBusyCandidateId = String(item.id);
+        state.settingsMessage = "接受 candidate 中...";
+        state.settingsMessageTone = "pending";
+        renderSettingsOverlay();
+        try {
+          state.recommendationKeywordLibrary = await reviewRecommendationKeywordCandidate(item.id, { action: "accept_new" });
+          state.settingsMessage = "已接受 candidate，并已回灌相关样本重新抽取。";
+          state.settingsMessageTone = "ready";
+        } catch {
+          state.settingsMessage = "接受 candidate 失败，请稍后重试。";
+          state.settingsMessageTone = "failed";
+        } finally {
+          state.recommendationKeywordBusyCandidateId = "";
+          renderSettingsOverlay();
         }
-        const sampleItems = Array.isArray(item.sample_items) ? item.sample_items : [];
-        if (sampleItems.length) {
-          const samples = document.createElement("div");
-          samples.className = "settings-keyword-samples";
-          sampleItems.forEach((sample) => {
-            const line = document.createElement("div");
-            line.className = "settings-keyword-sample";
-            line.textContent = sample.title || sample.id;
-            samples.appendChild(line);
+      });
+      actions.appendChild(acceptBtn);
+
+      const rejectBtn = document.createElement("button");
+      rejectBtn.className = "detail-retry-btn";
+      rejectBtn.type = "button";
+      rejectBtn.textContent = "拒绝";
+      rejectBtn.disabled = busy || state.settingsSaving;
+      rejectBtn.addEventListener("click", async () => {
+        state.recommendationKeywordBusyCandidateId = String(item.id);
+        state.settingsMessage = "拒绝 candidate 中...";
+        state.settingsMessageTone = "pending";
+        renderSettingsOverlay();
+        try {
+          state.recommendationKeywordLibrary = await reviewRecommendationKeywordCandidate(item.id, { action: "reject" });
+          state.settingsMessage = "已拒绝 candidate。";
+          state.settingsMessageTone = "ready";
+        } catch {
+          state.settingsMessage = "拒绝 candidate 失败，请稍后重试。";
+          state.settingsMessageTone = "failed";
+        } finally {
+          state.recommendationKeywordBusyCandidateId = "";
+          renderSettingsOverlay();
+        }
+      });
+      actions.appendChild(rejectBtn);
+
+      const mergeRow = document.createElement("div");
+      mergeRow.className = "settings-keyword-merge-row";
+      const mergeSelect = document.createElement("select");
+      mergeSelect.className = "pref-select";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "合并到已有关键词...";
+      mergeSelect.appendChild(placeholder);
+      mergeOptions.forEach((option) => {
+        const entry = document.createElement("option");
+        entry.value = option.key;
+        entry.textContent = `${option.label} · ${option.type}`;
+        mergeSelect.appendChild(entry);
+      });
+      const mergeBtn = document.createElement("button");
+      mergeBtn.className = "detail-retry-btn";
+      mergeBtn.type = "button";
+      mergeBtn.textContent = "合并";
+      mergeBtn.disabled = busy || state.settingsSaving;
+      mergeBtn.addEventListener("click", async () => {
+        if (!mergeSelect.value) {
+          state.settingsMessage = "请先选择一个已有关键词作为合并目标。";
+          state.settingsMessageTone = "failed";
+          renderSettingsOverlay();
+          return;
+        }
+        state.recommendationKeywordBusyCandidateId = String(item.id);
+        state.settingsMessage = "合并 candidate 中...";
+        state.settingsMessageTone = "pending";
+        renderSettingsOverlay();
+        try {
+          state.recommendationKeywordLibrary = await reviewRecommendationKeywordCandidate(item.id, {
+            action: "merge",
+            target_keyword_key: mergeSelect.value,
           });
-          card.appendChild(samples);
+          state.settingsMessage = "已合并 candidate，并已回灌相关样本重新抽取。";
+          state.settingsMessageTone = "ready";
+        } catch {
+          state.settingsMessage = "合并 candidate 失败，请稍后重试。";
+          state.settingsMessageTone = "failed";
+        } finally {
+          state.recommendationKeywordBusyCandidateId = "";
+          renderSettingsOverlay();
         }
-      }
-
-      const actions = document.createElement("div");
-      actions.className = "settings-keyword-actions";
-      const busy = state.recommendationKeywordBusyKey === item.key || String(state.recommendationKeywordBusyCandidateId) === String(item.id);
-
-      if (kind === "candidate") {
-        const acceptBtn = document.createElement("button");
-        acceptBtn.className = "detail-retry-btn";
-        acceptBtn.type = "button";
-        acceptBtn.textContent = "接受为新关键词";
-        acceptBtn.disabled = busy || state.settingsSaving;
-        acceptBtn.addEventListener("click", async () => {
-          state.recommendationKeywordBusyCandidateId = String(item.id);
-          state.settingsMessage = "接受 candidate 中...";
-          state.settingsMessageTone = "pending";
+      });
+      mergeRow.appendChild(mergeSelect);
+      mergeRow.appendChild(mergeBtn);
+      card.appendChild(mergeRow);
+    } else {
+      const toggleBtn = document.createElement("button");
+      toggleBtn.className = "detail-retry-btn";
+      toggleBtn.type = "button";
+      toggleBtn.textContent = kind === "active" ? "禁用" : "启用";
+      toggleBtn.disabled = busy || state.settingsSaving;
+      toggleBtn.addEventListener("click", async () => {
+        state.recommendationKeywordBusyKey = item.key;
+        state.settingsMessage = kind === "active" ? "禁用关键词中..." : "启用关键词中...";
+        state.settingsMessageTone = "pending";
+        renderSettingsOverlay();
+        try {
+          state.recommendationKeywordLibrary = await updateRecommendationKeyword(item.key, { active: kind !== "active" });
+          state.settingsMessage = kind === "active"
+            ? "已禁用关键词，并已回灌相关样本重新抽取。"
+            : "已启用关键词。";
+          state.settingsMessageTone = "ready";
+        } catch {
+          state.settingsMessage = "更新关键词状态失败，请稍后重试。";
+          state.settingsMessageTone = "failed";
+        } finally {
+          state.recommendationKeywordBusyKey = "";
           renderSettingsOverlay();
-          try {
-            state.recommendationKeywordLibrary = await reviewRecommendationKeywordCandidate(item.id, { action: "accept_new" });
-            state.settingsMessage = "已接受 candidate，并已回灌相关样本重新抽取。";
-            state.settingsMessageTone = "ready";
-          } catch {
-            state.settingsMessage = "接受 candidate 失败，请稍后重试。";
-            state.settingsMessageTone = "failed";
-          } finally {
-            state.recommendationKeywordBusyCandidateId = "";
-            renderSettingsOverlay();
-          }
-        });
-        actions.appendChild(acceptBtn);
+        }
+      });
+      actions.appendChild(toggleBtn);
+    }
 
-        const rejectBtn = document.createElement("button");
-        rejectBtn.className = "detail-retry-btn";
-        rejectBtn.type = "button";
-        rejectBtn.textContent = "拒绝";
-        rejectBtn.disabled = busy || state.settingsSaving;
-        rejectBtn.addEventListener("click", async () => {
-          state.recommendationKeywordBusyCandidateId = String(item.id);
-          state.settingsMessage = "拒绝 candidate 中...";
-          state.settingsMessageTone = "pending";
-          renderSettingsOverlay();
-          try {
-            state.recommendationKeywordLibrary = await reviewRecommendationKeywordCandidate(item.id, { action: "reject" });
-            state.settingsMessage = "已拒绝 candidate。";
-            state.settingsMessageTone = "ready";
-          } catch {
-            state.settingsMessage = "拒绝 candidate 失败，请稍后重试。";
-            state.settingsMessageTone = "failed";
-          } finally {
-            state.recommendationKeywordBusyCandidateId = "";
-            renderSettingsOverlay();
-          }
-        });
-        actions.appendChild(rejectBtn);
-
-        const mergeRow = document.createElement("div");
-        mergeRow.className = "settings-keyword-merge-row";
-        const mergeSelect = document.createElement("select");
-        mergeSelect.className = "pref-select";
-        const placeholder = document.createElement("option");
-        placeholder.value = "";
-        placeholder.textContent = "合并到已有关键词...";
-        mergeSelect.appendChild(placeholder);
-        mergeOptions.forEach((option) => {
-          const entry = document.createElement("option");
-          entry.value = option.key;
-          entry.textContent = `${option.label} · ${option.type}`;
-          mergeSelect.appendChild(entry);
-        });
-        const mergeBtn = document.createElement("button");
-        mergeBtn.className = "detail-retry-btn";
-        mergeBtn.type = "button";
-        mergeBtn.textContent = "合并";
-        mergeBtn.disabled = busy || state.settingsSaving;
-        mergeBtn.addEventListener("click", async () => {
-          if (!mergeSelect.value) {
-            state.settingsMessage = "请先选择一个已有关键词作为合并目标。";
-            state.settingsMessageTone = "failed";
-            renderSettingsOverlay();
-            return;
-          }
-          state.recommendationKeywordBusyCandidateId = String(item.id);
-          state.settingsMessage = "合并 candidate 中...";
-          state.settingsMessageTone = "pending";
-          renderSettingsOverlay();
-          try {
-            state.recommendationKeywordLibrary = await reviewRecommendationKeywordCandidate(item.id, {
-              action: "merge",
-              target_keyword_key: mergeSelect.value,
-            });
-            state.settingsMessage = "已合并 candidate，并已回灌相关样本重新抽取。";
-            state.settingsMessageTone = "ready";
-          } catch {
-            state.settingsMessage = "合并 candidate 失败，请稍后重试。";
-            state.settingsMessageTone = "failed";
-          } finally {
-            state.recommendationKeywordBusyCandidateId = "";
-            renderSettingsOverlay();
-          }
-        });
-        mergeRow.appendChild(mergeSelect);
-        mergeRow.appendChild(mergeBtn);
-        card.appendChild(mergeRow);
-      } else {
-        const toggleBtn = document.createElement("button");
-        toggleBtn.className = "detail-retry-btn";
-        toggleBtn.type = "button";
-        toggleBtn.textContent = kind === "active" ? "禁用" : "启用";
-        toggleBtn.disabled = busy || state.settingsSaving;
-        toggleBtn.addEventListener("click", async () => {
-          state.recommendationKeywordBusyKey = item.key;
-          state.settingsMessage = kind === "active" ? "禁用关键词中..." : "启用关键词中...";
-          state.settingsMessageTone = "pending";
-          renderSettingsOverlay();
-          try {
-            state.recommendationKeywordLibrary = await updateRecommendationKeyword(item.key, { active: kind !== "active" });
-            state.settingsMessage = kind === "active"
-              ? "已禁用关键词，并已回灌相关样本重新抽取。"
-              : "已启用关键词。";
-            state.settingsMessageTone = "ready";
-          } catch {
-            state.settingsMessage = "更新关键词状态失败，请稍后重试。";
-            state.settingsMessageTone = "failed";
-          } finally {
-            state.recommendationKeywordBusyKey = "";
-            renderSettingsOverlay();
-          }
-        });
-        actions.appendChild(toggleBtn);
-      }
-
-      card.appendChild(actions);
-      section.appendChild(card);
-    });
-    settingsKeywordLibrary.appendChild(section);
+    card.appendChild(actions);
+    wrapper.appendChild(card);
   });
+  settingsKeywordLibrary.appendChild(wrapper);
 }
 
 function populateModelSelect(select, customInput, catalog, currentValue) {
@@ -1157,18 +1274,19 @@ function readModelSetting(select, customInput) {
 function populateSettingsForm() {
   const llm = state.runtimeSettings?.llm;
   if (!llm) return;
-  settingsTranslationProvider.value = llm.translation?.provider || "deepseek";
+  const draft = ensureSettingsDraft();
+  settingsTranslationProvider.value = draft.translationProvider || "deepseek";
   populateModelSelect(
     settingsTranslationModelSelect,
     settingsTranslationModelCustom,
     state.runtimeSettings?.model_catalogs?.translation,
-    llm.translation?.model || "",
+    draft.translationModel || "",
   );
   populateModelSelect(
     settingsCodexChatModelSelect,
     settingsCodexChatModelCustom,
     state.runtimeSettings?.model_catalogs?.codex_chat,
-    llm.codex_chat?.model || "",
+    draft.codexChatModel || "",
   );
   if (settingsTranslationModelCurrent) {
     const currentTranslationModel = (llm.translation?.model || "").trim();
@@ -1191,9 +1309,12 @@ function populateSettingsForm() {
 
 function renderSettingsOverlay() {
   if (!settingsOverlay) return;
+  captureSettingsDraftFromDom();
   settingsOverlay.classList.toggle("hidden", !state.settingsOpen);
   settingsOverlay.setAttribute("aria-hidden", state.settingsOpen ? "false" : "true");
   if (!state.settingsOpen) return;
+  renderSettingsNav();
+  renderSettingsSections();
   renderSettingsApiStatus();
   renderRecommendationKeywordLibrary();
   renderReleaseNotes();
@@ -1225,6 +1346,10 @@ async function openSettingsOverlay() {
     state.runtimeSettings = runtimeSettings;
     state.releaseNotes = releaseNotes;
     state.recommendationKeywordLibrary = recommendationKeywordLibrary;
+    state.settingsDraft = buildSettingsDraftFromRuntime();
+    state.settingsSecretDrafts = {};
+    const counts = recommendationKeywordTabCounts();
+    state.settingsKeywordTab = counts.candidate > 0 ? "candidate" : "active";
   } catch {
     state.settingsMessage = "读取设置失败，请稍后重试。";
     state.settingsMessageTone = "failed";
@@ -1237,13 +1362,17 @@ async function openSettingsOverlay() {
 function closeSettingsOverlay() {
   state.settingsOpen = false;
   state.settingsSecretEditorProvider = "";
+  state.settingsSecretDrafts = {};
+  state.settingsDraft = null;
   renderSettingsOverlay();
 }
 
 async function saveRuntimeSettings() {
-  const draftTranslationProvider = settingsTranslationProvider.value || "deepseek";
-  const draftTranslationModel = readModelSetting(settingsTranslationModelSelect, settingsTranslationModelCustom);
-  const draftCodexChatModel = readModelSetting(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
+  captureSettingsDraftFromDom();
+  const draft = ensureSettingsDraft();
+  const draftTranslationProvider = draft.translationProvider || "deepseek";
+  const draftTranslationModel = draft.translationModel || "";
+  const draftCodexChatModel = draft.codexChatModel || "";
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
@@ -1267,6 +1396,7 @@ async function saveRuntimeSettings() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
     state.runtimeSettings = data;
+    state.settingsDraft = buildSettingsDraftFromRuntime();
     const currentCodexModel = data.llm?.codex_chat?.model || "";
     if (currentCodexModel !== previousCodexModel) {
       state.detailChatSessionId = "";
@@ -4195,15 +4325,60 @@ if (settingsSaveBtn) {
   });
 }
 
+[
+  [settingsNavServices, "services"],
+  [settingsNavModels, "models"],
+  [settingsNavKeywords, "keywords"],
+  [settingsNavRelease, "release"],
+].forEach(([button, section]) => {
+  if (!button) return;
+  button.addEventListener("click", () => {
+    state.settingsSection = section;
+    renderSettingsOverlay();
+  });
+});
+
+[
+  [settingsKeywordTabActive, "active"],
+  [settingsKeywordTabDisabled, "disabled"],
+  [settingsKeywordTabCandidate, "candidate"],
+].forEach(([button, tab]) => {
+  if (!button) return;
+  button.addEventListener("click", () => {
+    state.settingsKeywordTab = tab;
+    renderSettingsOverlay();
+  });
+});
+
 if (settingsTranslationModelSelect) {
   settingsTranslationModelSelect.addEventListener("change", () => {
     syncModelCustomVisibility(settingsTranslationModelSelect, settingsTranslationModelCustom);
+    captureSettingsDraftFromDom();
   });
 }
 
 if (settingsCodexChatModelSelect) {
   settingsCodexChatModelSelect.addEventListener("change", () => {
     syncModelCustomVisibility(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
+    captureSettingsDraftFromDom();
+  });
+}
+
+if (settingsTranslationProvider) {
+  settingsTranslationProvider.addEventListener("change", () => {
+    captureSettingsDraftFromDom();
+  });
+}
+
+if (settingsTranslationModelCustom) {
+  settingsTranslationModelCustom.addEventListener("input", () => {
+    captureSettingsDraftFromDom();
+  });
+}
+
+if (settingsCodexChatModelCustom) {
+  settingsCodexChatModelCustom.addEventListener("input", () => {
+    captureSettingsDraftFromDom();
   });
 }
 
