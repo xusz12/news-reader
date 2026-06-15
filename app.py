@@ -24,6 +24,7 @@ from llm_client import (
     generate_article_ai,
     generate_recommendation_categories,
     generate_recommendation_classification,
+    generate_recommendation_keywords,
     resolve_translation_default_model,
 )
 from parser import parse_daily_errors
@@ -61,6 +62,65 @@ SOURCE_LABELS = {
     "techcrunch": "TechCrunch",
     "ars": "Ars Technica",
     "x": "X",
+}
+
+DEFAULT_RECOMMENDATION_KEYWORD_SEEDS = [
+    {"key": "ai", "label": "AI", "type": "domain", "aliases": ["人工智能"]},
+    {"key": "chip", "label": "芯片", "type": "domain", "aliases": ["半导体"]},
+    {"key": "memory", "label": "存储", "type": "domain", "aliases": ["内存"]},
+    {"key": "consumer_electronics", "label": "消费电子", "type": "domain", "aliases": ["智能手机", "电子消费"]},
+    {"key": "supply_chain", "label": "供应链", "type": "domain", "aliases": []},
+    {"key": "cloud", "label": "云计算", "type": "domain", "aliases": ["数据中心"]},
+    {"key": "robotics", "label": "机器人", "type": "domain", "aliases": []},
+    {"key": "biotech", "label": "生物科技", "type": "domain", "aliases": ["医药"]},
+    {"key": "energy", "label": "能源", "type": "domain", "aliases": []},
+    {"key": "crypto", "label": "加密货币", "type": "domain", "aliases": []},
+    {"key": "banking", "label": "银行业", "type": "domain", "aliases": ["银行"]},
+    {"key": "gold", "label": "黄金", "type": "domain", "aliases": []},
+    {"key": "sports", "label": "体育赛事", "type": "domain", "aliases": ["体育"]},
+    {"key": "ipo", "label": "IPO", "type": "event", "aliases": ["上市"]},
+    {"key": "funding", "label": "融资", "type": "event", "aliases": []},
+    {"key": "earnings", "label": "财报", "type": "event", "aliases": []},
+    {"key": "lawsuit", "label": "诉讼", "type": "event", "aliases": []},
+    {"key": "merger", "label": "并购", "type": "event", "aliases": []},
+    {"key": "agreement", "label": "协议", "type": "event", "aliases": ["备忘录"]},
+    {"key": "intelligence", "label": "情报", "type": "event", "aliases": []},
+    {"key": "pandemic", "label": "疫情", "type": "event", "aliases": ["公共卫生"]},
+    {"key": "armed_conflict", "label": "武装冲突", "type": "event", "aliases": ["军事冲突", "战争"]},
+    {"key": "aviation_accident", "label": "航空事故", "type": "event", "aliases": ["坠机"]},
+    {"key": "talent_flow", "label": "人才流动", "type": "event", "aliases": ["跳槽"]},
+    {"key": "united_states", "label": "美国", "type": "region", "aliases": ["US", "USA"]},
+    {"key": "china", "label": "中国", "type": "region", "aliases": []},
+    {"key": "taiwan", "label": "台湾", "type": "region", "aliases": []},
+    {"key": "hong_kong", "label": "香港", "type": "region", "aliases": []},
+    {"key": "singapore", "label": "新加坡", "type": "region", "aliases": []},
+    {"key": "europe", "label": "欧洲", "type": "region", "aliases": ["欧盟"]},
+    {"key": "middle_east", "label": "中东", "type": "region", "aliases": []},
+    {"key": "iran", "label": "伊朗", "type": "region", "aliases": []},
+    {"key": "pakistan", "label": "巴基斯坦", "type": "region", "aliases": []},
+    {"key": "openai", "label": "OpenAI", "type": "entity", "aliases": []},
+    {"key": "anthropic", "label": "Anthropic", "type": "entity", "aliases": []},
+    {"key": "spacex", "label": "SpaceX", "type": "entity", "aliases": []},
+    {"key": "elon_musk", "label": "马斯克", "type": "entity", "aliases": ["Elon Musk"]},
+    {"key": "trump", "label": "特朗普", "type": "entity", "aliases": ["Donald Trump"]},
+    {"key": "nvidia", "label": "英伟达", "type": "entity", "aliases": ["NVIDIA"]},
+    {"key": "tsmc", "label": "台积电", "type": "entity", "aliases": ["TSMC"]},
+    {"key": "sk_hynix", "label": "SK海力士", "type": "entity", "aliases": ["SK Hynix"]},
+    {"key": "xiaomi", "label": "小米", "type": "entity", "aliases": []},
+    {"key": "lei_jun", "label": "雷军", "type": "entity", "aliases": []},
+    {"key": "sonos", "label": "Sonos", "type": "entity", "aliases": []},
+]
+
+RECOMMENDATION_KEYWORD_DISABLED_KEYS = {
+    "analyst",
+    "supply_chain_check",
+    "x_post",
+    "regulation",
+    "china_assets",
+    "国际形势",
+    "中国资产",
+    "监管",
+    "电子消费",
 }
 
 DEFAULT_MARKET_TAG_CHOICES = [
@@ -112,15 +172,18 @@ CODEX_MODEL_FALLBACKS = [
 SETTINGS_MODEL_OPTION_LIMIT = 40
 DEEPSEEK_MODELS_URL = "https://api.deepseek.com/models"
 RECOMMENDATION_PROMPT_VERSION = "recommendation-category-v2"
-RECOMMENDATION_SCHEMA_VERSION = "category-v2"
-RECOMMENDATION_WEIGHTS_VERSION = "category-v2"
-RECOMMENDATION_CATEGORY_VERSION = "2"
+RECOMMENDATION_SCHEMA_VERSION = "keyword-v1"
+RECOMMENDATION_WEIGHTS_VERSION = "keyword-v1"
+RECOMMENDATION_CATEGORY_VERSION = "keyword-v1"
+RECOMMENDATION_KEYWORD_EXTRACTOR_VERSION = "keyword-v1"
 RECOMMENDATION_INIT_LIMIT = 200
 RECOMMENDATION_CATEGORY_SAMPLE_LIMIT = 120
 RECOMMENDATION_BACKGROUND_SAMPLE_LIMIT = 180
 RECOMMENDATION_BACKGROUND_FETCH_LIMIT = 720
 RECOMMENDATION_TREND_CONTEXT_LIMIT = 24
 RECOMMENDATION_SCORE_THRESHOLD = 70
+RECOMMENDATION_KEYWORD_INIT_RECENT_LIMIT = 200
+RECOMMENDATION_KEYWORD_INIT_POSITIVE_LIMIT = 100
 RECOMMENDATION_FEEDBACK_TYPES = {
     "shown",
     "opened",
@@ -144,11 +207,19 @@ RECOMMENDATION_EVENT_TYPE_WEIGHTS = {
     "market": 2,
     "other": 0,
 }
+RECOMMENDATION_KEYWORD_TYPES = {
+    "entity",
+    "domain",
+    "event",
+    "region",
+    "source_form",
+    "content_form",
+}
 
 
 def news_order_by_sql(collection: str) -> str:
     if collection == "recommendations":
-        return "COALESCE(re.score, 0) DESC, items.published_at DESC, items.id DESC"
+        return "items.published_at DESC, items.id DESC"
     return FEED_NEWS_ORDER_BY_SQL if collection in ("feed", "read_later") else NON_FEED_NEWS_ORDER_BY_SQL
 
 
@@ -288,10 +359,7 @@ def _build_news_where_clause(
     elif collection == "recommendations":
         where.append("st.read_at IS NULL")
         where.append(
-            f"EXISTS (SELECT 1 FROM recommendation_evals re WHERE re.item_id = items.id AND re.schema_version='{RECOMMENDATION_SCHEMA_VERSION}' AND re.status='success' AND re.recommended=1)"
-        )
-        where.append(
-            "NOT EXISTS (SELECT 1 FROM recommendation_feedback rf WHERE rf.item_id = items.id AND rf.event_type='dismissed' AND rf.source_context='recommendations')"
+            "EXISTS (SELECT 1 FROM recommendation_keyword_jobs rkj WHERE rkj.item_id = items.id AND rkj.status='success' AND rkj.keyword_count > 0)"
         )
     elif collection == "notes":
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
@@ -342,13 +410,812 @@ def ensure_db() -> None:
         migrate_market_trend_notes(conn)
         migrate_recommendation_tables(conn)
         migrate_recommendation_categories(conn)
+        migrate_recommendation_keyword_tables(conn)
         seed_market_tag_definitions(conn)
+        seed_recommendation_keywords(conn)
     finally:
         conn.close()
 
 
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def normalize_keyword_candidate_label(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def normalize_keyword_key(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^0-9a-z_]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text[:64]
+
+
+def recommendation_seed_keywords() -> list[dict[str, object]]:
+    raw_keywords = [
+        {
+            "key": seed["key"],
+            "label": seed["label"],
+            "type": seed["type"],
+            "aliases": list(seed.get("aliases") or []),
+            "source": "seed",
+        }
+        for seed in DEFAULT_RECOMMENDATION_KEYWORD_SEEDS
+    ]
+    deduped: list[dict[str, object]] = []
+    seen_keys: set[str] = set()
+    seen_labels: set[tuple[str, str]] = set()
+    for keyword in raw_keywords:
+        key = str(keyword["key"])
+        label = str(keyword["label"] or "").strip()
+        keyword_type = str(keyword["type"] or "").strip()
+        dedupe_label = (normalize_keyword_candidate_label(label), keyword_type)
+        if not key or key in seen_keys or not label or dedupe_label in seen_labels:
+            continue
+        seen_keys.add(key)
+        seen_labels.add(dedupe_label)
+        deduped.append(keyword)
+    return deduped
+
+
+def seed_recommendation_keywords(conn: sqlite3.Connection) -> None:
+    ts = now_ts()
+    seeded_keywords = recommendation_seed_keywords()
+    seeded_by_key = {str(keyword["key"]): keyword for keyword in seeded_keywords}
+    existing = {
+        row["key"]: dict(row)
+        for row in conn.execute(
+            "SELECT key, label, type, aliases_json, active, source FROM recommendation_keywords"
+        ).fetchall()
+    }
+
+    def merged_aliases(*groups: object) -> list[str]:
+        values: list[str] = []
+        seen: set[str] = set()
+        for group in groups:
+            if isinstance(group, str):
+                items = [group]
+            elif isinstance(group, list):
+                items = group
+            else:
+                items = []
+            for item in items:
+                text = str(item or "").strip()
+                normalized = normalize_keyword_candidate_label(text)
+                if not text or normalized in seen:
+                    continue
+                seen.add(normalized)
+                values.append(text[:80])
+        return values
+
+    with conn:
+        for key, row in existing.items():
+            should_disable = (
+                key in RECOMMENDATION_KEYWORD_DISABLED_KEYS
+                or row.get("source") == "market_tag"
+            )
+            if should_disable and int(row.get("active") or 0) != 0:
+                conn.execute(
+                    "UPDATE recommendation_keywords SET active=0, updated_at=? WHERE key=?",
+                    (ts, key),
+                )
+
+        for keyword in seeded_keywords:
+            key = str(keyword["key"])
+            aliases_json = json.dumps(keyword["aliases"], ensure_ascii=False)
+            if key in existing:
+                try:
+                    current_aliases = json.loads(existing[key].get("aliases_json") or "[]")
+                except json.JSONDecodeError:
+                    current_aliases = []
+                merged = merged_aliases(keyword["aliases"], current_aliases)
+                active = 0 if key in RECOMMENDATION_KEYWORD_DISABLED_KEYS else 1
+                conn.execute(
+                    """
+                    UPDATE recommendation_keywords
+                    SET label=?, type=?, aliases_json=?, active=?, source=?, updated_at=?
+                    WHERE key=?
+                    """,
+                    (
+                        keyword["label"],
+                        keyword["type"],
+                        json.dumps(merged, ensure_ascii=False),
+                        active,
+                        keyword["source"],
+                        ts,
+                        key,
+                    ),
+                )
+                continue
+            active = 0 if key in RECOMMENDATION_KEYWORD_DISABLED_KEYS else 1
+            conn.execute(
+                """
+                INSERT INTO recommendation_keywords(
+                  key, label, type, aliases_json, active, source, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (key, keyword["label"], keyword["type"], aliases_json, active, keyword["source"], ts, ts),
+            )
+
+        for key, row in existing.items():
+            if key in seeded_by_key:
+                continue
+            if row.get("source") == "market_tag":
+                conn.execute(
+                    "UPDATE recommendation_keywords SET active=0, updated_at=? WHERE key=?",
+                    (ts, key),
+                )
+
+
+def load_active_recommendation_keywords(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    rows = conn.execute(
+        """
+        SELECT key, label, type, aliases_json, source
+        FROM recommendation_keywords
+        WHERE active=1
+        ORDER BY type ASC, label COLLATE NOCASE ASC
+        """
+    ).fetchall()
+    keywords: list[dict[str, object]] = []
+    for row in rows:
+        try:
+            aliases = json.loads(row["aliases_json"] or "[]")
+        except json.JSONDecodeError:
+            aliases = []
+        keywords.append(
+            {
+                "key": row["key"],
+                "label": row["label"],
+                "type": row["type"],
+                "aliases": [str(alias).strip() for alias in aliases if str(alias).strip()],
+                "source": row["source"],
+            }
+        )
+    return keywords
+
+
+def recommendation_keyword_library_ready(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM recommendation_keywords WHERE active=1 LIMIT 1"
+    ).fetchone()
+    return bool(row)
+
+
+def reset_recommendation_keyword_state(conn: sqlite3.Connection) -> dict[str, int]:
+    unread_rows = conn.execute(
+        """
+        SELECT rkj.item_id
+        FROM recommendation_keyword_jobs rkj
+        LEFT JOIN item_state st ON st.item_id = rkj.item_id
+        WHERE st.read_at IS NULL
+        """
+    ).fetchall()
+    unread_ids = [row["item_id"] for row in unread_rows if row["item_id"]]
+    if unread_ids:
+        placeholders = ",".join("?" for _ in unread_ids)
+        conn.execute(
+            f"DELETE FROM recommendation_keyword_jobs WHERE item_id IN ({placeholders})",
+            unread_ids,
+        )
+        conn.execute(
+            f"DELETE FROM item_recommendation_keywords WHERE item_id IN ({placeholders})",
+            unread_ids,
+        )
+    deleted_candidates = conn.execute("DELETE FROM recommendation_keyword_candidates").rowcount
+    return {
+        "jobs": len(unread_ids),
+        "candidates": int(deleted_candidates or 0),
+    }
+
+
+def positive_recommendation_seed_item_ids(
+    conn: sqlite3.Connection,
+    limit: int = RECOMMENDATION_KEYWORD_INIT_POSITIVE_LIMIT,
+) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT items.id
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN article_notes an ON an.url = items.url
+        LEFT JOIN article_market_tags mt ON mt.url = items.url
+        WHERE st.important_at IS NOT NULL
+           OR an.url IS NOT NULL
+           OR mt.url IS NOT NULL
+        ORDER BY items.published_at DESC, items.id DESC
+        LIMIT ?
+        """,
+        (max(1, min(limit, RECOMMENDATION_KEYWORD_INIT_POSITIVE_LIMIT)),),
+    ).fetchall()
+    return [row["id"] for row in rows if row["id"]]
+
+
+def enqueue_recommendation_keyword_job(conn: sqlite3.Connection, item_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT items.id
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        WHERE items.id=? AND st.read_at IS NULL
+        """,
+        (item_id,),
+    ).fetchone()
+    if not row:
+        return False
+    existing = conn.execute(
+        "SELECT status FROM recommendation_keyword_jobs WHERE item_id=?",
+        (item_id,),
+    ).fetchone()
+    if existing:
+        return False
+    ts = now_ts()
+    conn.execute(
+        """
+        INSERT INTO recommendation_keyword_jobs(
+          item_id, status, extractor_version, created_at, updated_at
+        )
+        VALUES (?, 'pending', ?, ?, ?)
+        """,
+        (item_id, RECOMMENDATION_KEYWORD_EXTRACTOR_VERSION, ts, ts),
+    )
+    return True
+
+
+def enqueue_recommendation_keyword_jobs_for_new_items(conn: sqlite3.Connection, item_ids: list[str]) -> int:
+    queued = 0
+    for item_id in item_ids:
+        if enqueue_recommendation_keyword_job(conn, item_id):
+            queued += 1
+    return queued
+
+
+def enqueue_recommendation_keyword_init_jobs(conn: sqlite3.Connection, limit: int = RECOMMENDATION_INIT_LIMIT) -> int:
+    capped = max(1, min(RECOMMENDATION_KEYWORD_INIT_RECENT_LIMIT, int(limit or RECOMMENDATION_KEYWORD_INIT_RECENT_LIMIT)))
+    candidate_ids: list[str] = []
+    unread_rows = conn.execute(
+        """
+        SELECT items.id
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN recommendation_keyword_jobs rkj ON rkj.item_id = items.id
+        WHERE st.read_at IS NULL
+          AND rkj.item_id IS NULL
+        ORDER BY items.published_at DESC, items.id DESC
+        LIMIT ?
+        """,
+        (capped,),
+    ).fetchall()
+    candidate_ids.extend(row["id"] for row in unread_rows if row["id"])
+    for item_id in positive_recommendation_seed_item_ids(conn):
+        if item_id not in candidate_ids:
+            candidate_ids.append(item_id)
+    queued = 0
+    for item_id in candidate_ids:
+        if enqueue_recommendation_keyword_job(conn, item_id):
+            queued += 1
+    return queued
+
+
+def recommendation_status_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
+    library_ready = recommendation_keyword_library_ready(conn)
+    counts = conn.execute(
+        """
+        SELECT status, COUNT(*) AS total
+        FROM recommendation_keyword_jobs
+        GROUP BY status
+        """
+    ).fetchall()
+    by_status = {row["status"]: int(row["total"] or 0) for row in counts}
+    latest_error = conn.execute(
+        """
+        SELECT item_id, error, updated_at
+        FROM recommendation_keyword_jobs
+        WHERE status='failed'
+        ORDER BY updated_at DESC, item_id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    active_keyword_count = conn.execute(
+        "SELECT COUNT(*) FROM recommendation_keywords WHERE active=1"
+    ).fetchone()[0]
+    candidate_count = conn.execute(
+        "SELECT COUNT(*) FROM recommendation_keyword_candidates WHERE status='pending'"
+    ).fetchone()[0]
+    return {
+        "keyword_library_ready": library_ready,
+        "keyword_library_status": "ready" if library_ready else "not_ready",
+        "active_keyword_count": int(active_keyword_count or 0),
+        "pending": by_status.get("pending", 0),
+        "running": by_status.get("running", 0),
+        "success": by_status.get("success", 0),
+        "needs_keyword": by_status.get("needs_keyword", 0),
+        "failed": by_status.get("failed", 0),
+        "skipped": by_status.get("skipped", 0),
+        "candidate_count": int(candidate_count or 0),
+        "latest_error": dict(latest_error) if latest_error else None,
+    }
+
+
+def upsert_recommendation_keyword_candidate(
+    conn: sqlite3.Connection,
+    *,
+    item_id: str,
+    label: str,
+    keyword_type: str,
+    reason: str,
+    aliases: list[str],
+    ts: str,
+) -> None:
+    normalized_label = normalize_keyword_candidate_label(label)
+    existing = conn.execute(
+        """
+        SELECT id, occurrence_count, sample_item_ids_json, aliases_json
+        FROM recommendation_keyword_candidates
+        WHERE normalized_label=? AND type=?
+        """,
+        (normalized_label, keyword_type),
+    ).fetchone()
+    if existing:
+        try:
+            sample_item_ids = json.loads(existing["sample_item_ids_json"] or "[]")
+        except json.JSONDecodeError:
+            sample_item_ids = []
+        try:
+            existing_aliases = json.loads(existing["aliases_json"] or "[]")
+        except json.JSONDecodeError:
+            existing_aliases = []
+        merged_aliases = []
+        for alias in [*existing_aliases, *aliases]:
+            text = str(alias or "").strip()
+            if text and text not in merged_aliases:
+                merged_aliases.append(text[:80])
+        if item_id not in sample_item_ids:
+            sample_item_ids = [item_id, *sample_item_ids][:12]
+        conn.execute(
+            """
+            UPDATE recommendation_keyword_candidates
+            SET label=?,
+                aliases_json=?,
+                reason=?,
+                sample_item_ids_json=?,
+                occurrence_count=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (
+                label[:80],
+                json.dumps(merged_aliases, ensure_ascii=False),
+                reason[:200],
+                json.dumps(sample_item_ids, ensure_ascii=False),
+                int(existing["occurrence_count"] or 0) + 1,
+                ts,
+                existing["id"],
+            ),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO recommendation_keyword_candidates(
+          normalized_label, label, type, aliases_json, reason, sample_item_ids_json, occurrence_count, status, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)
+        """,
+        (
+            normalized_label,
+            label[:80],
+            keyword_type,
+            json.dumps(aliases[:6], ensure_ascii=False),
+            reason[:200],
+            json.dumps([item_id], ensure_ascii=False),
+            ts,
+            ts,
+        ),
+        )
+
+
+def parse_json_array(value: object) -> list[object]:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def merge_unique_texts(*groups: object, limit: int = 12) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        if isinstance(group, str):
+            items = [group]
+        elif isinstance(group, list):
+            items = group
+        else:
+            items = []
+        for item in items:
+            text = str(item or "").strip()
+            normalized = normalize_keyword_candidate_label(text)
+            if not text or normalized in seen:
+                continue
+            seen.add(normalized)
+            values.append(text[:80])
+            if len(values) >= limit:
+                return values
+    return values
+
+
+def build_source_facets(*, source: str, source_type: str, url: str) -> dict[str, str]:
+    source_key = derive_source_key(url, source_type, source)
+    return {
+        "source_key": source_key,
+        "source_label": source_label_for_key(source_key, source),
+        "source_name": (source or "").strip(),
+        "source_type": (source_type or "").strip().lower(),
+    }
+
+
+def create_recommendation_keyword_key(conn: sqlite3.Connection, label: str) -> str:
+    base = normalize_keyword_key(label) or "keyword"
+    candidate = base
+    suffix = 2
+    while conn.execute("SELECT 1 FROM recommendation_keywords WHERE key=?", (candidate,)).fetchone():
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    return candidate[:64]
+
+
+def reset_recommendation_keyword_jobs_for_items(
+    conn: sqlite3.Connection,
+    item_ids: list[str],
+    *,
+    keep_status: str = "pending",
+) -> int:
+    raw_ids = []
+    seen: set[str] = set()
+    for item_id in item_ids:
+        text = str(item_id or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            raw_ids.append(text)
+    if not raw_ids:
+        return 0
+    placeholders = ",".join("?" for _ in raw_ids)
+    unread_rows = conn.execute(
+        f"""
+        SELECT items.id
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        WHERE items.id IN ({placeholders}) AND st.read_at IS NULL
+        """,
+        raw_ids,
+    ).fetchall()
+    normalized_ids = [row["id"] for row in unread_rows if row["id"]]
+    if not normalized_ids:
+        return 0
+    ts = now_ts()
+    with conn:
+        placeholders = ",".join("?" for _ in normalized_ids)
+        conn.execute(
+            f"DELETE FROM item_recommendation_keywords WHERE item_id IN ({placeholders})",
+            normalized_ids,
+        )
+        existing_rows = conn.execute(
+            f"SELECT item_id FROM recommendation_keyword_jobs WHERE item_id IN ({placeholders})",
+            normalized_ids,
+        ).fetchall()
+        existing_ids = {row["item_id"] for row in existing_rows if row["item_id"]}
+        for item_id in normalized_ids:
+            if item_id in existing_ids:
+                conn.execute(
+                    """
+                    UPDATE recommendation_keyword_jobs
+                    SET status=?,
+                        error=NULL,
+                        payload_json=NULL,
+                        keyword_count=0,
+                        candidate_count=0,
+                        updated_at=?,
+                        processed_at=NULL
+                    WHERE item_id=?
+                    """,
+                    (keep_status, ts, item_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO recommendation_keyword_jobs(
+                      item_id, status, extractor_version, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (item_id, keep_status, RECOMMENDATION_KEYWORD_EXTRACTOR_VERSION, ts, ts),
+                )
+    return len(normalized_ids)
+
+
+def recommendation_keyword_sample_items(conn: sqlite3.Connection, item_ids: list[str], limit: int = 5) -> list[dict[str, str]]:
+    normalized_ids = [str(item_id or "").strip() for item_id in item_ids if str(item_id or "").strip()]
+    if not normalized_ids:
+        return []
+    placeholders = ",".join("?" for _ in normalized_ids)
+    rows = conn.execute(
+        f"""
+        SELECT id, title, source, published_at
+        FROM items
+        WHERE id IN ({placeholders})
+        ORDER BY published_at DESC, id DESC
+        """,
+        normalized_ids,
+    ).fetchall()
+    by_id = {
+        row["id"]: {
+            "id": row["id"],
+            "title": row["title"] or row["id"],
+            "source": row["source"] or "",
+            "published_at": row["published_at"] or "",
+        }
+        for row in rows
+    }
+    samples: list[dict[str, str]] = []
+    for item_id in normalized_ids:
+        sample = by_id.get(item_id)
+        if sample:
+            samples.append(sample)
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def load_recommendation_keyword_library(conn: sqlite3.Connection) -> dict[str, object]:
+    keyword_rows = conn.execute(
+        """
+        SELECT rk.key,
+               rk.label,
+               rk.type,
+               rk.aliases_json,
+               rk.active,
+               rk.source,
+               rk.created_at,
+               rk.updated_at,
+               COUNT(DISTINCT irk.item_id) AS linked_item_count
+        FROM recommendation_keywords rk
+        LEFT JOIN item_recommendation_keywords irk ON irk.keyword_key = rk.key
+        GROUP BY rk.key, rk.label, rk.type, rk.aliases_json, rk.active, rk.source, rk.created_at, rk.updated_at
+        ORDER BY rk.active DESC, rk.type ASC, rk.label COLLATE NOCASE ASC
+        """
+    ).fetchall()
+    keywords: list[dict[str, object]] = []
+    all_keywords: list[dict[str, object]] = []
+    for row in keyword_rows:
+        keyword = {
+            "key": row["key"],
+            "label": row["label"],
+            "type": row["type"],
+            "aliases": [str(alias).strip() for alias in parse_json_array(row["aliases_json"]) if str(alias).strip()],
+            "active": bool(row["active"]),
+            "source": row["source"] or "seed",
+            "linked_item_count": int(row["linked_item_count"] or 0),
+            "created_at": row["created_at"] or "",
+            "updated_at": row["updated_at"] or "",
+        }
+        keywords.append(keyword)
+        all_keywords.append(
+            {
+                "key": keyword["key"],
+                "label": keyword["label"],
+                "type": keyword["type"],
+                "active": keyword["active"],
+            }
+        )
+
+    candidate_rows = conn.execute(
+        """
+        SELECT id,
+               normalized_label,
+               label,
+               type,
+               aliases_json,
+               reason,
+               sample_item_ids_json,
+               occurrence_count,
+               status,
+               merged_keyword_key,
+               created_at,
+               updated_at,
+               reviewed_at
+        FROM recommendation_keyword_candidates
+        ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'merged' THEN 1 WHEN 'accepted' THEN 2 ELSE 3 END,
+                 occurrence_count DESC,
+                 updated_at DESC,
+                 id DESC
+        """
+    ).fetchall()
+    candidates: list[dict[str, object]] = []
+    for row in candidate_rows:
+        sample_item_ids = [str(item_id).strip() for item_id in parse_json_array(row["sample_item_ids_json"]) if str(item_id).strip()]
+        candidates.append(
+            {
+                "id": int(row["id"]),
+                "normalized_label": row["normalized_label"] or "",
+                "label": row["label"] or "",
+                "type": row["type"] or "domain",
+                "aliases": [str(alias).strip() for alias in parse_json_array(row["aliases_json"]) if str(alias).strip()],
+                "reason": row["reason"] or "",
+                "sample_item_ids": sample_item_ids,
+                "sample_items": recommendation_keyword_sample_items(conn, sample_item_ids, limit=5),
+                "occurrence_count": int(row["occurrence_count"] or 0),
+                "status": row["status"] or "pending",
+                "merged_keyword_key": row["merged_keyword_key"] or "",
+                "created_at": row["created_at"] or "",
+                "updated_at": row["updated_at"] or "",
+                "reviewed_at": row["reviewed_at"] or "",
+            }
+        )
+
+    return {
+        "active_keywords": [keyword for keyword in keywords if keyword["active"]],
+        "disabled_keywords": [keyword for keyword in keywords if not keyword["active"]],
+        "candidate_keywords": candidates,
+        "all_keywords": all_keywords,
+    }
+
+
+def process_pending_recommendation_keyword_once() -> bool:
+    conn = db_conn()
+    item_id = ""
+    try:
+        if not recommendation_keyword_library_ready(conn):
+            return False
+        row = conn.execute(
+            """
+            SELECT rkj.item_id,
+                   items.title,
+                   items.source,
+                   items.source_type,
+                   items.summary,
+                   items.published_at,
+                   items.url,
+                   st.read_at,
+                   ad.content AS detail_content
+            FROM recommendation_keyword_jobs rkj
+            LEFT JOIN items ON items.id = rkj.item_id
+            LEFT JOIN item_state st ON st.item_id = items.id
+            LEFT JOIN article_details ad ON ad.url = items.url
+            WHERE rkj.status='pending'
+            ORDER BY rkj.created_at ASC, rkj.item_id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not row:
+            return False
+
+        item_id = row["item_id"]
+        ts = now_ts()
+        with conn:
+            conn.execute(
+                "UPDATE recommendation_keyword_jobs SET status='running', updated_at=? WHERE item_id=?",
+                (ts, item_id),
+            )
+
+        if not row["title"]:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE recommendation_keyword_jobs
+                    SET status='skipped', error='ITEM_NOT_FOUND', updated_at=?, processed_at=?
+                    WHERE item_id=?
+                    """,
+                    (ts, ts, item_id),
+                )
+            return True
+        if row["read_at"]:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE recommendation_keyword_jobs
+                    SET status='skipped', error='ALREADY_READ', updated_at=?, processed_at=?
+                    WHERE item_id=?
+                    """,
+                    (ts, ts, item_id),
+                )
+            return True
+
+        llm_settings = current_runtime_settings()["llm"]
+        payload = generate_recommendation_keywords(
+            title=(row["title"] or "").strip(),
+            source=(row["source"] or "").strip(),
+            source_type=(row["source_type"] or "").strip(),
+            published_at=(row["published_at"] or "").strip(),
+            summary=(row["summary"] or "").strip(),
+            detail_excerpt=((row["detail_content"] or "").strip())[:2400],
+            keywords=load_active_recommendation_keywords(conn),
+            model=llm_settings["translation"]["model"],
+        )
+        canonical_keywords = payload.get("canonical_keywords") or []
+        candidate_keywords = payload.get("candidate_keywords") or []
+        status = "success" if canonical_keywords else "needs_keyword"
+        payload_json = {
+            "canonical_keywords": canonical_keywords,
+            "candidate_keywords": candidate_keywords,
+            "needs_keyword_reason": payload.get("needs_keyword_reason") or "",
+            "source_facets": build_source_facets(
+                source=(row["source"] or "").strip(),
+                source_type=(row["source_type"] or "").strip(),
+                url=(row["url"] or "").strip(),
+            ),
+            "raw_json": payload.get("raw_json", "{}"),
+        }
+        with conn:
+            conn.execute("DELETE FROM item_recommendation_keywords WHERE item_id=?", (item_id,))
+            for keyword in canonical_keywords:
+                conn.execute(
+                    """
+                    INSERT INTO item_recommendation_keywords(
+                      item_id, keyword_key, confidence, raw_keyword, extractor_version, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item_id,
+                        keyword["key"],
+                        keyword["confidence"],
+                        keyword.get("raw_keyword") or "",
+                        RECOMMENDATION_KEYWORD_EXTRACTOR_VERSION,
+                        ts,
+                    ),
+                )
+            for candidate in candidate_keywords:
+                upsert_recommendation_keyword_candidate(
+                    conn,
+                    item_id=item_id,
+                    label=str(candidate["label"]),
+                    keyword_type=str(candidate["type"]),
+                    reason=str(candidate.get("reason") or ""),
+                    aliases=[str(alias) for alias in candidate.get("aliases") or []],
+                    ts=ts,
+                )
+            conn.execute(
+                """
+                UPDATE recommendation_keyword_jobs
+                SET status=?,
+                    error=NULL,
+                    payload_json=?,
+                    keyword_count=?,
+                    candidate_count=?,
+                    updated_at=?,
+                    processed_at=?
+                WHERE item_id=?
+                """,
+                (
+                    status,
+                    json.dumps(payload_json, ensure_ascii=False),
+                    len(canonical_keywords),
+                    len(candidate_keywords),
+                    ts,
+                    ts,
+                    item_id,
+                ),
+            )
+        return True
+    except LLMClientError as exc:
+        ts = now_ts()
+        with conn:
+            conn.execute(
+                """
+                UPDATE recommendation_keyword_jobs
+                SET status='failed', error=?, updated_at=?, processed_at=?
+                WHERE item_id=?
+                """,
+                (str(exc)[:500], ts, ts, item_id),
+            )
+        return True
+    finally:
+        conn.close()
 
 
 def current_recommendation_join_sql(alias: str = "re") -> str:
@@ -847,63 +1714,45 @@ def recompute_stale_recommendation_evals(conn: sqlite3.Connection) -> int:
 
 
 def recommendation_status_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
-    recomputed = recompute_stale_recommendation_evals(conn)
-    category_ready = recommendation_category_ready(conn)
-    categories = load_active_recommendation_categories(conn)
-    counts_rows = conn.execute(
+    library_ready = recommendation_keyword_library_ready(conn)
+    counts = conn.execute(
         """
         SELECT status, COUNT(*) AS total
-        FROM recommendation_evals
-        WHERE schema_version=?
+        FROM recommendation_keyword_jobs
         GROUP BY status
-        """,
-        (RECOMMENDATION_SCHEMA_VERSION,),
-    ).fetchall()
-    counts = {row["status"]: int(row["total"] or 0) for row in counts_rows}
-    recommended_count = conn.execute(
         """
-        SELECT COUNT(*)
-        FROM recommendation_evals
-        WHERE schema_version=?
-          AND status='success'
-          AND recommended=1
-        """,
-        (RECOMMENDATION_SCHEMA_VERSION,),
-    ).fetchone()[0]
-    latest_failed = conn.execute(
+    ).fetchall()
+    by_status = {row["status"]: int(row["total"] or 0) for row in counts}
+    latest_error = conn.execute(
         """
         SELECT item_id, error, updated_at
-        FROM recommendation_evals
-        WHERE schema_version=?
-          AND status='failed'
-          AND COALESCE(error, '') <> ''
-        ORDER BY updated_at DESC
+        FROM recommendation_keyword_jobs
+        WHERE status='failed'
+        ORDER BY updated_at DESC, item_id DESC
         LIMIT 1
-        """,
-        (RECOMMENDATION_SCHEMA_VERSION,),
+        """
     ).fetchone()
-    latest_error = dict(latest_failed) if latest_failed else None
-    category_error = recommendation_meta_get(conn, "category_init_error")
-    if not latest_error and category_error:
-        latest_error = {"item_id": "", "error": category_error, "updated_at": ""}
+    active_keyword_count = conn.execute(
+        "SELECT COUNT(*) FROM recommendation_keywords WHERE active=1"
+    ).fetchone()[0]
+    candidate_count = conn.execute(
+        "SELECT COUNT(*) FROM recommendation_keyword_candidates WHERE status='pending'"
+    ).fetchone()[0]
     return {
         "schema_version": RECOMMENDATION_SCHEMA_VERSION,
         "weights_version": RECOMMENDATION_WEIGHTS_VERSION,
         "category_version": RECOMMENDATION_CATEGORY_VERSION,
-        "category_library_ready": category_ready,
-        "category_library_status": "ready" if category_ready else ("failed" if category_error else "not_ready"),
-        "active_category_count": len(categories),
-        "positive_sample_count": len(current_recommendation_positive_samples(conn)),
-        "background_sample_count": len(current_recommendation_background_samples(conn)),
-        "trend_context_count": len(current_recommendation_trend_contexts(conn)),
-        "pending": counts.get("pending", 0),
-        "success": counts.get("success", 0),
-        "failed": counts.get("failed", 0),
-        "skipped": counts.get("skipped", 0),
-        "recommended": int(recommended_count or 0),
-        "recomputed": recomputed,
-        "score_buckets": recommendation_bucket_counts(conn),
-        "latest_error": latest_error,
+        "keyword_library_ready": library_ready,
+        "keyword_library_status": "ready" if library_ready else "not_ready",
+        "active_keyword_count": int(active_keyword_count or 0),
+        "pending": by_status.get("pending", 0),
+        "running": by_status.get("running", 0),
+        "success": by_status.get("success", 0),
+        "needs_keyword": by_status.get("needs_keyword", 0),
+        "failed": by_status.get("failed", 0),
+        "skipped": by_status.get("skipped", 0),
+        "candidate_count": int(candidate_count or 0),
+        "latest_error": dict(latest_error) if latest_error else None,
     }
 
 
@@ -1496,9 +2345,15 @@ def load_error_stats(day: str) -> list[dict]:
     return [{"date": day, "groups": ordered}]
 
 
-def serialize_news_rows(items: list[dict], market_tags_map: dict[str, list[dict]]) -> list[dict]:
+def serialize_news_rows(
+    items: list[dict],
+    market_tags_map: dict[str, list[dict]],
+    recommendation_keywords_map: dict[str, list[dict]] | None = None,
+) -> list[dict]:
+    recommendation_keywords_map = recommendation_keywords_map or {}
     for item in items:
         tags = market_tags_map.get(item.get("url") or "", [])
+        item["recommendation_keywords"] = recommendation_keywords_map.get(item.get("id") or "", [])
         item["note_preview"] = build_note_preview(item.pop("note_preview_source", None))
         item["market_tags"] = tags
         item["has_market_tags"] = 1 if tags else 0
@@ -1507,6 +2362,42 @@ def serialize_news_rows(items: list[dict], market_tags_map: dict[str, list[dict]
         item["date_key"] = date_key
         item["date_label"] = date_label
     return items
+
+
+def load_recommendation_keywords_map(conn: sqlite3.Connection, item_ids: list[str]) -> dict[str, list[dict]]:
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    rows = conn.execute(
+        f"""
+        SELECT irk.item_id,
+               irk.keyword_key,
+               irk.confidence,
+               irk.raw_keyword,
+               rk.label,
+               rk.type
+        FROM item_recommendation_keywords irk
+        LEFT JOIN recommendation_keywords rk ON rk.key = irk.keyword_key
+        WHERE irk.item_id IN ({placeholders})
+        ORDER BY irk.item_id ASC,
+                 CASE irk.confidence WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
+                 rk.type ASC,
+                 rk.label COLLATE NOCASE ASC
+        """,
+        item_ids,
+    ).fetchall()
+    result: dict[str, list[dict]] = {}
+    for row in rows:
+        result.setdefault(row["item_id"], []).append(
+            {
+                "key": row["keyword_key"],
+                "label": row["label"] or row["keyword_key"],
+                "type": row["type"] or "domain",
+                "confidence": row["confidence"],
+                "raw_keyword": row["raw_keyword"] or "",
+            }
+        )
+    return result
 
 
 def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
@@ -1688,6 +2579,32 @@ def migrate_recommendation_categories(conn: sqlite3.Connection) -> None:
     if "weight_reason" not in columns:
         statements.append(
             "ALTER TABLE recommendation_categories ADD COLUMN weight_reason TEXT NOT NULL DEFAULT ''"
+        )
+    if not statements:
+        return
+    with conn:
+        for statement in statements:
+            conn.execute(statement)
+
+
+def migrate_recommendation_keyword_tables(conn: sqlite3.Connection) -> None:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recommendation_keyword_candidates'"
+    ).fetchone()
+    if not exists:
+        return
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info('recommendation_keyword_candidates')").fetchall()
+    }
+    statements: list[str] = []
+    if "merged_keyword_key" not in columns:
+        statements.append(
+            "ALTER TABLE recommendation_keyword_candidates ADD COLUMN merged_keyword_key TEXT"
+        )
+    if "reviewed_at" not in columns:
+        statements.append(
+            "ALTER TABLE recommendation_keyword_candidates ADD COLUMN reviewed_at TEXT"
         )
     if not statements:
         return
@@ -2572,7 +3489,7 @@ def detail_worker_loop() -> None:
                 pass
         if not processed:
             try:
-                processed = process_pending_recommendation_once()
+                processed = process_pending_recommendation_keyword_once()
             except Exception:
                 pass
         if processed:
@@ -2614,18 +3531,13 @@ def api_news():
     LEFT JOIN detail_jobs dj ON dj.url = items.url
     LEFT JOIN article_details ad ON ad.url = items.url
     LEFT JOIN article_notes an ON an.url = items.url
-    LEFT JOIN recommendation_evals re
-      ON re.item_id = items.id
-     AND re.schema_version = '{RECOMMENDATION_SCHEMA_VERSION}'
+    LEFT JOIN recommendation_keyword_jobs rkj ON rkj.item_id = items.id
     """
     where_sql, args = _build_news_where_clause(q, read_filter, collection, source_filter)
     order_by_sql = news_order_by_sql(collection)
 
     conn = db_conn()
     try:
-        if collection == "recommendations":
-            recompute_stale_recommendation_evals(conn)
-            conn.commit()
         total = conn.execute(
             f"SELECT COUNT(*) FROM items {join_sql} {where_sql}",
             args,
@@ -2656,8 +3568,8 @@ def api_news():
                aj.status AS ai_status,
                aj.last_error AS ai_error,
                CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
-               re.score AS recommendation_score,
-               re.recommended AS recommendation_flag,
+               rkj.status AS recommendation_job_status,
+               CASE WHEN rkj.status='success' AND COALESCE(rkj.keyword_count, 0) > 0 THEN 1 ELSE 0 END AS recommendation_flag,
                {ITEM_DATE_SQL} AS date_key
         FROM items
         {join_sql}
@@ -2699,7 +3611,9 @@ def api_news():
                 [*args, per, offset],
             ).fetchall()
         urls = [r["url"] for r in rows if r["url"]]
+        item_ids = [r["id"] for r in rows if r["id"]]
         market_tags_map = load_market_tags_map(conn, urls)
+        recommendation_keywords_map = load_recommendation_keywords_map(conn, item_ids)
     finally:
         conn.close()
 
@@ -2709,7 +3623,7 @@ def api_news():
         for row in date_count_rows
         if row["date_key"]
     }
-    items = serialize_news_rows(items, market_tags_map)
+    items = serialize_news_rows(items, market_tags_map, recommendation_keywords_map)
     pages = max(1, math.ceil(total / per)) if total else 1
     if cursor_mode:
         pages = max(page, pages)
@@ -2888,10 +3802,7 @@ def api_sources():
     elif collection == "recommendations":
         where.append("st.read_at IS NULL")
         where.append(
-            f"EXISTS (SELECT 1 FROM recommendation_evals re WHERE re.item_id = items.id AND re.schema_version='{RECOMMENDATION_SCHEMA_VERSION}' AND re.status='success' AND re.recommended=1)"
-        )
-        where.append(
-            "NOT EXISTS (SELECT 1 FROM recommendation_feedback rf WHERE rf.item_id = items.id AND rf.event_type='dismissed' AND rf.source_context='recommendations')"
+            "EXISTS (SELECT 1 FROM recommendation_keyword_jobs rkj WHERE rkj.item_id = items.id AND rkj.status='success' AND rkj.keyword_count > 0)"
         )
     elif collection == "notes":
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
@@ -3580,7 +4491,7 @@ def api_reindex():
     conn = db_conn()
     try:
         stats = reindex(conn, DAILY_NEWS_DIR, full=full)
-        queued_recommendations = enqueue_recommendation_evals_for_new_items(conn, stats.new_item_ids or [])
+        queued_recommendations = enqueue_recommendation_keyword_jobs_for_new_items(conn, stats.new_item_ids or [])
         conn.commit()
     finally:
         conn.close()
@@ -3601,8 +4512,6 @@ def api_recommendation_status():
     conn = db_conn()
     try:
         snapshot = recommendation_status_snapshot(conn)
-        if snapshot.get("recomputed"):
-            conn.commit()
     finally:
         conn.close()
     return jsonify({"ok": True, **snapshot})
@@ -3619,31 +4528,213 @@ def api_recommendation_init():
         return jsonify({"ok": False, "error": "invalid_limit"}), 400
     conn = db_conn()
     try:
-        category_result = {"ok": True, "created": 0, "error": ""}
-        reset_count = 0
-        if rebuild or not recommendation_category_ready(conn):
-            category_result = initialize_recommendation_categories(conn)
-            if category_result.get("ok", True):
-                reset_count = reset_current_recommendation_evals(conn)
-        queued = enqueue_recommendation_init_jobs(conn, limit)
+        seed_recommendation_keywords(conn)
+        reset_counts = {"jobs": 0, "candidates": 0}
+        if rebuild:
+            reset_counts = reset_recommendation_keyword_state(conn)
+        queued = enqueue_recommendation_keyword_init_jobs(conn, limit)
         snapshot = recommendation_status_snapshot(conn)
         conn.commit()
     finally:
         conn.close()
     return jsonify(
         {
-            "ok": category_result.get("ok", True),
+            "ok": True,
             "queued": queued,
             "rebuild": rebuild,
-            "reset": reset_count,
-            "category_created": int(category_result.get("created", 0) or 0),
-            "category_init_error": category_result.get("error", ""),
-            "background_samples": int(category_result.get("background_samples", 0) or 0),
-            "trend_contexts": int(category_result.get("trend_contexts", 0) or 0),
-            "limit": max(1, min(RECOMMENDATION_INIT_LIMIT, limit)),
+            "reset_jobs": int(reset_counts.get("jobs", 0) or 0),
+            "reset_candidates": int(reset_counts.get("candidates", 0) or 0),
+            "keyword_seed_count": len(recommendation_seed_keywords()),
+            "limit": max(1, min(RECOMMENDATION_KEYWORD_INIT_RECENT_LIMIT, limit)),
             **snapshot,
         }
     )
+
+
+@app.get("/api/recommendation-keywords")
+def api_recommendation_keywords():
+    conn = db_conn()
+    try:
+        library = load_recommendation_keyword_library(conn)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, **library})
+
+
+@app.patch("/api/recommendation-keywords/<keyword_key>")
+def api_recommendation_keyword_update(keyword_key: str):
+    body = request.get_json(silent=True) or {}
+    active = body.get("active")
+    if not isinstance(active, bool):
+        return jsonify({"ok": False, "error": "invalid_active"}), 400
+
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            "SELECT key, active FROM recommendation_keywords WHERE key=?",
+            (keyword_key,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "keyword_not_found"}), 404
+
+        ts = now_ts()
+        requeued = 0
+        with conn:
+            conn.execute(
+                "UPDATE recommendation_keywords SET active=?, updated_at=? WHERE key=?",
+                (1 if active else 0, ts, keyword_key),
+            )
+            if not active:
+                item_rows = conn.execute(
+                    "SELECT item_id FROM item_recommendation_keywords WHERE keyword_key=?",
+                    (keyword_key,),
+                ).fetchall()
+                requeued = reset_recommendation_keyword_jobs_for_items(
+                    conn,
+                    [row["item_id"] for row in item_rows if row["item_id"]],
+                )
+        library = load_recommendation_keyword_library(conn)
+        snapshot = recommendation_status_snapshot(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "requeued": requeued, **library, **snapshot})
+
+
+@app.post("/api/recommendation-keywords/candidates/<int:candidate_id>/review")
+def api_recommendation_keyword_candidate_review(candidate_id: int):
+    body = request.get_json(silent=True) or {}
+    action = (body.get("action") or "").strip().lower()
+    if action not in {"accept_new", "merge", "reject"}:
+        return jsonify({"ok": False, "error": "invalid_action"}), 400
+    target_keyword_key = (body.get("target_keyword_key") or "").strip()
+
+    conn = db_conn()
+    try:
+        candidate = conn.execute(
+            """
+            SELECT id, normalized_label, label, type, aliases_json, reason, sample_item_ids_json, status
+            FROM recommendation_keyword_candidates
+            WHERE id=?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        if not candidate:
+            return jsonify({"ok": False, "error": "candidate_not_found"}), 404
+        if (candidate["status"] or "pending") != "pending":
+            return jsonify({"ok": False, "error": "candidate_already_reviewed"}), 409
+        if action == "merge" and not target_keyword_key:
+            return jsonify({"ok": False, "error": "missing_target_keyword_key"}), 400
+
+        candidate_aliases = [str(alias).strip() for alias in parse_json_array(candidate["aliases_json"]) if str(alias).strip()]
+        sample_item_ids = [str(item_id).strip() for item_id in parse_json_array(candidate["sample_item_ids_json"]) if str(item_id).strip()]
+        label = (candidate["label"] or "").strip()
+        keyword_type = (candidate["type"] or "domain").strip()
+        ts = now_ts()
+        requeued = 0
+        with conn:
+            merged_keyword_key = ""
+            if action == "reject":
+                conn.execute(
+                    """
+                    UPDATE recommendation_keyword_candidates
+                    SET status='rejected', merged_keyword_key=NULL, reviewed_at=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (ts, ts, candidate_id),
+                )
+            elif action == "accept_new":
+                duplicate = conn.execute(
+                    "SELECT key, aliases_json FROM recommendation_keywords WHERE label=? COLLATE NOCASE",
+                    (label,),
+                ).fetchone()
+                if duplicate:
+                    merged_keyword_key = duplicate["key"]
+                    merged_aliases = merge_unique_texts(
+                        parse_json_array(duplicate["aliases_json"]),
+                        candidate_aliases,
+                    )
+                    conn.execute(
+                        """
+                        UPDATE recommendation_keywords
+                        SET aliases_json=?, active=1, updated_at=?
+                        WHERE key=?
+                        """,
+                        (json.dumps(merged_aliases, ensure_ascii=False), ts, merged_keyword_key),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE recommendation_keyword_candidates
+                        SET status='merged', merged_keyword_key=?, reviewed_at=?, updated_at=?
+                        WHERE id=?
+                        """,
+                        (merged_keyword_key, ts, ts, candidate_id),
+                    )
+                else:
+                    merged_keyword_key = create_recommendation_keyword_key(conn, label)
+                    aliases = merge_unique_texts(candidate_aliases)
+                    conn.execute(
+                        """
+                        INSERT INTO recommendation_keywords(
+                          key, label, type, aliases_json, active, source, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, 1, 'candidate_review', ?, ?)
+                        """,
+                        (
+                            merged_keyword_key,
+                            label,
+                            keyword_type,
+                            json.dumps(aliases, ensure_ascii=False),
+                            ts,
+                            ts,
+                        ),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE recommendation_keyword_candidates
+                        SET status='accepted', merged_keyword_key=?, reviewed_at=?, updated_at=?
+                        WHERE id=?
+                        """,
+                        (merged_keyword_key, ts, ts, candidate_id),
+                    )
+                requeued = reset_recommendation_keyword_jobs_for_items(conn, sample_item_ids)
+            else:
+                target = conn.execute(
+                    "SELECT key, label, aliases_json FROM recommendation_keywords WHERE key=?",
+                    (target_keyword_key,),
+                ).fetchone()
+                if not target:
+                    return jsonify({"ok": False, "error": "target_keyword_not_found"}), 404
+                merged_keyword_key = target["key"]
+                merged_aliases = merge_unique_texts(
+                    parse_json_array(target["aliases_json"]),
+                    [label],
+                    candidate_aliases,
+                )
+                conn.execute(
+                    """
+                    UPDATE recommendation_keywords
+                    SET aliases_json=?, active=1, updated_at=?
+                    WHERE key=?
+                    """,
+                    (json.dumps(merged_aliases, ensure_ascii=False), ts, merged_keyword_key),
+                )
+                conn.execute(
+                    """
+                    UPDATE recommendation_keyword_candidates
+                    SET status='merged', merged_keyword_key=?, reviewed_at=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (merged_keyword_key, ts, ts, candidate_id),
+                )
+                requeued = reset_recommendation_keyword_jobs_for_items(conn, sample_item_ids)
+
+        library = load_recommendation_keyword_library(conn)
+        snapshot = recommendation_status_snapshot(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "requeued": requeued, **library, **snapshot})
 
 
 @app.post("/api/recommendations/feedback")

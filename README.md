@@ -4,6 +4,34 @@
 
 ## What's Changed
 
+### 2026-06-15 — fix: 收敛 v2.1.1 keyword-v1 错配与候选审核
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*llm_client.py（+）*
+    - 推荐关键词抽取现在允许 `canonical_keywords` 为空；active 词库无法准确覆盖时，job 会进入 `needs_keyword`，并保存 `candidate_keywords + needs_keyword_reason + source_facets`
+    - `source/source_type` 被收进 deep/system feature，不再作为显性 semantic keyword 参与 canonical 输出
+    - 清理并收缩 seed 关键词：停止把 market tags 当作 active semantic keywords 自动灌入；禁用 `监管 / 中国资产 / 国际形势` 这类宽泛兜底词
+    - 新增推荐关键词库管理 API：支持查看 `active / disabled / candidate`、启用/禁用关键词、candidate 接受/拒绝/合并，并在禁用或审核后回灌样本重新抽取
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 设置页新增「推荐关键词库」管理区，可直接审核 candidate、合并 alias、启停 active keyword
+  - *tests/test_api.py（+）*
+    - 新增 `needs_keyword` 不进推荐集合、candidate 审核回灌、禁用关键词后旧命中回退等回归测试
+- **影响**：`keyword-v1` 从“硬复用 active keyword”收敛为“可空 canonical + 候选审核 + 禁用回灌”的可控地基版；当前推荐集合只保留准确命中的显性语义关键词新闻流，不再靠宽泛词凑覆盖。
+
+### 2026-06-15 — feat: 重构 v2.1.0 推荐 keyword-v1 地基版
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*llm_client.py（+）*
+    - 推荐主链路从旧 `category-v2` 切到 `keyword-v1` 地基版：新增 `recommendation_keywords / item_recommendation_keywords / recommendation_keyword_candidates / recommendation_keyword_jobs`
+    - 推荐初始化不再生成类别库和权重；改为装载受控种子关键词库，并为未读新闻/历史正样本排队关键词抽取任务
+    - DeepSeek 新增结构化关键词抽取链路：每条新闻返回 `canonical_keywords + candidate_keywords`，优先复用现有词库，只有覆盖不了时才提出候选词
+    - 推荐集合改为独立的关键词候选流：只展示 `status=success` 且至少抽到 1 个 canonical keyword 的未读新闻，不再依赖旧打分/反馈/不再推荐逻辑
+  - *static/app.js（+）*、*static/style.css（+）*
+    - 推荐页按钮与文案改成“初始化关键词库 / 重建关键词库”
+    - 推荐集合状态栏改为展示关键词库、候选词和任务处理进度
+    - 推荐列表新增关键词 chip 展示；关闭旧的推荐反馈与“不再推荐”交互
+  - *tests/test_api.py（+）*
+    - 推荐相关回归测试改为覆盖 `keyword-v1`：种子词库初始化、关键词抽取成功入库、候选词写入、重建重置任务与候选词
+- **影响**：推荐系统进入“先建稳定地基”的阶段。当前版本只负责稳定地为新闻抽取 1-5 个可复用关键词并沉淀候选词，不做学习闭环、权重调整和复杂推荐交互。
+
 ### 2026-06-14 — feat: 新增 v2.0.1 推荐初始权重重建
 - **文件**
   - *schema.sql（+）*、*app.py（+）*、*llm_client.py（+）*

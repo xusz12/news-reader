@@ -160,6 +160,84 @@ def _validate_recommendation_classification_payload(
     return normalized
 
 
+def _validate_recommendation_keywords_payload(
+    parsed: object,
+    *,
+    allowed_keyword_keys: set[str],
+) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        raise LLMClientError("INVALID_RECOMMENDATION_KEYWORDS_PAYLOAD")
+
+    raw_canonical = parsed.get("canonical_keywords")
+    if not isinstance(raw_canonical, list):
+        raise LLMClientError("INVALID_CANONICAL_KEYWORDS")
+
+    canonical_keywords: list[dict[str, str]] = []
+    seen_keys: set[str] = set()
+    for raw in raw_canonical[:5]:
+        if not isinstance(raw, dict):
+            continue
+        key = str(raw.get("key") or "").strip()
+        confidence = str(raw.get("confidence") or "").strip().lower()
+        raw_keyword = str(raw.get("raw_keyword") or raw.get("label") or "").strip()
+        if key not in allowed_keyword_keys or confidence not in {"high", "medium", "low"}:
+            continue
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        canonical_keywords.append(
+            {
+                "key": key,
+                "confidence": confidence,
+                "raw_keyword": raw_keyword[:80],
+            }
+        )
+
+    raw_candidates = parsed.get("candidate_keywords")
+    if not isinstance(raw_candidates, list):
+        raise LLMClientError("INVALID_CANDIDATE_KEYWORDS")
+
+    candidate_keywords: list[dict[str, Any]] = []
+    seen_candidate_labels: set[tuple[str, str]] = set()
+    for raw in raw_candidates[:5]:
+        if not isinstance(raw, dict):
+            continue
+        label = str(raw.get("label") or "").strip()
+        keyword_type = str(raw.get("type") or "").strip().lower()
+        reason = str(raw.get("reason") or "").strip()
+        aliases_raw = raw.get("aliases")
+        aliases: list[str] = []
+        if isinstance(aliases_raw, list):
+            for alias in aliases_raw:
+                text = str(alias or "").strip()
+                if text and text not in aliases:
+                    aliases.append(text[:80])
+        if not label or keyword_type not in {"entity", "domain", "event", "region", "source_form", "content_form"}:
+            continue
+        dedupe_key = (label.lower(), keyword_type)
+        if dedupe_key in seen_candidate_labels:
+            continue
+        seen_candidate_labels.add(dedupe_key)
+        candidate_keywords.append(
+            {
+                "label": label[:80],
+                "type": keyword_type,
+                "reason": reason[:200],
+                "aliases": aliases[:6],
+            }
+        )
+
+    needs_keyword_reason = str(parsed.get("needs_keyword_reason") or "").strip()[:240]
+    if not canonical_keywords and not candidate_keywords and not needs_keyword_reason:
+        raise LLMClientError("EMPTY_RECOMMENDATION_KEYWORDS")
+
+    return {
+        "canonical_keywords": canonical_keywords,
+        "candidate_keywords": candidate_keywords,
+        "needs_keyword_reason": needs_keyword_reason,
+    }
+
+
 def _contains_cjk(text: str) -> bool:
     for char in text:
         code = ord(char)
@@ -292,6 +370,51 @@ def _build_recommendation_classification_messages(
         + f"标题: {title or '无标题'}\n"
         + f"摘要: {summary or '无'}\n"
         + f"正文片段: {detail_excerpt or '无'}"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def _build_recommendation_keyword_messages(
+    *,
+    title: str,
+    source: str,
+    source_type: str,
+    published_at: str,
+    summary: str,
+    detail_excerpt: str,
+    keywords: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    system = (
+        "你是新闻推荐关键词抽取器。"
+        "你必须调用给定函数并严格输出结构化结果，不要输出解释。"
+        "要求：\n"
+        "1) canonical_keywords 可以是 0-5 个，只能从给定 active 关键词库里选，且必须准确描述这条新闻已经发生的事实。\n"
+        "2) 如果现有 active 关键词库无法准确覆盖，宁可 canonical_keywords 为空，也不要硬配相近词、宽泛词、上位词或来源词。\n"
+        "3) candidate_keywords 只有在 canonical 为空或明显不够时才允许提出，数量 0-3 个，并给出简短 reason。\n"
+        "4) source/source_type/source_name/x/reuters/bloomberg 这类来源或载体信息只能当系统特征，不能进入 canonical_keywords。\n"
+        "5) 不要输出完整句子、短期标题措辞或一次性事件描述作为关键词；related 但不准确的词也不要进 canonical。\n"
+        "6) 如果 canonical_keywords 为空，请填写 needs_keyword_reason，说明为什么现有 active 词库无法准确覆盖。"
+    )
+    keyword_blocks = []
+    for keyword in keywords[:300]:
+        aliases = keyword.get("aliases") or []
+        alias_text = " / ".join(str(alias).strip() for alias in aliases if str(alias).strip())
+        line = f"- key={keyword['key']} | label={keyword['label']} | type={keyword['type']}"
+        if alias_text:
+            line += f" | aliases={alias_text}"
+        keyword_blocks.append(line)
+    user = (
+        f"来源: {source or '未知'}\n"
+        f"来源类型: {source_type or '未知'}\n"
+        f"发布时间: {published_at or '未知'}\n"
+        f"标题: {title or '无标题'}\n"
+        f"摘要: {summary or '无'}\n"
+        f"正文片段: {detail_excerpt or '无'}\n\n"
+        "现有关键词库：\n"
+        + ("\n".join(keyword_blocks) if keyword_blocks else "（空）")
     )
     return [
         {"role": "system", "content": system},
@@ -586,6 +709,133 @@ def generate_recommendation_classification(
     normalized = _validate_recommendation_classification_payload(
         parsed,
         allowed_category_keys=allowed_category_keys,
+    )
+    return {
+        "model": getattr(resp, "model", None) or model_name,
+        **normalized,
+        "raw_json": json.dumps(parsed, ensure_ascii=False),
+    }
+
+
+def generate_recommendation_keywords(
+    *,
+    title: str,
+    source: str,
+    source_type: str,
+    published_at: str,
+    summary: str,
+    detail_excerpt: str,
+    keywords: list[dict[str, Any]],
+    model: str | None = None,
+) -> dict[str, Any]:
+    api_key = _resolve_api_key("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
+
+    try:
+        from openai import OpenAI
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
+
+    allowed_keyword_keys = {str(keyword.get("key") or "").strip() for keyword in keywords}
+    allowed_keyword_keys.discard("")
+    if not allowed_keyword_keys:
+        raise LLMClientError("EMPTY_KEYWORD_LIBRARY")
+
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
+    model_name = (model or "").strip() or _configured_model()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "save_recommendation_keywords",
+                "description": "保存新闻推荐关键词抽取结果",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "canonical_keywords": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "key": {"type": "string"},
+                                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                                    "raw_keyword": {"type": "string"},
+                                },
+                                "required": ["key", "confidence", "raw_keyword"],
+                                "additionalProperties": False,
+                            },
+                            "maxItems": 5,
+                        },
+                        "candidate_keywords": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {"type": "string"},
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["entity", "domain", "event", "region", "source_form", "content_form"],
+                                    },
+                                    "reason": {"type": "string"},
+                                    "aliases": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "maxItems": 6,
+                                    },
+                                },
+                                "required": ["label", "type", "reason", "aliases"],
+                                "additionalProperties": False,
+                            },
+                            "maxItems": 5,
+                        },
+                        "needs_keyword_reason": {"type": "string"},
+                    },
+                    "required": ["canonical_keywords", "candidate_keywords", "needs_keyword_reason"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=_build_recommendation_keyword_messages(
+                title=title,
+                source=source,
+                source_type=source_type,
+                published_at=published_at,
+                summary=summary,
+                detail_excerpt=detail_excerpt,
+                keywords=keywords,
+            ),
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "save_recommendation_keywords"}},
+            temperature=0.1,
+            timeout=90,
+        )
+    except Exception as exc:
+        raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
+
+    choices = getattr(resp, "choices", None) or []
+    if not choices:
+        raise LLMClientError("EMPTY_CHOICES")
+    msg = choices[0].message
+    tool_calls = getattr(msg, "tool_calls", None) or []
+    if not tool_calls:
+        raise LLMClientError("NO_TOOL_CALL")
+
+    args_text = getattr(tool_calls[0].function, "arguments", "") or ""
+    try:
+        parsed = json.loads(args_text)
+    except Exception as exc:
+        raise LLMClientError(f"INVALID_TOOL_ARGUMENTS_JSON: {exc}") from exc
+
+    normalized = _validate_recommendation_keywords_payload(
+        parsed,
+        allowed_keyword_keys=allowed_keyword_keys,
     )
     return {
         "model": getattr(resp, "model", None) or model_name,

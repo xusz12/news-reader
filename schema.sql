@@ -189,3 +189,66 @@ CREATE TABLE IF NOT EXISTS recommendation_meta (
   value_text TEXT,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS recommendation_keywords (
+  key TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  type TEXT NOT NULL,
+  aliases_json TEXT NOT NULL DEFAULT '[]',
+  active INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT 'seed',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recommendation_keywords_active
+  ON recommendation_keywords(active, type, label);
+
+CREATE TABLE IF NOT EXISTS item_recommendation_keywords (
+  item_id TEXT NOT NULL,
+  keyword_key TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  raw_keyword TEXT NOT NULL DEFAULT '',
+  extractor_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (item_id, keyword_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_recommendation_keywords_item
+  ON item_recommendation_keywords(item_id);
+
+CREATE TABLE IF NOT EXISTS recommendation_keyword_candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  normalized_label TEXT NOT NULL,
+  label TEXT NOT NULL,
+  type TEXT NOT NULL,
+  aliases_json TEXT NOT NULL DEFAULT '[]',
+  reason TEXT NOT NULL DEFAULT '',
+  sample_item_ids_json TEXT NOT NULL DEFAULT '[]',
+  occurrence_count INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'pending',
+  merged_keyword_key TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  UNIQUE(normalized_label, type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_recommendation_keyword_candidates_status
+  ON recommendation_keyword_candidates(status, type, occurrence_count);
+
+CREATE TABLE IF NOT EXISTS recommendation_keyword_jobs (
+  item_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  error TEXT,
+  payload_json TEXT,
+  keyword_count INTEGER NOT NULL DEFAULT 0,
+  candidate_count INTEGER NOT NULL DEFAULT 0,
+  extractor_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  processed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_recommendation_keyword_jobs_status
+  ON recommendation_keyword_jobs(status, updated_at);

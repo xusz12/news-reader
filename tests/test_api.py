@@ -2602,7 +2602,7 @@ def test_settings_api_ignores_legacy_chat_fields(tmp_path: Path, monkeypatch):
     assert "chat" not in payload["llm"]
 
 
-def test_recommendation_reindex_creates_eval_only_for_new_unread_items(tmp_path: Path, monkeypatch):
+def test_recommendation_reindex_creates_keyword_job_only_for_new_unread_items(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     daily_file = daily_dir / "dailyFreshNews_2026-06-14.md"
@@ -2639,404 +2639,20 @@ def test_recommendation_reindex_creates_eval_only_for_new_unread_items(tmp_path:
 
     with app_module.db_conn() as conn:
         rows = conn.execute(
-            "SELECT item_id, schema_version, status FROM recommendation_evals ORDER BY item_id, schema_version"
+            "SELECT item_id, status FROM recommendation_keyword_jobs ORDER BY item_id"
         ).fetchall()
     assert len(rows) == 2
     assert {row["status"] for row in rows} == {"pending"}
-    assert {row["schema_version"] for row in rows} == {app_module.RECOMMENDATION_SCHEMA_VERSION}
 
 
-def test_recommendation_status_requires_category_library_before_processing(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
-        """## Reuters · World（1条）
-### [Need Categories](https://example.com/need-categories)
-- 发布时间：2026-06-14 08:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    status = client.get("/api/recommendations/status").get_json()
-    assert status["category_library_ready"] is False
-    assert status["category_library_status"] == "not_ready"
-    assert status["pending"] == 1
-
-    assert app_module.process_pending_recommendation_once() is False
-
-
-def test_recommendation_init_builds_category_library(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
-        """## Reuters · World（3条）
-### [Seed Important](https://example.com/seed-important)
-- 发布时间：2026-06-14 08:00:00
-### [Seed Note](https://example.com/seed-note)
-- 发布时间：2026-06-14 09:00:00
-### [Fresh Eval](https://example.com/fresh-eval)
-- 发布时间：2026-06-14 10:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    items = client.get("/api/news?per=20").get_json()["items"]
-    important_item = next(item for item in items if item["title"] == "Seed Important")
-    note_item = next(item for item in items if item["title"] == "Seed Note")
-    assert client.patch(f"/api/news/{important_item['id']}/state", json={"important": True}).status_code == 200
-    assert client.put(
-        f"/api/news/{note_item['id']}/note",
-        json={"note": "持续关注 AI infra"},
-    ).status_code == 200
-
-    def fake_generate_recommendation_categories(**kwargs):
-        sample_ids = {sample["item_id"] for sample in kwargs["positive_samples"]}
-        assert important_item["id"] in sample_ids
-        assert note_item["id"] in sample_ids
-        return {
-            "model": "deepseek-chat",
-            "categories": [
-                {
-                    "key": "ai_infra",
-                    "label": "AI 基础设施",
-                    "description": "围绕模型公司、算力和 AI infra 的新闻。",
-                    "seed_item_ids": [important_item["id"], note_item["id"]],
-                }
-            ],
-            "raw_json": "{}",
-        }
-
-    monkeypatch.setattr(app_module, "generate_recommendation_categories", fake_generate_recommendation_categories)
-    monkeypatch.setattr(
-        app_module,
-        "generate_recommendation_classification",
-        lambda **kwargs: {
-            "model": "deepseek-chat",
-            "category_matches": [{"key": "ai_infra", "confidence": "medium"}]
-            if kwargs["title"] == "Fresh Eval"
-            else [],
-            "entities": [],
-            "event_type": "other",
-            "sectors": [],
-            "regions": [],
-            "new_category_candidates": [],
-            "headline_signal": "background",
-            "raw_json": "{}",
-        },
-    )
-
-    payload = client.post("/api/recommendations/init", json={"limit": 10}).get_json()
-    assert payload["ok"] is True
-    assert payload["category_created"] == 1
-    assert payload["category_library_ready"] is True
-    assert payload["active_category_count"] == 1
-    assert payload["background_samples"] == 1
-
-    with app_module.db_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT key, label, positive_count, background_count, positive_rate, background_rate, lift_score, weight, active
-            FROM recommendation_categories
-            WHERE key='ai_infra'
-            """
-        ).fetchone()
-    assert row["label"] == "AI 基础设施"
-    assert row["positive_count"] == 2
-    assert row["background_count"] == 1
-    assert row["positive_rate"] == 1.0
-    assert row["background_rate"] == 1.0
-    assert row["lift_score"] > 0
-    assert 35 <= row["weight"] <= 85
-    assert row["active"] == 1
-
-
-def test_recommendation_weight_uses_background_distribution():
-    import app as app_module
-
-    high_weight, _, high_lift = app_module.recommendation_category_weight_from_stats(
-        positive_count=2,
-        background_count=0,
-        positive_rate=0.25,
-        background_rate=0.01,
-    )
-    low_weight, _, low_lift = app_module.recommendation_category_weight_from_stats(
-        positive_count=2,
-        background_count=6,
-        positive_rate=0.25,
-        background_rate=0.25,
-    )
-
-    assert high_lift > low_lift
-    assert high_weight > low_weight
-    assert 35 <= low_weight <= 85
-
-
-def test_recommendation_rebuild_resets_current_schema_unread_evals(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
-        """## Reuters · World（3条）
-### [Seed Important](https://example.com/rebuild-important)
-- 发布时间：2026-06-14 08:00:00
-### [Seed Note](https://example.com/rebuild-note)
-- 发布时间：2026-06-14 09:00:00
-### [Unread Eval](https://example.com/rebuild-target)
-- 发布时间：2026-06-14 10:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    items = client.get("/api/news?per=20").get_json()["items"]
-    important_item = next(item for item in items if item["title"] == "Seed Important")
-    note_item = next(item for item in items if item["title"] == "Seed Note")
-    unread_item = next(item for item in items if item["title"] == "Unread Eval")
-    assert client.patch(f"/api/news/{important_item['id']}/state", json={"important": True}).status_code == 200
-    assert client.put(f"/api/news/{note_item['id']}/note", json={"note": "继续关注 AI infra"}).status_code == 200
-
-    monkeypatch.setattr(
-        app_module,
-        "generate_recommendation_categories",
-        lambda **kwargs: {
-            "model": "deepseek-chat",
-            "categories": [
-                {
-                    "key": "ai_infra",
-                    "label": "AI 基础设施",
-                    "description": "围绕模型公司、算力和 AI infra 的新闻。",
-                    "seed_item_ids": [important_item["id"], note_item["id"]],
-                }
-            ],
-            "raw_json": "{}",
-        },
-    )
-    monkeypatch.setattr(
-        app_module,
-        "generate_recommendation_classification",
-        lambda **kwargs: {
-            "model": "deepseek-chat",
-            "category_matches": [{"key": "ai_infra", "confidence": "medium"}]
-            if kwargs["title"] == "Unread Eval"
-            else [],
-            "entities": [],
-            "event_type": "other",
-            "sectors": [],
-            "regions": [],
-            "new_category_candidates": [],
-            "headline_signal": "rebuild",
-            "raw_json": "{}",
-        },
-    )
-
-    first = client.post("/api/recommendations/init", json={"limit": 10}).get_json()
-    assert first["ok"] is True
-    with app_module.db_conn() as conn:
-        conn.execute(
-            """
-            UPDATE recommendation_evals
-            SET status='success', recommended=1, score=88, features_json='{}'
-            WHERE item_id=? AND schema_version=?
-            """,
-            (unread_item["id"], app_module.RECOMMENDATION_SCHEMA_VERSION),
-        )
-        conn.commit()
-
-    rebuilt = client.post("/api/recommendations/init", json={"limit": 10, "rebuild": True}).get_json()
-    assert rebuilt["ok"] is True
-    assert rebuilt["rebuild"] is True
-    assert rebuilt["reset"] >= 1
-    with app_module.db_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT status, recommended
-            FROM recommendation_evals
-            WHERE item_id=? AND schema_version=?
-            """,
-            (unread_item["id"], app_module.RECOMMENDATION_SCHEMA_VERSION),
-        ).fetchone()
-    assert row["status"] == "pending"
-    assert row["recommended"] == 0
-
-
-def test_recommendation_process_success_and_feedback_with_category_match(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
-        """## Reuters · World（1条）
-### [Recommend Me](https://example.com/recommend-me)
-- 发布时间：2026-06-14 08:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    with app_module.db_conn() as conn:
-        ts = app_module.now_ts()
-        conn.execute(
-            """
-            INSERT INTO recommendation_categories(
-              key, label, description, positive_count, weight, active, version, seed_item_ids_json, created_at, updated_at
-            )
-            VALUES ('ai_infra', 'AI 基础设施', '围绕模型公司、算力和 AI infra 的新闻。', 4, 70, 1, ?, '[]', ?, ?)
-            """,
-            (app_module.RECOMMENDATION_CATEGORY_VERSION, ts, ts),
-        )
-        conn.commit()
-
-    monkeypatch.setattr(
-        app_module,
-        "generate_recommendation_classification",
-        lambda **kwargs: {
-            "model": "deepseek-chat",
-            "category_matches": [{"key": "ai_infra", "confidence": "high"}],
-            "entities": ["OpenAI"],
-            "event_type": "regulation",
-            "sectors": ["AI"],
-            "regions": ["US"],
-            "new_category_candidates": [],
-            "headline_signal": "强命中 AI infra",
-            "raw_json": "{}",
-        },
-    )
-
-    assert app_module.process_pending_recommendation_once() is True
-
-    recs = client.get("/api/news?collection=recommendations&per=20").get_json()
-    assert [item["title"] for item in recs["items"]] == ["Recommend Me"]
-
-    item_id = recs["items"][0]["id"]
-    feedback = client.post(
-        "/api/recommendations/feedback",
-        json={"item_id": item_id, "event_type": "shown", "source_context": "recommendations"},
-    )
-    assert feedback.status_code == 200
-    with app_module.db_conn() as conn:
-        row = conn.execute(
-            "SELECT event_type FROM recommendation_feedback WHERE item_id=? ORDER BY id DESC LIMIT 1",
-            (item_id,),
-        ).fetchone()
-    assert row["event_type"] == "shown"
-
-
-def test_recommendation_candidate_only_does_not_recommend(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
-        """## Reuters · World（1条）
-### [Candidate Only](https://example.com/candidate-only)
-- 发布时间：2026-06-14 08:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    with app_module.db_conn() as conn:
-        ts = app_module.now_ts()
-        conn.execute(
-            """
-            INSERT INTO recommendation_categories(
-              key, label, description, positive_count, weight, active, version, seed_item_ids_json, created_at, updated_at
-            )
-            VALUES ('space', 'Space', 'SpaceX 和航天商业化。', 3, 65, 1, ?, '[]', ?, ?)
-            """,
-            (app_module.RECOMMENDATION_CATEGORY_VERSION, ts, ts),
-        )
-        conn.commit()
-
-    monkeypatch.setattr(
-        app_module,
-        "generate_recommendation_classification",
-        lambda **kwargs: {
-            "model": "deepseek-chat",
-            "category_matches": [],
-            "entities": ["UnknownCo"],
-            "event_type": "other",
-            "sectors": [],
-            "regions": [],
-            "new_category_candidates": [
-                {"label": "量子计算", "description": "量子计算创业与突破。", "confidence": "high"}
-            ],
-            "headline_signal": "暂时无法归入现有类别",
-            "raw_json": "{}",
-        },
-    )
-
-    assert app_module.process_pending_recommendation_once() is True
-    recs = client.get("/api/news?collection=recommendations&per=20").get_json()
-    assert recs["items"] == []
-    with app_module.db_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT status, recommended, features_json
-            FROM recommendation_evals
-            WHERE schema_version=? AND item_id IN (SELECT id FROM items WHERE title='Candidate Only')
-            """,
-            (app_module.RECOMMENDATION_SCHEMA_VERSION,),
-        ).fetchone()
-    assert row["status"] == "success"
-    assert row["recommended"] == 0
-    assert "量子计算" in row["features_json"]
-
-
-def test_recommendation_old_schema_eval_not_in_recommendations_and_current_schema_remains_idempotent(tmp_path: Path, monkeypatch):
+def test_recommendation_keyword_init_seeds_library_and_queues_jobs(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
         """## Reuters · World（2条）
-### [Legacy Only](https://example.com/legacy-only)
+### [Seed Important](https://example.com/seed-important)
 - 发布时间：2026-06-14 08:00:00
-### [Current Target](https://example.com/current-target)
+### [Fresh Candidate](https://example.com/fresh-candidate)
 - 发布时间：2026-06-14 09:00:00
 """,
         encoding="utf-8",
@@ -3053,53 +2669,307 @@ def test_recommendation_old_schema_eval_not_in_recommendations_and_current_schem
     assert client.post("/api/reindex", json={}).status_code == 200
 
     items = client.get("/api/news?per=20").get_json()["items"]
-    legacy_item = next(item for item in items if item["title"] == "Legacy Only")
-    current_item = next(item for item in items if item["title"] == "Current Target")
+    important_item = next(item for item in items if item["title"] == "Seed Important")
+    assert client.patch(f"/api/news/{important_item['id']}/state", json={"important": True}).status_code == 200
+
+    payload = client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+    assert payload["ok"] is True
+    assert payload["keyword_library_ready"] is True
+    assert payload["active_keyword_count"] > 0
+    assert payload["pending"] >= 1
+    assert payload["keyword_seed_count"] >= len(app_module.DEFAULT_RECOMMENDATION_KEYWORD_SEEDS)
+
     with app_module.db_conn() as conn:
-        conn.execute(
-            "DELETE FROM recommendation_evals WHERE item_id=? AND schema_version=?",
-            (legacy_item["id"], app_module.RECOMMENDATION_SCHEMA_VERSION),
-        )
-        conn.execute(
+        job_count = conn.execute("SELECT COUNT(*) FROM recommendation_keyword_jobs").fetchone()[0]
+        active_count = conn.execute("SELECT COUNT(*) FROM recommendation_keywords WHERE active=1").fetchone()[0]
+    assert job_count >= 1
+    assert active_count == payload["active_keyword_count"]
+
+
+def test_recommendation_keyword_process_success_and_collection(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Reuters · World（1条）
+### [Keyword Target](https://example.com/keyword-target)
+- 发布时间：2026-06-14 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_keywords",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "canonical_keywords": [
+                {"key": "ai", "confidence": "high", "raw_keyword": "AI"},
+                {"key": "anthropic", "confidence": "medium", "raw_keyword": "Anthropic"},
+            ],
+            "candidate_keywords": [],
+            "raw_json": "{}",
+        },
+    )
+
+    assert app_module.process_pending_recommendation_keyword_once() is True
+
+    recs = client.get("/api/news?collection=recommendations&per=20").get_json()
+    assert [item["title"] for item in recs["items"]] == ["Keyword Target"]
+    keywords = recs["items"][0]["recommendation_keywords"]
+    assert [keyword["key"] for keyword in keywords] == ["ai", "anthropic"]
+
+    with app_module.db_conn() as conn:
+        row = conn.execute(
             """
-            INSERT INTO recommendation_evals(
-              item_id, status, features_json, score, recommended, error,
-              prompt_version, schema_version, weights_version, model, evaluated_at, created_at, updated_at
-            )
-            VALUES (?, 'success', '{}', 999, 1, NULL, ?, 'legacy-v1', 'legacy-v1', 'deepseek-chat', ?, ?, ?)
+            SELECT status, keyword_count, candidate_count
+            FROM recommendation_keyword_jobs
+            WHERE item_id=?
             """,
-            (
-                legacy_item["id"],
-                app_module.RECOMMENDATION_PROMPT_VERSION,
-                app_module.now_ts(),
-                app_module.now_ts(),
-                app_module.now_ts(),
-            ),
-        )
-        conn.commit()
+            (recs["items"][0]["id"],),
+        ).fetchone()
+    assert row["status"] == "success"
+    assert row["keyword_count"] == 2
+    assert row["candidate_count"] == 0
+
+
+def test_recommendation_keyword_empty_canonical_becomes_needs_keyword(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Reuters · World（1条）
+### [Missouri Plane Crash](https://example.com/missouri-plane-crash)
+- 发布时间：2026-06-14 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_keywords",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "canonical_keywords": [],
+            "candidate_keywords": [
+                {"label": "密苏里州", "type": "region", "reason": "现有区域词库无法准确覆盖本地事故新闻", "aliases": []}
+            ],
+            "needs_keyword_reason": "现有 active 词库无法准确覆盖事故地点和事件实体",
+            "raw_json": "{}",
+        },
+    )
+
+    assert app_module.process_pending_recommendation_keyword_once() is True
+    status = client.get("/api/recommendations/status").get_json()
+    assert status["needs_keyword"] == 1
+    assert status["failed"] == 0
 
     recs = client.get("/api/news?collection=recommendations&per=20").get_json()
     assert recs["items"] == []
 
     with app_module.db_conn() as conn:
-        queued = app_module.enqueue_recommendation_init_jobs(conn, 10)
-        rows = conn.execute(
-            """
-            SELECT item_id, schema_version
-            FROM recommendation_evals
-            WHERE item_id=?
-            ORDER BY schema_version
-            """,
-            (legacy_item["id"],),
-        ).fetchall()
-        current_rows = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM recommendation_evals
-            WHERE item_id=? AND schema_version=?
-            """,
-            (current_item["id"], app_module.RECOMMENDATION_SCHEMA_VERSION),
+        row = conn.execute(
+            "SELECT status, keyword_count, candidate_count, payload_json FROM recommendation_keyword_jobs"
+        ).fetchone()
+    assert row["status"] == "needs_keyword"
+    assert row["keyword_count"] == 0
+    assert row["candidate_count"] == 1
+    payload = json.loads(row["payload_json"])
+    assert payload["needs_keyword_reason"] != ""
+    assert payload["source_facets"]["source_key"].startswith("host:")
+
+
+def test_recommendation_keyword_library_review_merge_and_requeue(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Reuters · Tech（1条）
+### [Lei Jun Eats Hot Dry Noodles](https://example.com/lei-jun)
+- 发布时间：2026-06-14 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_keywords",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "canonical_keywords": [],
+            "candidate_keywords": [
+                {"label": "热干面", "type": "domain", "reason": "现有词库无法准确覆盖武汉早餐语义", "aliases": ["武汉热干面"]}
+            ],
+            "needs_keyword_reason": "现有 active 词库无法准确覆盖餐饮语义",
+            "raw_json": "{}",
+        },
+    )
+    assert app_module.process_pending_recommendation_keyword_once() is True
+
+    library = client.get("/api/recommendation-keywords").get_json()
+    candidate = library["candidate_keywords"][0]
+    assert candidate["label"] == "热干面"
+    assert candidate["sample_items"][0]["title"] == "Lei Jun Eats Hot Dry Noodles"
+
+    merged = client.post(
+        f"/api/recommendation-keywords/candidates/{candidate['id']}/review",
+        json={"action": "merge", "target_keyword_key": "consumer_electronics"},
+    ).get_json()
+    assert merged["ok"] is True
+
+    with app_module.db_conn() as conn:
+        candidate_row = conn.execute(
+            "SELECT status, merged_keyword_key FROM recommendation_keyword_candidates WHERE id=?",
+            (candidate["id"],),
+        ).fetchone()
+        keyword_row = conn.execute(
+            "SELECT aliases_json FROM recommendation_keywords WHERE key='consumer_electronics'"
+        ).fetchone()
+        job_row = conn.execute(
+            "SELECT status, keyword_count FROM recommendation_keyword_jobs"
+        ).fetchone()
+    assert candidate_row["status"] == "merged"
+    assert candidate_row["merged_keyword_key"] == "consumer_electronics"
+    aliases = json.loads(keyword_row["aliases_json"])
+    assert "热干面" in aliases
+    assert job_row["status"] == "pending"
+    assert job_row["keyword_count"] == 0
+
+
+def test_recommendation_keyword_disable_requeues_existing_matches(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Bloomberg · Markets（1条）
+### [Singapore Gold Clearing Push](https://example.com/singapore-gold)
+- 发布时间：2026-06-14 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_keywords",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "canonical_keywords": [
+                {"key": "gold", "confidence": "high", "raw_keyword": "黄金"},
+                {"key": "singapore", "confidence": "high", "raw_keyword": "新加坡"},
+            ],
+            "candidate_keywords": [],
+            "needs_keyword_reason": "",
+            "raw_json": "{}",
+        },
+    )
+    assert app_module.process_pending_recommendation_keyword_once() is True
+    recs = client.get("/api/news?collection=recommendations&per=20").get_json()
+    assert [item["title"] for item in recs["items"]] == ["Singapore Gold Clearing Push"]
+
+    disabled = client.patch("/api/recommendation-keywords/gold", json={"active": False}).get_json()
+    assert disabled["ok"] is True
+    assert disabled["requeued"] == 1
+
+    recs_after = client.get("/api/news?collection=recommendations&per=20").get_json()
+    assert recs_after["items"] == []
+
+    with app_module.db_conn() as conn:
+        job_row = conn.execute("SELECT status FROM recommendation_keyword_jobs").fetchone()
+        keyword_links = conn.execute("SELECT COUNT(*) FROM item_recommendation_keywords").fetchone()[0]
+    assert job_row["status"] == "pending"
+    assert keyword_links == 0
+
+
+def test_recommendation_keyword_rebuild_resets_jobs_and_candidates(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Reuters · World（1条）
+### [Candidate Source](https://example.com/candidate-source)
+- 发布时间：2026-06-14 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_keywords",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "canonical_keywords": [],
+            "candidate_keywords": [
+                {"label": "霍尔木兹海峡", "type": "region", "reason": "现有地缘 key 无法覆盖 chokepoint", "aliases": []}
+            ],
+            "needs_keyword_reason": "现有 active 词库无法准确覆盖 chokepoint",
+            "raw_json": "{}",
+        },
+    )
+    assert app_module.process_pending_recommendation_keyword_once() is True
+
+    with app_module.db_conn() as conn:
+        candidate_count = conn.execute(
+            "SELECT COUNT(*) FROM recommendation_keyword_candidates WHERE status='pending'"
         ).fetchone()[0]
-    assert queued >= 1
-    assert [row["schema_version"] for row in rows] == [app_module.RECOMMENDATION_SCHEMA_VERSION, "legacy-v1"]
-    assert current_rows == 1
+    assert candidate_count == 1
+
+    rebuilt = client.post("/api/recommendations/init", json={"limit": 10, "rebuild": True}).get_json()
+    assert rebuilt["ok"] is True
+    assert rebuilt["rebuild"] is True
+    assert rebuilt["reset_candidates"] >= 1
+    assert rebuilt["queued"] >= 1

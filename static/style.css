@@ -410,6 +410,92 @@ body.search-bar-open .topbar-search {
   margin-top: 14px;
 }
 
+.settings-keyword-card {
+  margin-top: 14px;
+}
+
+.settings-keyword-library {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-keyword-section {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.settings-keyword-section-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.settings-keyword-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--bg));
+  display: grid;
+  gap: 8px;
+}
+
+.settings-keyword-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.settings-keyword-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-keyword-meta,
+.settings-keyword-aliases {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-keyword-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-keyword-merge-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.settings-keyword-merge-row .pref-select {
+  min-width: 220px;
+}
+
+.settings-keyword-samples {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-keyword-sample {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--detail-card-bg);
+  color: var(--detail-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .settings-release-header {
   display: flex;
   justify-content: space-between;
@@ -1439,6 +1525,13 @@ button.active {
   flex-wrap: wrap;
 }
 
+.recommendation-keywords {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .market-tag-badge {
   display: inline-flex;
   align-items: center;
@@ -1457,6 +1550,33 @@ button.active {
 .market-tag-badge.bearish {
   color: #065f46;
   background: #d1fae5;
+}
+
+.recommendation-keyword-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #334155;
+  background: #e2e8f0;
+}
+
+.recommendation-keyword-badge.confidence-high {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.recommendation-keyword-badge.confidence-medium {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.recommendation-keyword-badge.confidence-low {
+  color: #475569;
+  background: #e2e8f0;
 }
 
 
