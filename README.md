@@ -4,7 +4,7 @@
 
 ## What's Changed
 
-### 2026-06-16 — improve: 优化设置页布局并显示版本号
+### 2026-06-16 — v1.9.6.8 improve: 优化设置页布局并显示版本号
 - **文件**
   - *static/index.html（+34 −6）*
     - 设置页满屏显示，新增侧边细栏（图标入口）
@@ -16,7 +16,7 @@
     - 满屏设置页布局、侧栏图标样式、版本号样式
 - **影响**：设置页更大更易浏览，四大板块通过侧栏分区切换
 
-### 2026-06-16 — revert: 移除推荐功能并回到推荐前行为
+### 2026-06-16 — revert: 移除推荐功能并回到推荐前行为（回退至 v1.9.6.6）
 - **文件**：README.md、app.py、llm_client.py、scanner.py、schema.sql、static/app.js、static/index.html、static/style.css、tests/test_api.py
 - 回退 v2.0.0 ~ v2.1.1.3 共 7 个推荐功能提交（9 files, +111 −5721）
 - 影响：推荐集合、关键词库、candidate 审核等推荐功能全部移除
