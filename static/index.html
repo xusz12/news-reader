@@ -45,7 +45,6 @@
         <h2>集合入口</h2>
         <button id="navSearchBtn" class="nav-btn">搜索</button>
         <button id="navFeedBtn" class="nav-btn active">新闻流</button>
-        <button id="navRecommendationsBtn" class="nav-btn">推荐</button>
         <button id="navImportantBtn" class="nav-btn">重要新闻</button>
         <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
         <button id="navNotesBtn" class="nav-btn">想法</button>
@@ -62,7 +61,6 @@
           <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
           <button id="markAllReadBtn" class="icon-btn" type="button"></button>
           <button id="refreshBtn" class="icon-btn" type="button"></button>
-          <button id="initRecommendationsBtn" class="detail-retry-btn hidden" type="button">初始化推荐类别库</button>
           <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
         </div>
         <section id="searchPageControls" class="search-page-controls hidden" aria-label="搜索条件">
@@ -178,7 +176,6 @@
             <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
             <button id="detailBullishBtn" class="icon-btn" type="button" title="看多板块标记" aria-label="看多板块标记"></button>
             <button id="detailBearishBtn" class="icon-btn" type="button" title="看空板块标记" aria-label="看空板块标记"></button>
-            <button id="detailDismissRecommendationBtn" class="icon-btn hidden" type="button" title="不再推荐" aria-label="不再推荐"></button>
             <button id="detailImportantBtn" class="icon-btn" type="button"></button>
           </div>
           <section id="detailMarketPicker" class="detail-market-picker hidden">
@@ -240,31 +237,12 @@
           <button id="settingsCloseBtn" class="detail-retry-btn" type="button">关闭</button>
         </div>
         <div id="settingsStatus" class="detail-status muted hidden">读取中...</div>
-        <div class="settings-shell">
-          <nav id="settingsNav" class="settings-nav" aria-label="设置板块">
-            <button id="settingsNavServices" class="settings-nav-btn" type="button" data-section="services">
-              <span class="settings-nav-icon" aria-hidden="true">S</span>
-              <span class="settings-nav-label">服务</span>
-            </button>
-            <button id="settingsNavModels" class="settings-nav-btn" type="button" data-section="models">
-              <span class="settings-nav-icon" aria-hidden="true">M</span>
-              <span class="settings-nav-label">模型</span>
-            </button>
-            <button id="settingsNavKeywords" class="settings-nav-btn" type="button" data-section="keywords">
-              <span class="settings-nav-icon" aria-hidden="true">K</span>
-              <span class="settings-nav-label">词库</span>
-            </button>
-            <button id="settingsNavRelease" class="settings-nav-btn" type="button" data-section="release">
-              <span class="settings-nav-icon" aria-hidden="true">R</span>
-              <span class="settings-nav-label">记录</span>
-            </button>
-          </nav>
-          <div class="settings-content">
-          <section id="settingsSectionServices" class="settings-card settings-section-panel">
+        <div class="settings-grid">
+          <section class="settings-card">
             <h3 class="settings-card-title">服务管理</h3>
             <div id="settingsApiStatus" class="settings-api-status"></div>
           </section>
-          <section id="settingsSectionModels" class="settings-card settings-section-panel">
+          <section class="settings-card">
             <h3 class="settings-card-title">模型管理</h3>
             <div class="settings-form">
               <div class="settings-field">
@@ -290,29 +268,14 @@
               </div>
             </div>
           </section>
-          <section id="settingsSectionKeywords" class="settings-card settings-keyword-card settings-section-panel">
-            <div class="settings-release-header">
-              <div>
-                <h3 class="settings-card-title">推荐关键词库</h3>
-                <span class="settings-release-note">active / disabled / candidate</span>
-              </div>
-              <div id="settingsKeywordTabs" class="settings-keyword-tabs" role="tablist" aria-label="关键词库状态">
-                <button id="settingsKeywordTabActive" class="settings-keyword-tab" type="button" data-keyword-tab="active">启用中</button>
-                <button id="settingsKeywordTabDisabled" class="settings-keyword-tab" type="button" data-keyword-tab="disabled">已禁用</button>
-                <button id="settingsKeywordTabCandidate" class="settings-keyword-tab" type="button" data-keyword-tab="candidate">待审核</button>
-              </div>
-            </div>
-            <div id="settingsKeywordLibrary" class="settings-keyword-library"></div>
-          </section>
-          <section id="settingsSectionRelease" class="settings-card settings-release-card settings-section-panel">
-            <div class="settings-release-header">
-              <h3 class="settings-card-title">Release Notes</h3>
-              <span class="settings-release-note">数据源：README / What's Changed</span>
-            </div>
-            <div id="settingsReleaseNotes" class="settings-release-list"></div>
-          </section>
-          </div>
         </div>
+        <section class="settings-card settings-release-card">
+          <div class="settings-release-header">
+            <h3 class="settings-card-title">Release Notes</h3>
+            <span class="settings-release-note">数据源：README / What's Changed</span>
+          </div>
+          <div id="settingsReleaseNotes" class="settings-release-list"></div>
+        </section>
       </section>
     </div>
 
