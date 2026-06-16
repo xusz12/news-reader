@@ -3,14 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v1.2</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.4" />
+    <title>News Reader v1.9.6.8</title>
+    <link rel="stylesheet" href="/static/style.css?v=1.9.6.8" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand-row">
         <div class="topbar-brand">
-          <h1>News Reader</h1>
+          <div class="topbar-title-row">
+            <h1>News Reader</h1>
+            <span class="topbar-version">v1.9.6.8</span>
+          </div>
           <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
         </div>
         <div class="topbar-brand-actions">
@@ -237,12 +240,24 @@
           <button id="settingsCloseBtn" class="detail-retry-btn" type="button">关闭</button>
         </div>
         <div id="settingsStatus" class="detail-status muted hidden">读取中...</div>
-        <div class="settings-grid">
-          <section class="settings-card">
+        <div class="settings-shell">
+          <nav class="settings-nav" aria-label="设置板块">
+            <button id="settingsNavServices" class="settings-nav-btn" type="button" data-section="services" aria-label="服务管理" title="服务管理">
+              <span class="settings-nav-icon" aria-hidden="true">S</span>
+            </button>
+            <button id="settingsNavModels" class="settings-nav-btn" type="button" data-section="models" aria-label="模型管理" title="模型管理">
+              <span class="settings-nav-icon" aria-hidden="true">M</span>
+            </button>
+            <button id="settingsNavRelease" class="settings-nav-btn" type="button" data-section="release" aria-label="Release Notes" title="Release Notes">
+              <span class="settings-nav-icon" aria-hidden="true">R</span>
+            </button>
+          </nav>
+          <div class="settings-content">
+          <section id="settingsSectionServices" class="settings-card settings-section-panel">
             <h3 class="settings-card-title">服务管理</h3>
             <div id="settingsApiStatus" class="settings-api-status"></div>
           </section>
-          <section class="settings-card">
+          <section id="settingsSectionModels" class="settings-card settings-section-panel hidden">
             <h3 class="settings-card-title">模型管理</h3>
             <div class="settings-form">
               <div class="settings-field">
@@ -268,14 +283,15 @@
               </div>
             </div>
           </section>
-        </div>
-        <section class="settings-card settings-release-card">
+          <section id="settingsSectionRelease" class="settings-card settings-release-card settings-section-panel hidden">
           <div class="settings-release-header">
             <h3 class="settings-card-title">Release Notes</h3>
             <span class="settings-release-note">数据源：README / What's Changed</span>
           </div>
           <div id="settingsReleaseNotes" class="settings-release-list"></div>
         </section>
+          </div>
+        </div>
       </section>
     </div>
 
@@ -313,6 +329,6 @@
       <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.5.1"></script>
+    <script src="/static/app.js?v=1.9.6.8"></script>
   </body>
 </html>

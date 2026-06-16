@@ -175,6 +175,20 @@ body {
   gap: 4px;
 }
 
+.topbar-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.topbar-version {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
 h1 {
   margin: 0;
   font-size: 20px;
@@ -266,13 +280,14 @@ body.search-bar-open .topbar-search {
 
 .settings-panel {
   position: relative;
-  width: min(1120px, calc(100vw - 28px));
-  max-height: calc(100vh - 28px);
-  margin: 14px auto;
+  width: min(1380px, calc(100vw - 24px));
+  height: calc(100vh - 24px);
+  max-height: calc(100vh - 24px);
+  margin: 12px auto;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 18px;
-  padding: 18px;
+  padding: 18px 18px 20px;
   overflow: auto;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
 }
@@ -298,11 +313,57 @@ body.search-bar-open .topbar-search {
   font-size: 22px;
 }
 
-.settings-grid {
+.settings-shell {
   display: grid;
-  grid-template-columns: minmax(260px, 0.95fr) minmax(360px, 1.25fr);
-  gap: 14px;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 16px;
   margin-top: 12px;
+}
+
+.settings-nav {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.settings-nav-btn {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--bg));
+  color: var(--text);
+  padding: 10px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.settings-nav-btn.active {
+  background: var(--row-selected);
+  border-color: var(--row-selected-outline);
+}
+
+.settings-nav-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-content {
+  min-width: 0;
+  display: grid;
+}
+
+.settings-section-panel.hidden {
+  display: none;
 }
 
 .settings-card {
@@ -404,10 +465,6 @@ body.search-bar-open .topbar-search {
 .settings-actions {
   display: flex;
   justify-content: flex-end;
-}
-
-.settings-release-card {
-  margin-top: 14px;
 }
 
 .settings-release-header {
@@ -2049,6 +2106,7 @@ html[data-detail-font="large"] {
 
   .settings-panel {
     width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
     max-height: calc(100vh - 16px);
     margin: 8px auto;
     padding: 14px;
@@ -2062,8 +2120,17 @@ html[data-detail-font="large"] {
     align-items: stretch;
   }
 
-  .settings-grid {
+  .settings-shell {
     grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .settings-nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .settings-nav-btn {
+    padding: 8px 0;
   }
 
   .topbar-brand {

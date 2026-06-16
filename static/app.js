@@ -39,6 +39,7 @@ let state = {
   settingsSaving: false,
   settingsSecretBusyProvider: "",
   settingsSecretEditorProvider: "",
+  settingsSection: "services",
   runtimeSettings: null,
   releaseNotes: [],
   settingsMessage: "",
@@ -145,6 +146,12 @@ const settingsBackdrop = document.getElementById("settingsBackdrop");
 const settingsCloseBtn = document.getElementById("settingsCloseBtn");
 const settingsStatus = document.getElementById("settingsStatus");
 const settingsApiStatus = document.getElementById("settingsApiStatus");
+const settingsNavServices = document.getElementById("settingsNavServices");
+const settingsNavModels = document.getElementById("settingsNavModels");
+const settingsNavRelease = document.getElementById("settingsNavRelease");
+const settingsSectionServices = document.getElementById("settingsSectionServices");
+const settingsSectionModels = document.getElementById("settingsSectionModels");
+const settingsSectionRelease = document.getElementById("settingsSectionRelease");
 const settingsTranslationProvider = document.getElementById("settingsTranslationProvider");
 const settingsTranslationModelSelect = document.getElementById("settingsTranslationModelSelect");
 const settingsTranslationModelCustom = document.getElementById("settingsTranslationModelCustom");
@@ -841,6 +848,30 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
   }
 }
 
+function renderSettingsNav() {
+  [
+    [settingsNavServices, "services"],
+    [settingsNavModels, "models"],
+    [settingsNavRelease, "release"],
+  ].forEach(([button, section]) => {
+    if (!button) return;
+    const active = state.settingsSection === section;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-current", active ? "page" : "false");
+  });
+}
+
+function renderSettingsSections() {
+  [
+    [settingsSectionServices, "services"],
+    [settingsSectionModels, "models"],
+    [settingsSectionRelease, "release"],
+  ].forEach(([sectionEl, section]) => {
+    if (!sectionEl) return;
+    sectionEl.classList.toggle("hidden", state.settingsSection !== section);
+  });
+}
+
 function syncModelCustomVisibility(select, customInput) {
   if (!select || !customInput) return;
   const useCustom = select.value === SETTINGS_CUSTOM_MODEL_VALUE;
@@ -900,6 +931,8 @@ function renderSettingsOverlay() {
   settingsOverlay.classList.toggle("hidden", !state.settingsOpen);
   settingsOverlay.setAttribute("aria-hidden", state.settingsOpen ? "false" : "true");
   if (!state.settingsOpen) return;
+  renderSettingsNav();
+  renderSettingsSections();
   renderSettingsApiStatus();
   renderReleaseNotes();
   populateSettingsForm();
@@ -3728,6 +3761,18 @@ if (settingsSaveBtn) {
     await saveRuntimeSettings();
   });
 }
+
+[
+  [settingsNavServices, "services"],
+  [settingsNavModels, "models"],
+  [settingsNavRelease, "release"],
+].forEach(([button, section]) => {
+  if (!button) return;
+  button.addEventListener("click", () => {
+    state.settingsSection = section;
+    renderSettingsOverlay();
+  });
+});
 
 if (settingsTranslationModelSelect) {
   settingsTranslationModelSelect.addEventListener("change", () => {
