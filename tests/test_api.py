@@ -3253,6 +3253,175 @@ def test_rejected_candidate_not_in_pending_candidate_library(tmp_path: Path, mon
     assert rejected["candidate_keywords"] == []
 
 
+def test_candidate_same_label_different_type_keeps_single_pending_row(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    with app_module.db_conn() as conn:
+        ts1 = app_module.now_ts()
+        with conn:
+            app_module.upsert_recommendation_keyword_candidate(
+                conn,
+                item_id="item-1",
+                label="热干面",
+                keyword_type="domain",
+                reason="第一条原因",
+                aliases=["武汉热干面"],
+                ts=ts1,
+            )
+            app_module.upsert_recommendation_keyword_candidate(
+                conn,
+                item_id="item-2",
+                label="热干面",
+                keyword_type="concept",
+                reason="第二条原因",
+                aliases=["热干面赛道"],
+                ts=app_module.now_ts(),
+            )
+        rows = conn.execute(
+            """
+            SELECT label, type, status, occurrence_count, aliases_json, sample_item_ids_json, reason
+            FROM recommendation_keyword_candidates
+            WHERE normalized_label=?
+            ORDER BY id ASC
+            """,
+            (app_module.normalize_keyword_candidate_label("热干面"),),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["type"] == "domain"
+    assert rows[0]["status"] == "pending"
+    assert rows[0]["occurrence_count"] == 2
+    assert json.loads(rows[0]["aliases_json"]) == ["武汉热干面", "热干面赛道"]
+    assert json.loads(rows[0]["sample_item_ids_json"]) == ["item-2", "item-1"]
+    assert rows[0]["reason"] == "第二条原因"
+
+    library = client.get("/api/recommendation-keywords").get_json()
+    assert len(library["candidate_keywords"]) == 1
+    assert library["candidate_keywords"][0]["label"] == "热干面"
+    assert library["candidate_keywords"][0]["type"] == "domain"
+
+
+def test_rejected_candidate_same_label_different_type_is_not_revived(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            app_module.upsert_recommendation_keyword_candidate(
+                conn,
+                item_id="item-1",
+                label="热干面",
+                keyword_type="domain",
+                reason="第一条原因",
+                aliases=[],
+                ts=ts,
+            )
+            candidate_id = conn.execute(
+                "SELECT id FROM recommendation_keyword_candidates WHERE normalized_label=?",
+                (app_module.normalize_keyword_candidate_label("热干面"),),
+            ).fetchone()["id"]
+            conn.execute(
+                """
+                UPDATE recommendation_keyword_candidates
+                SET status='rejected', reviewed_at=?, updated_at=?
+                WHERE id=?
+                """,
+                (ts, ts, candidate_id),
+            )
+            app_module.upsert_recommendation_keyword_candidate(
+                conn,
+                item_id="item-2",
+                label="热干面",
+                keyword_type="concept",
+                reason="第二条原因",
+                aliases=["热干面赛道"],
+                ts=app_module.now_ts(),
+            )
+        rows = conn.execute(
+            """
+            SELECT type, status, occurrence_count, aliases_json, sample_item_ids_json
+            FROM recommendation_keyword_candidates
+            WHERE normalized_label=?
+            ORDER BY id ASC
+            """,
+            (app_module.normalize_keyword_candidate_label("热干面"),),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["type"] == "domain"
+    assert rows[0]["status"] == "rejected"
+    assert rows[0]["occurrence_count"] == 2
+    assert json.loads(rows[0]["aliases_json"]) == ["热干面赛道"]
+    assert json.loads(rows[0]["sample_item_ids_json"]) == ["item-2", "item-1"]
+
+    library = client.get("/api/recommendation-keywords").get_json()
+    assert library["candidate_keywords"] == []
+
+
+def test_existing_duplicate_pending_candidates_are_collapsed_by_label(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    with app_module.db_conn() as conn:
+        normalized = app_module.normalize_keyword_candidate_label("热干面")
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO recommendation_keyword_candidates(
+                  normalized_label, label, type, aliases_json, reason, sample_item_ids_json, occurrence_count, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, '[]', ?, '[]', 3, 'pending', ?, ?)
+                """,
+                (normalized, "热干面", "domain", "旧 pending", ts, ts),
+            )
+            conn.execute(
+                """
+                INSERT INTO recommendation_keyword_candidates(
+                  normalized_label, label, type, aliases_json, reason, sample_item_ids_json, occurrence_count, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, '[]', ?, '[]', 1, 'pending', ?, ?)
+                """,
+                (normalized, "热干面", "concept", "新 pending", ts, ts),
+            )
+
+    library = client.get("/api/recommendation-keywords").get_json()
+    assert len(library["candidate_keywords"]) == 1
+    assert library["candidate_keywords"][0]["label"] == "热干面"
+    assert library["candidate_keywords"][0]["type"] == "domain"
+    assert library["candidate_keywords"][0]["occurrence_count"] == 3
+
+
 def test_recommendation_keyword_rebuild_resets_jobs_and_candidates(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)

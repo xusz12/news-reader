@@ -712,11 +712,14 @@ def upsert_recommendation_keyword_candidate(
     normalized_label = normalize_keyword_candidate_label(label)
     existing = conn.execute(
         """
-        SELECT id, occurrence_count, sample_item_ids_json, aliases_json
+        SELECT id, type, status, occurrence_count, sample_item_ids_json, aliases_json, reason
         FROM recommendation_keyword_candidates
-        WHERE normalized_label=? AND type=?
+        WHERE normalized_label=?
+        ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
+                 updated_at DESC,
+                 id DESC
         """,
-        (normalized_label, keyword_type),
+        (normalized_label,),
     ).fetchone()
     if existing:
         try:
@@ -734,6 +737,7 @@ def upsert_recommendation_keyword_candidate(
                 merged_aliases.append(text[:80])
         if item_id not in sample_item_ids:
             sample_item_ids = [item_id, *sample_item_ids][:12]
+        merged_reason = str(reason or "").strip()[:200] or str(existing["reason"] or "")[:200]
         conn.execute(
             """
             UPDATE recommendation_keyword_candidates
@@ -748,7 +752,7 @@ def upsert_recommendation_keyword_candidate(
             (
                 label[:80],
                 json.dumps(merged_aliases, ensure_ascii=False),
-                reason[:200],
+                merged_reason,
                 json.dumps(sample_item_ids, ensure_ascii=False),
                 int(existing["occurrence_count"] or 0) + 1,
                 ts,
@@ -1064,12 +1068,17 @@ def load_recommendation_keyword_library(conn: sqlite3.Connection) -> dict[str, o
         """
     ).fetchall()
     candidates: list[dict[str, object]] = []
+    seen_candidate_labels: set[str] = set()
     for row in candidate_rows:
+        normalized_label = row["normalized_label"] or ""
+        if normalized_label in seen_candidate_labels:
+            continue
+        seen_candidate_labels.add(normalized_label)
         sample_item_ids = [str(item_id).strip() for item_id in parse_json_array(row["sample_item_ids_json"]) if str(item_id).strip()]
         candidates.append(
             {
                 "id": int(row["id"]),
-                "normalized_label": row["normalized_label"] or "",
+                "normalized_label": normalized_label,
                 "label": row["label"] or "",
                 "type": row["type"] or "domain",
                 "aliases": [str(alias).strip() for alias in parse_json_array(row["aliases_json"]) if str(alias).strip()],
