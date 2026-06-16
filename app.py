@@ -464,7 +464,6 @@ def recommendation_seed_keywords() -> list[dict[str, object]]:
 def seed_recommendation_keywords(conn: sqlite3.Connection) -> None:
     ts = now_ts()
     seeded_keywords = recommendation_seed_keywords()
-    seeded_by_key = {str(keyword["key"]): keyword for keyword in seeded_keywords}
     existing = {
         row["key"]: dict(row)
         for row in conn.execute(
@@ -492,11 +491,6 @@ def seed_recommendation_keywords(conn: sqlite3.Connection) -> None:
         return values
 
     with conn:
-        for key, row in existing.items():
-            source = str(row.get("source") or "")
-            if source.startswith(RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX):
-                continue
-
         for keyword in seeded_keywords:
             key = str(keyword["key"])
             aliases_json = json.dumps(keyword["aliases"], ensure_ascii=False)
@@ -504,27 +498,6 @@ def seed_recommendation_keywords(conn: sqlite3.Connection) -> None:
                 existing_source = str(existing[key].get("source") or "")
                 if existing_source.startswith(RECOMMENDATION_KEYWORD_DELETED_SOURCE_PREFIX):
                     continue
-                try:
-                    current_aliases = json.loads(existing[key].get("aliases_json") or "[]")
-                except json.JSONDecodeError:
-                    current_aliases = []
-                merged = merged_aliases(keyword["aliases"], current_aliases)
-                active = 0 if key in RECOMMENDATION_KEYWORD_DISABLED_KEYS else 1
-                conn.execute(
-                    """
-                    UPDATE recommendation_keywords
-                    SET label=?, type=?, aliases_json=?, source=?, updated_at=?
-                    WHERE key=?
-                    """,
-                    (
-                        keyword["label"],
-                        keyword["type"],
-                        json.dumps(merged, ensure_ascii=False),
-                        keyword["source"],
-                        ts,
-                        key,
-                    ),
-                )
                 continue
             active = 0 if key in RECOMMENDATION_KEYWORD_DISABLED_KEYS else 1
             conn.execute(
@@ -1084,8 +1057,8 @@ def load_recommendation_keyword_library(conn: sqlite3.Connection) -> dict[str, o
                updated_at,
                reviewed_at
         FROM recommendation_keyword_candidates
-        ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'merged' THEN 1 WHEN 'accepted' THEN 2 ELSE 3 END,
-                 occurrence_count DESC,
+        WHERE status='pending'
+        ORDER BY occurrence_count DESC,
                  updated_at DESC,
                  id DESC
         """

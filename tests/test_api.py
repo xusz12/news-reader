@@ -2867,6 +2867,8 @@ def test_recommendation_keyword_library_review_merge_and_requeue(tmp_path: Path,
     assert "热干面" in aliases
     assert job_row["status"] == "pending"
     assert job_row["keyword_count"] == 0
+    library_after = client.get("/api/recommendation-keywords").get_json()
+    assert library_after["candidate_keywords"] == []
 
 
 def test_recommendation_keyword_disable_requeues_existing_matches(tmp_path: Path, monkeypatch):
@@ -3141,6 +3143,114 @@ def test_market_tag_source_keyword_user_enable_survives_restart(tmp_path: Path, 
     library = client.get("/api/recommendation-keywords").get_json()
     active = next(item for item in library["active_keywords"] if item["key"] == "regulation_cn")
     assert active["label"] == "监管"
+
+
+def test_seed_keyword_edit_persists_across_ensure_db_and_recommendations_init(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    updated = client.patch(
+        "/api/recommendation-keywords/gold",
+        json={"label": "黄金资产", "type": "domain", "aliases": "黄金, 贵金属", "active": True},
+    )
+    assert updated.status_code == 200
+
+    app_module.ensure_db()
+    library_after_ensure = client.get("/api/recommendation-keywords").get_json()
+    gold_after_ensure = next(item for item in library_after_ensure["active_keywords"] if item["key"] == "gold")
+    assert gold_after_ensure["label"] == "黄金资产"
+    assert gold_after_ensure["aliases"] == ["黄金", "贵金属"]
+
+    init_payload = client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+    assert init_payload["ok"] is True
+    library_after_init = client.get("/api/recommendation-keywords").get_json()
+    gold_after_init = next(item for item in library_after_init["active_keywords"] if item["key"] == "gold")
+    assert gold_after_init["label"] == "黄金资产"
+    assert gold_after_init["aliases"] == ["黄金", "贵金属"]
+
+
+def test_soft_deleted_seed_keyword_stays_hidden_across_ensure_db_and_recommendations_init(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    deleted = client.delete("/api/recommendation-keywords/gold")
+    assert deleted.status_code == 200
+
+    app_module.ensure_db()
+    library_after_ensure = client.get("/api/recommendation-keywords").get_json()
+    assert all(item["key"] != "gold" for item in library_after_ensure["active_keywords"])
+    assert all(item["key"] != "gold" for item in library_after_ensure["disabled_keywords"])
+
+    init_payload = client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+    assert init_payload["ok"] is True
+    library_after_init = client.get("/api/recommendation-keywords").get_json()
+    assert all(item["key"] != "gold" for item in library_after_init["active_keywords"])
+    assert all(item["key"] != "gold" for item in library_after_init["disabled_keywords"])
+
+
+def test_rejected_candidate_not_in_pending_candidate_library(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-14.md").write_text(
+        """## Reuters · Tech（1条）
+### [Lei Jun Eats Hot Dry Noodles](https://example.com/lei-jun)
+- 发布时间：2026-06-14 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    client.post("/api/recommendations/init", json={"limit": 10}).get_json()
+    monkeypatch.setattr(
+        app_module,
+        "generate_recommendation_keywords",
+        lambda **kwargs: {
+            "model": "deepseek-chat",
+            "canonical_keywords": [],
+            "candidate_keywords": [
+                {"label": "热干面", "type": "domain", "reason": "现有词库无法准确覆盖武汉早餐语义", "aliases": ["武汉热干面"]}
+            ],
+            "needs_keyword_reason": "现有 active 词库无法准确覆盖餐饮语义",
+            "raw_json": "{}",
+        },
+    )
+    assert app_module.process_pending_recommendation_keyword_once() is True
+    candidate = client.get("/api/recommendation-keywords").get_json()["candidate_keywords"][0]
+    rejected = client.post(
+        f"/api/recommendation-keywords/candidates/{candidate['id']}/review",
+        json={"action": "reject"},
+    ).get_json()
+    assert rejected["ok"] is True
+    assert rejected["candidate_keywords"] == []
 
 
 def test_recommendation_keyword_rebuild_resets_jobs_and_candidates(tmp_path: Path, monkeypatch):
