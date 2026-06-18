@@ -124,6 +124,11 @@ CREATE TABLE IF NOT EXISTS market_tag_definitions (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS market_tag_deleted_keys (
+  key TEXT PRIMARY KEY,
+  deleted_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS market_trend_notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   date_key TEXT NOT NULL,

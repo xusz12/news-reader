@@ -1372,6 +1372,162 @@ def test_market_tag_definitions_crud_and_dynamic_usage(tmp_path: Path, monkeypat
     assert historical_tag["tag"] == "大宏观"
 
 
+def test_market_tag_delete_removes_associations_and_blocks_default_reseed(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（1条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-02 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    assert client.put(
+        f"/api/news/{item['id']}/market-tag",
+        json={"tag": "AI", "direction": "bullish"},
+    ).status_code == 200
+    note_res = client.put(
+        "/api/market-trend-note",
+        json={"date_key": "2026-06-02", "tag": "AI", "direction": "bullish", "note": "继续看多 AI"},
+    )
+    assert note_res.status_code == 200
+
+    impact = client.get("/api/market-tags/AI/impact")
+    assert impact.status_code == 200
+    assert impact.get_json()["affected"] == {"item_tag_count": 1, "trend_note_count": 1}
+
+    delete_res = client.delete("/api/market-tags/AI")
+    assert delete_res.status_code == 200
+    payload = delete_res.get_json()
+    assert payload["deleted_tag"]["key"] == "AI"
+    assert payload["affected"] == {"item_tag_count": 1, "trend_note_count": 1}
+    assert all(tag["key"] != "AI" for tag in payload["tags"])
+
+    detail_payload = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert all(tag["key"] != "AI" for tag in detail_payload["market_tags"])
+
+    market_tags_payload = client.get("/api/news?collection=market_tags&per=20").get_json()
+    assert market_tags_payload["items"] == []
+
+    trend_payload = client.get("/api/market-trends?days=7").get_json()
+    assert all(row["tag_key"] != "AI" for row in trend_payload["rows"])
+
+    with app_module.db_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM article_market_tags WHERE tag='AI'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM market_trend_notes WHERE tag='AI'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM market_tag_deleted_keys WHERE key='AI'").fetchone()[0] == 1
+
+    app_module.ensure_db()
+    tags_after_reseed = client.get("/api/market-tags").get_json()["tags"]
+    assert all(tag["key"] != "AI" for tag in tags_after_reseed)
+
+
+def test_market_tag_merge_moves_links_and_notes_and_dedupes_urls(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（2条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-02 09:00:00
+### [R2](https://www.reuters.com/world/r2)
+- 发布时间：2026-06-02 10:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    create_res = client.post("/api/market-tags", json={"display_name": "人工智能"})
+    assert create_res.status_code == 200
+    source_key = create_res.get_json()["tag"]["key"]
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    item1 = next(item for item in items if item["title"] == "R1")
+    item2 = next(item for item in items if item["title"] == "R2")
+    assert client.put(f"/api/news/{item1['id']}/market-tag", json={"tag": source_key, "direction": "bullish"}).status_code == 200
+    assert client.put(f"/api/news/{item1['id']}/market-tag", json={"tag": "AI", "direction": "bearish"}).status_code == 200
+    assert client.put(f"/api/news/{item2['id']}/market-tag", json={"tag": source_key, "direction": "bullish"}).status_code == 200
+    assert client.put(
+        "/api/market-trend-note",
+        json={"date_key": "2026-06-02", "tag": source_key, "direction": "bullish", "note": "AI 主线继续强化"},
+    ).status_code == 200
+
+    merge_res = client.post(f"/api/market-tags/{source_key}/merge", json={"target_key": "AI"})
+    assert merge_res.status_code == 200
+    payload = merge_res.get_json()
+    assert payload["moved_item_tag_count"] == 1
+    assert payload["skipped_duplicate_item_tag_count"] == 1
+    assert payload["moved_trend_note_count"] == 1
+    assert all(tag["key"] != source_key for tag in payload["tags"])
+
+    detail1 = client.get(f"/api/news/{item1['id']}/detail").get_json()
+    item1_ai_tags = [tag for tag in detail1["market_tags"] if tag["key"] == "AI"]
+    assert len(item1_ai_tags) == 1
+    assert item1_ai_tags[0]["direction"] == "bearish"
+
+    detail2 = client.get(f"/api/news/{item2['id']}/detail").get_json()
+    item2_ai_tags = [tag for tag in detail2["market_tags"] if tag["key"] == "AI"]
+    assert len(item2_ai_tags) == 1
+    assert item2_ai_tags[0]["direction"] == "bullish"
+
+    tag_detail = client.get("/api/market-trends/tag-detail?tag=AI").get_json()
+    assert tag_detail["ok"] is True
+    assert tag_detail["tag_key"] == "AI"
+    assert any(note["tag_key"] == "AI" for note in tag_detail["trend_notes"])
+
+    with app_module.db_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM market_tag_definitions WHERE key=?", (source_key,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM article_market_tags WHERE tag=?", (source_key,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM market_trend_notes WHERE tag=?", (source_key,)).fetchone()[0] == 0
+
+
+def test_market_tag_merge_errors(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    same_res = client.post("/api/market-tags/AI/merge", json={"target_key": "AI"})
+    assert same_res.status_code == 400
+    assert same_res.get_json()["error"] == "same_source_target"
+
+    missing_target = client.post("/api/market-tags/AI/merge", json={"target_key": "missing"})
+    assert missing_target.status_code == 404
+    assert missing_target.get_json()["error"] == "target_tag_not_found"
+
+    missing_source = client.post("/api/market-tags/missing/merge", json={"target_key": "AI"})
+    assert missing_source.status_code == 404
+    assert missing_source.get_json()["error"] == "tag_not_found"
+
+
 def test_market_trend_notes_manual_signal(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)

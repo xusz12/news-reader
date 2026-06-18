@@ -907,13 +907,30 @@ def serialize_news_rows(items: list[dict], market_tags_map: dict[str, list[dict]
 
 
 def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
-    where_sql = "WHERE active=1" if active_only else ""
+    where_sql = "WHERE mtd.active=1" if active_only else ""
     rows = conn.execute(
         f"""
-        SELECT key, display_name, active, sort_order, created_at, updated_at
-        FROM market_tag_definitions
+        SELECT mtd.key,
+               mtd.display_name,
+               mtd.active,
+               mtd.sort_order,
+               mtd.created_at,
+               mtd.updated_at,
+               COALESCE(amt.item_tag_count, 0) AS item_tag_count,
+               COALESCE(mtn.trend_note_count, 0) AS trend_note_count
+        FROM market_tag_definitions mtd
+        LEFT JOIN (
+            SELECT tag, COUNT(*) AS item_tag_count
+            FROM article_market_tags
+            GROUP BY tag
+        ) amt ON amt.tag = mtd.key
+        LEFT JOIN (
+            SELECT tag, COUNT(*) AS trend_note_count
+            FROM market_trend_notes
+            GROUP BY tag
+        ) mtn ON mtn.tag = mtd.key
         {where_sql}
-        ORDER BY sort_order ASC, created_at ASC, key ASC
+        ORDER BY mtd.sort_order ASC, mtd.created_at ASC, mtd.key ASC
         """
     ).fetchall()
     return [dict(r) for r in rows]
@@ -924,6 +941,10 @@ def load_market_tag_definition_map(conn: sqlite3.Connection) -> dict[str, dict]:
 
 
 def seed_market_tag_definitions(conn: sqlite3.Connection) -> None:
+    deleted_keys = {
+        row["key"]
+        for row in conn.execute("SELECT key FROM market_tag_deleted_keys").fetchall()
+    }
     existing = {
         row["key"]: row["display_name"]
         for row in conn.execute("SELECT key, display_name FROM market_tag_definitions").fetchall()
@@ -931,6 +952,8 @@ def seed_market_tag_definitions(conn: sqlite3.Connection) -> None:
     ts = now_ts()
     with conn:
         for idx, tag in enumerate(DEFAULT_MARKET_TAG_CHOICES):
+            if tag in deleted_keys:
+                continue
             if tag in existing:
                 continue
             conn.execute(
@@ -995,10 +1018,24 @@ def create_market_tag_key(conn: sqlite3.Connection, display_name: str) -> str:
     base = display_name.strip()
     candidate = base
     suffix = 2
-    while conn.execute("SELECT 1 FROM market_tag_definitions WHERE key=?", (candidate,)).fetchone():
+    while (
+        conn.execute("SELECT 1 FROM market_tag_definitions WHERE key=?", (candidate,)).fetchone()
+        or conn.execute("SELECT 1 FROM market_tag_deleted_keys WHERE key=?", (candidate,)).fetchone()
+    ):
         candidate = f"{base} ({suffix})"
         suffix += 1
     return candidate
+
+
+def market_tag_impact_counts(conn: sqlite3.Connection, tag_key: str) -> dict[str, int]:
+    return {
+        "item_tag_count": int(
+            conn.execute("SELECT COUNT(*) FROM article_market_tags WHERE tag=?", (tag_key,)).fetchone()[0] or 0
+        ),
+        "trend_note_count": int(
+            conn.execute("SELECT COUNT(*) FROM market_trend_notes WHERE tag=?", (tag_key,)).fetchone()[0] or 0
+        ),
+    }
 
 
 def load_market_tags_map(conn: sqlite3.Connection, urls: list[str]) -> dict[str, list[dict]]:
@@ -2832,6 +2869,157 @@ def api_market_tags_update(tag_key: str):
     finally:
         conn.close()
     return jsonify({"ok": True, "tag": dict(updated)})
+
+
+@app.get("/api/market-tags/<tag_key>/impact")
+def api_market_tags_impact(tag_key: str):
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            "SELECT key, display_name FROM market_tag_definitions WHERE key=?",
+            (tag_key,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "tag_not_found"}), 404
+        affected = market_tag_impact_counts(conn, tag_key)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "tag": dict(existing), "affected": affected})
+
+
+@app.delete("/api/market-tags/<tag_key>")
+def api_market_tags_delete(tag_key: str):
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            "SELECT key, display_name FROM market_tag_definitions WHERE key=?",
+            (tag_key,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "tag_not_found"}), 404
+        affected = market_tag_impact_counts(conn, tag_key)
+        ts = now_ts()
+        with conn:
+            conn.execute("DELETE FROM article_market_tags WHERE tag=?", (tag_key,))
+            conn.execute("DELETE FROM market_trend_notes WHERE tag=?", (tag_key,))
+            conn.execute("DELETE FROM market_tag_definitions WHERE key=?", (tag_key,))
+            if tag_key in DEFAULT_MARKET_TAG_CHOICES:
+                conn.execute(
+                    """
+                    INSERT INTO market_tag_deleted_keys(key, deleted_at)
+                    VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET deleted_at=excluded.deleted_at
+                    """,
+                    (tag_key, ts),
+                )
+        remaining_tags = load_market_tag_definitions(conn, active_only=False)
+    finally:
+        conn.close()
+    return jsonify(
+        {
+            "ok": True,
+            "deleted_tag": dict(existing),
+            "affected": affected,
+            "tags": remaining_tags,
+        }
+    )
+
+
+@app.post("/api/market-tags/<tag_key>/merge")
+def api_market_tags_merge(tag_key: str):
+    body = request.get_json(silent=True) or {}
+    target_key = (body.get("target_key") or "").strip()
+    if not target_key:
+        return jsonify({"ok": False, "error": "missing_target_key"}), 400
+    if target_key == tag_key:
+        return jsonify({"ok": False, "error": "same_source_target"}), 400
+
+    conn = db_conn()
+    try:
+        source = conn.execute(
+            "SELECT key, display_name FROM market_tag_definitions WHERE key=?",
+            (tag_key,),
+        ).fetchone()
+        if not source:
+            return jsonify({"ok": False, "error": "tag_not_found"}), 404
+        target = conn.execute(
+            "SELECT key, display_name FROM market_tag_definitions WHERE key=?",
+            (target_key,),
+        ).fetchone()
+        if not target:
+            return jsonify({"ok": False, "error": "target_tag_not_found"}), 404
+
+        moved_item_tag_count = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM article_market_tags src
+                WHERE src.tag=?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM article_market_tags dst
+                      WHERE dst.url = src.url AND dst.tag = ?
+                  )
+                """,
+                (tag_key, target_key),
+            ).fetchone()[0]
+            or 0
+        )
+        skipped_duplicate_item_tag_count = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM article_market_tags src
+                WHERE src.tag=?
+                  AND EXISTS (
+                      SELECT 1 FROM article_market_tags dst
+                      WHERE dst.url = src.url AND dst.tag = ?
+                  )
+                """,
+                (tag_key, target_key),
+            ).fetchone()[0]
+            or 0
+        )
+        moved_trend_note_count = int(
+            conn.execute("SELECT COUNT(*) FROM market_trend_notes WHERE tag=?", (tag_key,)).fetchone()[0] or 0
+        )
+        ts = now_ts()
+        with conn:
+            conn.execute(
+                """
+                DELETE FROM article_market_tags
+                WHERE tag=?
+                  AND EXISTS (
+                      SELECT 1 FROM article_market_tags dst
+                      WHERE dst.url = article_market_tags.url AND dst.tag = ?
+                  )
+                """,
+                (tag_key, target_key),
+            )
+            conn.execute(
+                "UPDATE article_market_tags SET tag=?, updated_at=? WHERE tag=?",
+                (target_key, ts, tag_key),
+            )
+            conn.execute(
+                "UPDATE market_trend_notes SET tag=?, updated_at=? WHERE tag=?",
+                (target_key, ts, tag_key),
+            )
+            conn.execute("DELETE FROM market_tag_definitions WHERE key=?", (tag_key,))
+            conn.execute("DELETE FROM market_tag_deleted_keys WHERE key=?", (tag_key,))
+        remaining_tags = load_market_tag_definitions(conn, active_only=False)
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "source_tag": dict(source),
+            "target_tag": dict(target),
+            "moved_item_tag_count": moved_item_tag_count,
+            "skipped_duplicate_item_tag_count": skipped_duplicate_item_tag_count,
+            "moved_trend_note_count": moved_trend_note_count,
+            "tags": remaining_tags,
+        }
+    )
 
 
 @app.put("/api/news/<item_id>/note")

@@ -361,6 +361,36 @@ async function updateMarketTagDefinition(tagKey, payload) {
   return data.tag;
 }
 
+async function fetchMarketTagImpact(tagKey) {
+  const res = await fetch(`/api/market-tags/${encodeURIComponent(tagKey)}/impact`);
+  if (!res.ok) throw new Error("market_tag_impact_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_tag_impact_failed");
+  return data;
+}
+
+async function deleteMarketTagDefinition(tagKey) {
+  const res = await fetch(`/api/market-tags/${encodeURIComponent(tagKey)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("market_tag_delete_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_tag_delete_failed");
+  return data;
+}
+
+async function mergeMarketTagDefinition(tagKey, targetKey) {
+  const res = await fetch(`/api/market-tags/${encodeURIComponent(tagKey)}/merge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_key: targetKey }),
+  });
+  if (!res.ok) throw new Error("market_tag_merge_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_tag_merge_failed");
+  return data;
+}
+
 function clearFeedEndAutoReadTimer() {
   if (!feedEndAutoReadTimer) return;
   window.clearTimeout(feedEndAutoReadTimer);
@@ -1736,27 +1766,72 @@ function renderTagAdminList() {
       }
     });
 
-    const toggleBtn = document.createElement("button");
-    toggleBtn.type = "button";
-    toggleBtn.className = "detail-retry-btn";
-    toggleBtn.textContent = Number(tag.active || 0) === 1 ? "停用" : "启用";
-    toggleBtn.addEventListener("click", async () => {
-      toggleBtn.disabled = true;
+    const mergeSelect = document.createElement("select");
+    mergeSelect.className = "detail-tag-admin-input";
+    const mergePlaceholder = document.createElement("option");
+    mergePlaceholder.value = "";
+    mergePlaceholder.textContent = "合并到...";
+    mergeSelect.appendChild(mergePlaceholder);
+    state.marketTagChoices
+      .filter((candidate) => candidate.key !== tag.key)
+      .forEach((candidate) => {
+        const option = document.createElement("option");
+        option.value = candidate.key;
+        option.textContent = candidate.display_name || candidate.key;
+        mergeSelect.appendChild(option);
+      });
+
+    const mergeBtn = document.createElement("button");
+    mergeBtn.type = "button";
+    mergeBtn.className = "detail-retry-btn";
+    mergeBtn.textContent = "合并";
+    mergeBtn.addEventListener("click", async () => {
+      const targetKey = mergeSelect.value || "";
+      if (!targetKey) return;
+      const target = state.marketTagChoices.find((candidate) => candidate.key === targetKey);
+      const ok = window.confirm(
+        `确认将“${tag.display_name || tag.key}”合并到“${target?.display_name || targetKey}”？该板块的新闻关联和趋势想法会迁移到目标板块，旧板块将被删除。`
+      );
+      if (!ok) return;
+      mergeBtn.disabled = true;
+      mergeSelect.disabled = true;
       try {
-        await updateMarketTagDefinition(tag.key, { active: Number(tag.active || 0) !== 1 });
+        await mergeMarketTagDefinition(tag.key, targetKey);
         await refreshTrendTagAdminState();
       } finally {
-        toggleBtn.disabled = false;
+        mergeBtn.disabled = false;
+        mergeSelect.disabled = false;
+      }
+    });
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "detail-retry-btn";
+    deleteBtn.textContent = "删除";
+    deleteBtn.addEventListener("click", async () => {
+      deleteBtn.disabled = true;
+      try {
+        const impact = await fetchMarketTagImpact(tag.key);
+        const ok = window.confirm(
+          `确认删除“${tag.display_name || tag.key}”？\n将解除 ${impact.affected.item_tag_count} 条新闻关联，并删除 ${impact.affected.trend_note_count} 条板块想法。`
+        );
+        if (!ok) return;
+        await deleteMarketTagDefinition(tag.key);
+        await refreshTrendTagAdminState();
+      } finally {
+        deleteBtn.disabled = false;
       }
     });
 
     const metaText = document.createElement("span");
     metaText.className = "detail-tag-admin-meta";
-    metaText.textContent = Number(tag.active || 0) === 1 ? "启用中" : "已停用";
+    metaText.textContent = `关联新闻 ${Number(tag.item_tag_count || 0)} · 板块想法 ${Number(tag.trend_note_count || 0)}`;
 
     row.appendChild(input);
     row.appendChild(saveBtn);
-    row.appendChild(toggleBtn);
+    row.appendChild(mergeSelect);
+    row.appendChild(mergeBtn);
+    row.appendChild(deleteBtn);
     row.appendChild(metaText);
     detailTagAdminList.appendChild(row);
   });
