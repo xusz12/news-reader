@@ -20,6 +20,7 @@ let state = {
   trendSelection: null,
   trendNoteContext: null,
   marketTagChoices: [],
+  selectedTagAdminKey: "",
   tagAdminOpen: false,
   trendComposeOpen: false,
   dateCounts: new Map(),
@@ -1732,113 +1733,197 @@ function openTrendNoteEditor(input) {
 
 function closeTagAdminView() {
   state.tagAdminOpen = false;
+  state.selectedTagAdminKey = "";
   if (detailTagAdminBody) {
     detailTagAdminBody.classList.add("hidden");
   }
 }
 
+function getSelectedTagAdminItem() {
+  if (!state.selectedTagAdminKey) return null;
+  return state.marketTagChoices.find((tag) => tag.key === state.selectedTagAdminKey) || null;
+}
+
 function renderTagAdminList() {
   if (!detailTagAdminList) return;
   detailTagAdminList.innerHTML = "";
+  const grid = document.createElement("div");
+  grid.className = "detail-tag-admin-grid";
+
   state.marketTagChoices.forEach((tag) => {
-    const row = document.createElement("div");
-    row.className = "detail-tag-admin-row";
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.className = "detail-tag-admin-input";
-    input.value = tag.display_name || tag.key;
-    input.maxLength = 40;
-
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "detail-retry-btn";
-    saveBtn.textContent = "保存";
-    saveBtn.addEventListener("click", async () => {
-      const nextName = input.value.trim();
-      if (!nextName || nextName === tag.display_name) return;
-      saveBtn.disabled = true;
-      try {
-        await updateMarketTagDefinition(tag.key, { display_name: nextName });
-        await refreshTrendTagAdminState();
-      } finally {
-        saveBtn.disabled = false;
-      }
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `detail-tag-admin-card${state.selectedTagAdminKey === tag.key ? " is-active" : ""}`;
+    card.setAttribute("aria-pressed", state.selectedTagAdminKey === tag.key ? "true" : "false");
+    card.addEventListener("click", () => {
+      state.selectedTagAdminKey = state.selectedTagAdminKey === tag.key ? "" : tag.key;
+      renderTagAdminList();
     });
 
-    const mergeSelect = document.createElement("select");
-    mergeSelect.className = "detail-tag-admin-input";
-    const mergePlaceholder = document.createElement("option");
-    mergePlaceholder.value = "";
-    mergePlaceholder.textContent = "合并到...";
-    mergeSelect.appendChild(mergePlaceholder);
-    state.marketTagChoices
-      .filter((candidate) => candidate.key !== tag.key)
-      .forEach((candidate) => {
-        const option = document.createElement("option");
-        option.value = candidate.key;
-        option.textContent = candidate.display_name || candidate.key;
-        mergeSelect.appendChild(option);
-      });
-
-    const mergeBtn = document.createElement("button");
-    mergeBtn.type = "button";
-    mergeBtn.className = "detail-retry-btn";
-    mergeBtn.textContent = "合并";
-    mergeBtn.addEventListener("click", async () => {
-      const targetKey = mergeSelect.value || "";
-      if (!targetKey) return;
-      const target = state.marketTagChoices.find((candidate) => candidate.key === targetKey);
-      const ok = window.confirm(
-        `确认将“${tag.display_name || tag.key}”合并到“${target?.display_name || targetKey}”？该板块的新闻关联和趋势想法会迁移到目标板块，旧板块将被删除。`
-      );
-      if (!ok) return;
-      mergeBtn.disabled = true;
-      mergeSelect.disabled = true;
-      try {
-        await mergeMarketTagDefinition(tag.key, targetKey);
-        await refreshTrendTagAdminState();
-      } finally {
-        mergeBtn.disabled = false;
-        mergeSelect.disabled = false;
-      }
-    });
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.type = "button";
-    deleteBtn.className = "detail-retry-btn";
-    deleteBtn.textContent = "删除";
-    deleteBtn.addEventListener("click", async () => {
-      deleteBtn.disabled = true;
-      try {
-        const impact = await fetchMarketTagImpact(tag.key);
-        const ok = window.confirm(
-          `确认删除“${tag.display_name || tag.key}”？\n将解除 ${impact.affected.item_tag_count} 条新闻关联，并删除 ${impact.affected.trend_note_count} 条板块想法。`
-        );
-        if (!ok) return;
-        await deleteMarketTagDefinition(tag.key);
-        await refreshTrendTagAdminState();
-      } finally {
-        deleteBtn.disabled = false;
-      }
-    });
+    const title = document.createElement("strong");
+    title.className = "detail-tag-admin-card-title";
+    title.textContent = tag.display_name || tag.key;
 
     const metaText = document.createElement("span");
-    metaText.className = "detail-tag-admin-meta";
-    metaText.textContent = `关联新闻 ${Number(tag.item_tag_count || 0)} · 板块想法 ${Number(tag.trend_note_count || 0)}`;
+    metaText.className = "detail-tag-admin-card-meta";
+    metaText.textContent = `新闻 ${Number(tag.item_tag_count || 0)} · 想法 ${Number(tag.trend_note_count || 0)}`;
 
-    row.appendChild(input);
-    row.appendChild(saveBtn);
-    row.appendChild(mergeSelect);
-    row.appendChild(mergeBtn);
-    row.appendChild(deleteBtn);
-    row.appendChild(metaText);
-    detailTagAdminList.appendChild(row);
+    card.appendChild(title);
+    card.appendChild(metaText);
+    grid.appendChild(card);
   });
+
+  detailTagAdminList.appendChild(grid);
+
+  const selectedTag = getSelectedTagAdminItem();
+  if (!selectedTag) return;
+
+  const panel = document.createElement("section");
+  panel.className = "detail-tag-admin-panel";
+
+  const panelTitle = document.createElement("div");
+  panelTitle.className = "detail-tag-admin-panel-title";
+  panelTitle.textContent = `选中板块：${selectedTag.display_name || selectedTag.key}`;
+  panel.appendChild(panelTitle);
+
+  const renameRow = document.createElement("div");
+  renameRow.className = "detail-tag-admin-action-row";
+
+  const renameLabel = document.createElement("span");
+  renameLabel.className = "detail-tag-admin-action-label";
+  renameLabel.textContent = "重命名";
+
+  const renameInput = document.createElement("input");
+  renameInput.type = "text";
+  renameInput.className = "detail-tag-admin-input";
+  renameInput.value = selectedTag.display_name || selectedTag.key;
+  renameInput.maxLength = 40;
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "detail-retry-btn";
+  saveBtn.textContent = "保存";
+  const syncSaveState = () => {
+    const nextName = renameInput.value.trim();
+    saveBtn.disabled = !nextName || nextName === (selectedTag.display_name || selectedTag.key);
+  };
+  syncSaveState();
+  renameInput.addEventListener("input", syncSaveState);
+  saveBtn.addEventListener("click", async () => {
+    const nextName = renameInput.value.trim();
+    if (!nextName || nextName === (selectedTag.display_name || selectedTag.key)) return;
+    saveBtn.disabled = true;
+    renameInput.disabled = true;
+    try {
+      await updateMarketTagDefinition(selectedTag.key, { display_name: nextName });
+      await refreshTrendTagAdminState(selectedTag.key);
+    } finally {
+      renameInput.disabled = false;
+    }
+  });
+
+  renameRow.appendChild(renameLabel);
+  renameRow.appendChild(renameInput);
+  renameRow.appendChild(saveBtn);
+  panel.appendChild(renameRow);
+
+  const mergeRow = document.createElement("div");
+  mergeRow.className = "detail-tag-admin-action-row";
+
+  const mergeLabel = document.createElement("span");
+  mergeLabel.className = "detail-tag-admin-action-label";
+  mergeLabel.textContent = "合并到";
+
+  const mergeSelect = document.createElement("select");
+  mergeSelect.className = "detail-tag-admin-input";
+  const mergePlaceholder = document.createElement("option");
+  mergePlaceholder.value = "";
+  mergePlaceholder.textContent = "选择目标板块";
+  mergeSelect.appendChild(mergePlaceholder);
+  state.marketTagChoices
+    .filter((candidate) => candidate.key !== selectedTag.key)
+    .forEach((candidate) => {
+      const option = document.createElement("option");
+      option.value = candidate.key;
+      option.textContent = candidate.display_name || candidate.key;
+      mergeSelect.appendChild(option);
+    });
+
+  const mergeBtn = document.createElement("button");
+  mergeBtn.type = "button";
+  mergeBtn.className = "detail-retry-btn";
+  mergeBtn.textContent = "合并";
+  mergeBtn.disabled = true;
+  mergeSelect.addEventListener("change", () => {
+    mergeBtn.disabled = !mergeSelect.value;
+  });
+  mergeBtn.addEventListener("click", async () => {
+    const targetKey = mergeSelect.value || "";
+    if (!targetKey) return;
+    const target = state.marketTagChoices.find((candidate) => candidate.key === targetKey);
+    const ok = window.confirm(
+      `确认将“${selectedTag.display_name || selectedTag.key}”合并到“${target?.display_name || targetKey}”？该板块的新闻关联和趋势想法会迁移到目标板块，旧板块将被删除。`
+    );
+    if (!ok) return;
+    mergeBtn.disabled = true;
+    mergeSelect.disabled = true;
+    try {
+      await mergeMarketTagDefinition(selectedTag.key, targetKey);
+      await refreshTrendTagAdminState(targetKey);
+    } finally {
+      mergeSelect.disabled = false;
+    }
+  });
+
+  mergeRow.appendChild(mergeLabel);
+  mergeRow.appendChild(mergeSelect);
+  mergeRow.appendChild(mergeBtn);
+  panel.appendChild(mergeRow);
+
+  const dangerZone = document.createElement("div");
+  dangerZone.className = "detail-tag-admin-danger";
+
+  const dangerTitle = document.createElement("div");
+  dangerTitle.className = "detail-tag-admin-danger-title";
+  dangerTitle.textContent = "危险操作";
+
+  const dangerMeta = document.createElement("div");
+  dangerMeta.className = "detail-tag-admin-danger-meta";
+  dangerMeta.textContent = `删除板块将解除 ${Number(selectedTag.item_tag_count || 0)} 条新闻关联，并删除 ${Number(selectedTag.trend_note_count || 0)} 条板块想法。`;
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "detail-retry-btn detail-tag-admin-danger-btn";
+  deleteBtn.textContent = "删除板块";
+  deleteBtn.addEventListener("click", async () => {
+    deleteBtn.disabled = true;
+    try {
+      const impact = await fetchMarketTagImpact(selectedTag.key);
+      const ok = window.confirm(
+        `确认删除“${selectedTag.display_name || selectedTag.key}”？\n将解除 ${impact.affected.item_tag_count} 条新闻关联，并删除 ${impact.affected.trend_note_count} 条板块想法。`
+      );
+      if (!ok) return;
+      await deleteMarketTagDefinition(selectedTag.key);
+      await refreshTrendTagAdminState("");
+    } finally {
+      deleteBtn.disabled = false;
+    }
+  });
+
+  dangerZone.appendChild(dangerTitle);
+  dangerZone.appendChild(dangerMeta);
+  dangerZone.appendChild(deleteBtn);
+  panel.appendChild(dangerZone);
+  detailTagAdminList.appendChild(panel);
 }
 
-async function refreshTrendTagAdminState() {
+async function refreshTrendTagAdminState(nextSelectedTagKey = state.selectedTagAdminKey) {
+  state.selectedTagAdminKey = nextSelectedTagKey || "";
   await fetchMarketTagDefinitions();
+  if (state.selectedTagAdminKey) {
+    const exists = state.marketTagChoices.some((tag) => tag.key === state.selectedTagAdminKey);
+    if (!exists) state.selectedTagAdminKey = "";
+  }
   if (state.collection === "trends") {
     const data = await fetchMarketTrends();
     state.total = Number(data.tagged_item_count || 0);
@@ -4011,9 +4096,9 @@ if (detailTagCreateBtn) {
     if (!displayName) return;
     detailTagCreateBtn.disabled = true;
     try {
-      await createMarketTagDefinition(displayName);
+      const payload = await createMarketTagDefinition(displayName);
       detailTagCreateInput.value = "";
-      await refreshTrendTagAdminState();
+      await refreshTrendTagAdminState(payload?.tag?.key || "");
     } finally {
       detailTagCreateBtn.disabled = false;
     }
