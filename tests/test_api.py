@@ -392,6 +392,144 @@ def test_feed_unread_cursor_paging_survives_auto_read_shrink(tmp_path: Path, mon
     assert bloomberg_unread.get_json()["total"] == 5
 
 
+def test_feed_unread_reverse_sort_keeps_cursor_direction(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+
+    reuters_items = []
+    for idx in range(31):
+        minute = idx % 60
+        reuters_items.append(
+            "\n".join(
+                [
+                    f"### [Reuters Reverse {idx + 1}](https://www.reuters.com/world/reverse-{idx + 1})",
+                    f"- 发布时间：2026-06-03 09:{minute:02d}:00",
+                ]
+            )
+        )
+
+    (daily_dir / "dailyFreshNews_2026-06-03.md").write_text(
+        "## Reuters · World（31条）\n" + "\n".join(reuters_items) + "\n",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    page1 = client.get("/api/news?collection=feed&read_filter=unread&sort_order=reverse&page=1&per=30")
+    assert page1.status_code == 200
+    page1_data = page1.get_json()
+    assert page1_data["items"][0]["title"] == "Reuters Reverse 31"
+    assert page1_data["items"][-1]["title"] == "Reuters Reverse 2"
+    assert page1_data["has_more"] is True
+    assert page1_data["next_cursor"] is not None
+
+    for item in page1_data["items"][:10]:
+        res = client.patch(f"/api/news/{item['id']}/state", json={"read": True})
+        assert res.status_code == 200
+
+    cursor = page1_data["next_cursor"]
+    page2 = client.get(
+        "/api/news?collection=feed&read_filter=unread&sort_order=reverse&page=2&per=30"
+        f"&cursor_date={cursor['date_key']}&cursor_published_at={cursor['published_at']}&cursor_id={cursor['id']}"
+    )
+    assert page2.status_code == 200
+    page2_data = page2.get_json()
+    assert [item["title"] for item in page2_data["items"]] == ["Reuters Reverse 1"]
+    assert page2_data["has_more"] is False
+    assert page2_data["next_cursor"] is None
+
+
+def test_news_sort_order_switches_default_and_reverse_by_collection(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-04.md").write_text(
+        """## Reuters · World（4条）
+### [Alpha Early](https://example.com/sort-alpha-early)
+- 发布时间：2026-06-04 08:00:00
+### [Alpha Late](https://example.com/sort-alpha-late)
+- 发布时间：2026-06-04 18:00:00
+
+## Bloomberg · Markets（2条）
+### [Beta Early](https://example.com/sort-beta-early)
+- 发布时间：2026-06-05 09:00:00
+### [Beta Late](https://example.com/sort-beta-late)
+- 发布时间：2026-06-05 20:00:00
+""",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    feed_default = client.get("/api/news?collection=feed&read_filter=all&per=20").get_json()["items"]
+    assert [item["title"] for item in feed_default[:4]] == ["Alpha Early", "Alpha Late", "Beta Early", "Beta Late"]
+
+    feed_reverse = client.get("/api/news?collection=feed&read_filter=all&sort_order=reverse&per=20").get_json()["items"]
+    assert [item["title"] for item in feed_reverse[:4]] == ["Beta Late", "Beta Early", "Alpha Late", "Alpha Early"]
+
+    title_to_id = {item["title"]: item["id"] for item in feed_default}
+    assert client.patch(f"/api/news/{title_to_id['Alpha Early']}/state", json={"important": True, "read_later": True}).status_code == 200
+    assert client.patch(f"/api/news/{title_to_id['Beta Late']}/state", json={"important": True, "read_later": True}).status_code == 200
+    assert client.patch(f"/api/news/{title_to_id['Beta Early']}/state", json={"important": True}).status_code == 200
+    assert client.put(f"/api/news/{title_to_id['Alpha Late']}/note", json={"note": "排序测试想法 A"}).status_code == 200
+    assert client.put(f"/api/news/{title_to_id['Beta Early']}/note", json={"note": "排序测试想法 B"}).status_code == 200
+
+    create_tag = client.post("/api/market-tags", json={"display_name": "排序板块"})
+    assert create_tag.status_code == 200
+    tag_key = create_tag.get_json()["tag"]["key"]
+    assert client.put(
+        f"/api/news/{title_to_id['Beta Early']}/market-tag",
+        json={"tag": tag_key, "direction": "bullish"},
+    ).status_code == 200
+    assert client.put(
+        f"/api/news/{title_to_id['Alpha Early']}/market-tag",
+        json={"tag": tag_key, "direction": "bearish"},
+    ).status_code == 200
+
+    important_default = client.get("/api/news?collection=important&per=20").get_json()["items"]
+    assert [item["title"] for item in important_default] == ["Beta Late", "Beta Early", "Alpha Early"]
+    important_reverse = client.get("/api/news?collection=important&sort_order=reverse&per=20").get_json()["items"]
+    assert [item["title"] for item in important_reverse] == ["Alpha Early", "Beta Early", "Beta Late"]
+
+    read_later_default = client.get("/api/news?collection=read_later&per=20").get_json()["items"]
+    assert [item["title"] for item in read_later_default] == ["Alpha Early", "Beta Late"]
+    read_later_reverse = client.get("/api/news?collection=read_later&sort_order=reverse&per=20").get_json()["items"]
+    assert [item["title"] for item in read_later_reverse] == ["Beta Late", "Alpha Early"]
+
+    notes_default = client.get("/api/news?collection=notes&per=20").get_json()["items"]
+    assert [item["title"] for item in notes_default] == ["Beta Early", "Alpha Late"]
+    notes_reverse = client.get("/api/news?collection=notes&sort_order=reverse&per=20").get_json()["items"]
+    assert [item["title"] for item in notes_reverse] == ["Alpha Late", "Beta Early"]
+
+    tags_default = client.get("/api/news?collection=market_tags&per=20").get_json()["items"]
+    assert [item["title"] for item in tags_default] == ["Beta Early", "Alpha Early"]
+    tags_reverse = client.get("/api/news?collection=market_tags&sort_order=reverse&per=20").get_json()["items"]
+    assert [item["title"] for item in tags_reverse] == ["Alpha Early", "Beta Early"]
+
+    invalid = client.get("/api/news?collection=feed&sort_order=sideways")
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"] == "invalid_sort_order"
+
+
 def test_search_range_and_time_filters(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "news_index.sqlite3"
     daily_dir = tmp_path / "DailyNews"

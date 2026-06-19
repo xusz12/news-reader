@@ -23,6 +23,7 @@ let state = {
   selectedTagAdminKey: "",
   tagAdminOpen: false,
   trendComposeOpen: false,
+  newsSortOrderByCollection: {},
   dateCounts: new Map(),
   lastNewsCollectionBeforeTrends: "feed",
   detailReturnToTrend: false,
@@ -58,6 +59,7 @@ const SETTINGS_CUSTOM_MODEL_VALUE = "__custom__";
 const refreshBtn = document.getElementById("refreshBtn");
 const resumeAnchorBtn = document.getElementById("resumeAnchorBtn");
 const readFilterToggleBtn = document.getElementById("readFilterToggleBtn");
+const sortOrderBtn = document.getElementById("sortOrderBtn");
 const markAllReadBtn = document.getElementById("markAllReadBtn");
 const manageMarketTagsBtn = document.getElementById("manageMarketTagsBtn");
 
@@ -1180,6 +1182,12 @@ function iconSvg(name, filled = false) {
   if (name === "help") {
     return `<svg ${common}><path d="M9.4 9.2a2.8 2.8 0 1 1 4.8 2c-.7.7-1.5 1.1-1.9 1.7-.3.4-.4.8-.4 1.6"/><circle cx="12" cy="17.2" r="0.9" fill="currentColor" stroke="none"/></svg>`;
   }
+  if (name === "sort-asc") {
+    return `<svg ${common}><path d="M8 17V7"/><path d="m5.5 9.5 2.5-2.5 2.5 2.5"/><path d="M14 8.5h4"/><path d="M14 12h3"/><path d="M14 15.5h2"/></svg>`;
+  }
+  if (name === "sort-desc") {
+    return `<svg ${common}><path d="M8 7v10"/><path d="m5.5 14.5 2.5 2.5 2.5-2.5"/><path d="M14 8.5h2"/><path d="M14 12h3"/><path d="M14 15.5h4"/></svg>`;
+  }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
 
@@ -1344,6 +1352,36 @@ function applyResumeIcon(label = "回到上次阅读") {
     filled: false,
     tone: "success",
     label,
+  });
+}
+
+function supportsSortToggle(collection = state.collection) {
+  return ["feed", "important", "read_later", "notes", "market_tags"].includes(collection);
+}
+
+function getNewsSortOrder(collection = state.collection) {
+  return state.newsSortOrderByCollection[collection] || "default";
+}
+
+function getEffectiveSortDirection(collection = state.collection, sortOrder = getNewsSortOrder(collection)) {
+  let ascending = collection === "feed" || collection === "read_later";
+  if (sortOrder === "reverse") ascending = !ascending;
+  return ascending ? "asc" : "desc";
+}
+
+function updateSortOrderButton() {
+  if (!sortOrderBtn) return;
+  const visible = supportsSortToggle(state.collection);
+  sortOrderBtn.classList.toggle("hidden", !visible);
+  if (!visible) {
+    sortOrderBtn.disabled = false;
+    return;
+  }
+  const direction = getEffectiveSortDirection();
+  const label = direction === "asc" ? "当前排序：旧到新，点击切换为新到旧" : "当前排序：新到旧，点击切换为旧到新";
+  applyIcon(sortOrderBtn, direction === "asc" ? "sort-asc" : "sort-desc", {
+    label,
+    tone: getNewsSortOrder() === "reverse" ? "accent" : "default",
   });
 }
 
@@ -3477,6 +3515,7 @@ async function fetchNewsPage(page) {
     read_filter: state.readFilter,
     collection: state.collection,
     source_filter: state.sourceFilter,
+    sort_order: getNewsSortOrder(state.collection),
   });
   if (state.collection === "feed" && state.readFilter === "unread" && state.feedUnreadCursor) {
     params.set("cursor_date", state.feedUnreadCursor.date_key);
@@ -3672,6 +3711,7 @@ async function loadFirstPage() {
     updateFilterButtons();
     updateBatchActionButton();
     updateCollectionButtons();
+    updateSortOrderButton();
     updateSourceFilterVisibility();
     updateResumeButton();
   }
@@ -3744,6 +3784,15 @@ readFilterToggleBtn.addEventListener("click", async () => {
   state.feedReadFilter = state.readFilter;
   await loadFirstPage();
 });
+
+if (sortOrderBtn) {
+  sortOrderBtn.addEventListener("click", async () => {
+    if (!supportsSortToggle()) return;
+    const current = getNewsSortOrder();
+    state.newsSortOrderByCollection[state.collection] = current === "default" ? "reverse" : "default";
+    await loadFirstPage();
+  });
+}
 
 resumeAnchorBtn.addEventListener("click", async () => {
   resumeAnchorBtn.disabled = true;
@@ -4388,6 +4437,7 @@ if (searchPageSubmitBtn) {
 syncSearchPageControls();
 updateFilterButtons();
 updateBatchActionButton();
+updateSortOrderButton();
 fetchReadingCheckpoint()
   .then((cp) => {
     state.readingCheckpoint = cp;

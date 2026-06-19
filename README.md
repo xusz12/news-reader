@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-06-19 — v1.9.6.11 improve: 新闻流时间排序切换
+- **文件**
+  - *app.py（+）*、*tests/test_api.py（+）*
+    - `/api/news` 新增 `sort_order=default|reverse` 参数，支持新闻流类集合按默认/反向时间顺序切换
+    - `feed + unread` 的 cursor 翻页条件改为跟随排序方向同步翻转，避免反向排序后重复、漏加载或假到底
+    - 补覆盖：`feed + unread` 反向 cursor 分页，以及 `feed / important / read_later / notes / market_tags` 默认/反向排序
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 中栏工具区新增排序切换按钮，按当前集合显示 `旧→新` / `新→旧`
+    - 切换排序时前端重置列表并重新请求第一页，不做本地 DOM 反转
+    - 仅作用于 `feed / important / read_later / notes / market_tags`，不影响趋势页与搜索页
+- **影响**：新闻流相关集合现在可以稳定切换时间方向；`feed + unread` 在正反向排序下都继续保持 cursor 翻页与自动已读语义一致。
+
 ### 2026-06-18 — v1.9.6.10 improve: 管理板块卡片网格布局优化
 - **文件**
   - *static/app.js（+）*、*static/style.css（+）*、*static/index.html（+）*

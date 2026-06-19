@@ -90,6 +90,7 @@ items.id DESC
 """
 
 ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10))"
+NEWS_SORT_ORDERS = {"default", "reverse"}
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -111,12 +112,27 @@ SETTINGS_MODEL_OPTION_LIMIT = 40
 DEEPSEEK_MODELS_URL = "https://api.deepseek.com/models"
 
 
-def news_order_by_sql(collection: str) -> str:
-    return FEED_NEWS_ORDER_BY_SQL if collection in ("feed", "read_later") else NON_FEED_NEWS_ORDER_BY_SQL
+def news_order_by_sql(collection: str, sort_order: str = "default") -> str:
+    ascending = collection in ("feed", "read_later")
+    if sort_order == "reverse":
+        ascending = not ascending
+    direction = "ASC" if ascending else "DESC"
+    return f"""
+    {ITEM_DATE_SQL} {direction},
+    items.published_at {direction},
+    items.id {direction}
+    """
 
 
 def use_feed_unread_cursor_paging(collection: str, read_filter: str) -> bool:
     return collection == "feed" and read_filter == "unread"
+
+
+def parse_news_sort_order(args) -> str:
+    sort_order = (args.get("sort_order") or "default").strip().lower()
+    if sort_order not in NEWS_SORT_ORDERS:
+        raise ValueError("invalid_sort_order")
+    return sort_order
 
 
 def parse_feed_unread_cursor(args) -> dict | None:
@@ -134,14 +150,15 @@ def parse_feed_unread_cursor(args) -> dict | None:
     }
 
 
-def build_feed_unread_cursor_clause(cursor: dict | None) -> tuple[str, list]:
+def build_feed_unread_cursor_clause(cursor: dict | None, ascending: bool) -> tuple[str, list]:
     if not cursor:
         return "", []
+    op = ">" if ascending else "<"
     clause = f"""
     AND (
-      {ITEM_DATE_SQL} > ? OR
-      ({ITEM_DATE_SQL} = ? AND items.published_at > ?) OR
-      ({ITEM_DATE_SQL} = ? AND items.published_at = ? AND items.id > ?)
+      {ITEM_DATE_SQL} {op} ? OR
+      ({ITEM_DATE_SQL} = ? AND items.published_at {op} ?) OR
+      ({ITEM_DATE_SQL} = ? AND items.published_at = ? AND items.id {op} ?)
     )
     """
     return clause, [
@@ -1570,9 +1587,11 @@ def api_news():
     per = min(100, max(10, int(request.args.get("per", "30"))))
     cursor_mode = use_feed_unread_cursor_paging(collection, read_filter)
     try:
+        sort_order = parse_news_sort_order(request.args)
         cursor = parse_feed_unread_cursor(request.args) if cursor_mode else None
-    except ValueError:
-        return jsonify({"ok": False, "error": "invalid_cursor"}), 400
+    except ValueError as exc:
+        error = "invalid_sort_order" if str(exc) == "invalid_sort_order" else "invalid_cursor"
+        return jsonify({"ok": False, "error": error}), 400
     join_sql = """
     LEFT JOIN item_state st ON st.item_id = items.id
     LEFT JOIN detail_jobs dj ON dj.url = items.url
@@ -1580,7 +1599,10 @@ def api_news():
     LEFT JOIN article_notes an ON an.url = items.url
     """
     where_sql, args = _build_news_where_clause(q, read_filter, collection, source_filter)
-    order_by_sql = news_order_by_sql(collection)
+    order_by_sql = news_order_by_sql(collection, sort_order)
+    ascending_order = collection in ("feed", "read_later")
+    if sort_order == "reverse":
+        ascending_order = not ascending_order
 
     conn = db_conn()
     try:
@@ -1625,7 +1647,7 @@ def api_news():
         has_more = False
         next_cursor = None
         if cursor_mode:
-            cursor_clause, cursor_args = build_feed_unread_cursor_clause(cursor)
+            cursor_clause, cursor_args = build_feed_unread_cursor_clause(cursor, ascending_order)
             raw_rows = conn.execute(
                 f"""
                 {base_select_sql}
@@ -1678,6 +1700,7 @@ def api_news():
             "pages": pages,
             "has_more": has_more if cursor_mode else page < pages,
             "next_cursor": next_cursor if cursor_mode else None,
+            "sort_order": sort_order,
         }
     )
 
