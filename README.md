@@ -4,6 +4,21 @@
 
 ## What's Changed
 
+### 2026-06-20 — v1.9.7.0 feat: 新闻事件提醒集合
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*
+    - 新增独立 `news_reminders` 表与索引，提醒不再塞进 `item_state`
+    - 新增 `GET /api/reminders`、`GET /api/reminders/summary`、`POST /api/news/:id/reminders`、`PATCH /api/reminders/:id`、`DELETE /api/reminders/:id`
+    - `/api/news`、`/api/news/status`、`/api/news/:id/detail` 同步返回 active reminder 数量、到期数量与详情摘要
+    - reminder 保留新闻标题/原文快照；新闻被 reindex 删掉后，提醒仍可在集合中继续展示
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 左栏与移动端集合入口新增“提醒”，支持到期数量提示
+    - 右栏正文区新增“添加提醒”按钮、提醒编辑表单与提醒列表
+    - 提醒集合改为独立提醒卡片流，按 `remind_at` 排序，已到期项前置并高亮
+  - *tests/test_api.py（+）*
+    - 补覆盖：提醒表/索引建库幂等、提醒 CRUD、`/api/news` 提醒摘要字段、stale item 删除后 reminder snapshot 保留
+- **影响**：现在可以围绕“新闻里的未来事件”做应用内手动提醒，并在到期后回看关联新闻；本版涉及 `app.py` 与 schema，合入后需重启 Flask。
+
 ### 2026-06-20 — v1.9.6.12 improve: 收藏新闻功能
 - **文件**
   - *schema.sql（+）*、*scanner.py（+）*、*app.py（+）*

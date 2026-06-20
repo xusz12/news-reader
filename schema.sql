@@ -139,3 +139,24 @@ CREATE TABLE IF NOT EXISTS market_trend_notes (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS news_reminders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id TEXT,
+  item_title_snapshot TEXT NOT NULL,
+  item_url_snapshot TEXT NOT NULL,
+  event_title TEXT NOT NULL,
+  event_date TEXT NOT NULL,
+  remind_at TEXT NOT NULL,
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_news_reminders_status_remind_at
+ON news_reminders(status, remind_at);
+
+CREATE INDEX IF NOT EXISTS idx_news_reminders_item_id
+ON news_reminders(item_id);

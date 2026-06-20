@@ -6,12 +6,22 @@ let state = {
   readFilter: "unread", // all | unread
   feedReadFilter: "unread", // 仅新闻流记忆 all | unread
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
-  collection: "feed", // search | feed | favorites | important | read_later | notes | market_tags | trends
+  collection: "feed", // search | feed | favorites | reminders | important | read_later | notes | market_tags | trends
   total: 0,
   loading: false,
   hasMore: true,
   selectedId: null,
+  selectedReminderId: null,
+  selectedReminderDraftId: null,
   itemsById: new Map(),
+  reminderItems: [],
+  reminderSummary: {
+    total: 0,
+    active_total: 0,
+    due_total: 0,
+    done_total: 0,
+    dismissed_total: 0,
+  },
   detailCacheByUrl: new Map(),
   readingCheckpoint: null,
   trendDays: 7,
@@ -66,6 +76,7 @@ const manageMarketTagsBtn = document.getElementById("manageMarketTagsBtn");
 const navSearchBtn = document.getElementById("navSearchBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
 const navFavoritesBtn = document.getElementById("navFavoritesBtn");
+const navRemindersBtn = document.getElementById("navRemindersBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
@@ -181,11 +192,24 @@ const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
 const detailReturnToTrendBtn = document.getElementById("detailReturnToTrendBtn");
 const detailBullishBtn = document.getElementById("detailBullishBtn");
 const detailBearishBtn = document.getElementById("detailBearishBtn");
+const detailReminderToggleBtn = document.getElementById("detailReminderToggleBtn");
 const detailFavoriteBtn = document.getElementById("detailFavoriteBtn");
 const detailInlineMarketTags = document.getElementById("detailInlineMarketTags");
 const detailMarketPicker = document.getElementById("detailMarketPicker");
 const detailMarketPickerTitle = document.getElementById("detailMarketPickerTitle");
 const detailMarketPickerOptions = document.getElementById("detailMarketPickerOptions");
+const detailReminderEditor = document.getElementById("detailReminderEditor");
+const detailReminderEditorTitle = document.getElementById("detailReminderEditorTitle");
+const detailReminderEventTitleInput = document.getElementById("detailReminderEventTitleInput");
+const detailReminderEventDateInput = document.getElementById("detailReminderEventDateInput");
+const detailReminderRemindAtInput = document.getElementById("detailReminderRemindAtInput");
+const detailReminderNoteInput = document.getElementById("detailReminderNoteInput");
+const detailReminderSaveBtn = document.getElementById("detailReminderSaveBtn");
+const detailReminderDeleteBtn = document.getElementById("detailReminderDeleteBtn");
+const detailReminderCancelBtn = document.getElementById("detailReminderCancelBtn");
+const detailReminderCard = document.getElementById("detailReminderCard");
+const detailReminderSummary = document.getElementById("detailReminderSummary");
+const detailReminderList = document.getElementById("detailReminderList");
 
 let readObserver = null;
 let loadObserver = null;
@@ -198,6 +222,7 @@ let lastListScrollTop = 0;
 let lastScrollDirectionDown = false;
 let lastRenderedDateKey = null;
 let latestSourceOptions = [];
+let reminderSummaryTimer = null;
 const detailSwipeState = {
   tracking: false,
   startX: 0,
@@ -261,6 +286,108 @@ function renderErrorStats(days) {
   });
 }
 
+function reminderDueCount() {
+  return Number(state.reminderSummary?.due_total || 0);
+}
+
+function reminderNavLabel() {
+  const due = reminderDueCount();
+  return due > 0 ? `提醒 (${due})` : "提醒";
+}
+
+function reminderStatusLabel(status) {
+  const mapping = { active: "进行中", done: "已完成", dismissed: "已关闭" };
+  return mapping[status] || "提醒";
+}
+
+function formatReminderDateTime(value) {
+  if (!value) return "";
+  return String(value).replace("T", " ").slice(0, 16);
+}
+
+function toDateTimeLocalValue(value) {
+  if (!value) return "";
+  return String(value).replace(" ", "T").slice(0, 16);
+}
+
+function startReminderSummaryTimer() {
+  if (reminderSummaryTimer) return;
+  reminderSummaryTimer = window.setInterval(() => {
+    refreshReminderSummary().catch(() => {});
+  }, 60000);
+}
+
+function stopReminderSummaryTimer() {
+  if (!reminderSummaryTimer) return;
+  window.clearInterval(reminderSummaryTimer);
+  reminderSummaryTimer = null;
+}
+
+function applyReminderSummary(summary) {
+  state.reminderSummary = {
+    total: Number(summary?.total || 0),
+    active_total: Number(summary?.active_total || 0),
+    due_total: Number(summary?.due_total || 0),
+    done_total: Number(summary?.done_total || 0),
+    dismissed_total: Number(summary?.dismissed_total || 0),
+  };
+  if (navRemindersBtn) navRemindersBtn.textContent = reminderNavLabel();
+  updateCollectionButtons();
+}
+
+async function fetchReminderSummary() {
+  const res = await fetch("/api/reminders/summary");
+  if (!res.ok) throw new Error("reminder_summary_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "reminder_summary_fetch_failed");
+  return data.summary || {};
+}
+
+async function refreshReminderSummary() {
+  const summary = await fetchReminderSummary();
+  applyReminderSummary(summary);
+}
+
+async function fetchReminders(status = "active") {
+  const params = new URLSearchParams({ status });
+  const res = await fetch(`/api/reminders?${params.toString()}`);
+  if (!res.ok) throw new Error("reminders_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "reminders_fetch_failed");
+  return data;
+}
+
+async function createReminder(itemId, payload) {
+  const res = await fetch(`/api/news/${encodeURIComponent(itemId)}/reminders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "reminder_create_failed");
+  return data;
+}
+
+async function updateReminder(reminderId, payload) {
+  const res = await fetch(`/api/reminders/${encodeURIComponent(reminderId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "reminder_update_failed");
+  return data;
+}
+
+async function deleteReminder(reminderId) {
+  const res = await fetch(`/api/reminders/${encodeURIComponent(reminderId)}`, {
+    method: "DELETE",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "reminder_delete_failed");
+  return data;
+}
+
 async function openErrorStatsPanel() {
   if (!errorStatsPanel) return;
   if (errorStatsBody) {
@@ -291,7 +418,7 @@ function updateWorkspaceLayout() {
 }
 
 function updateSourceFilterVisibility() {
-  const visible = state.collection !== "trends" && state.collection !== "search";
+  const visible = state.collection !== "trends" && state.collection !== "search" && state.collection !== "reminders";
   document.querySelectorAll(".sources-title, #sourceFilters").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
@@ -468,7 +595,7 @@ function updateDateSectionCount(dateKey) {
 }
 
 function itemMatchesCurrentDateCountScope(item) {
-  if (!item || state.collection === "trends" || state.collection === "search") return false;
+  if (!item || state.collection === "trends" || state.collection === "search" || state.collection === "reminders") return false;
   let inCollection = false;
   if (state.collection === "feed") inCollection = true;
   else if (state.collection === "favorites") inCollection = !!item.favorite_at;
@@ -1105,6 +1232,9 @@ async function pollRowStatusesOnce() {
     const item = state.itemsById.get(st.id);
     if (!item) return;
     item.read_later_at = st.read_later_at;
+    item.active_reminder_count = Number(st.active_reminder_count || 0);
+    item.due_reminder_count = Number(st.due_reminder_count || 0);
+    item.next_remind_at = st.next_remind_at || null;
     item.detail_status = st.detail_status;
     item.detail_error = st.detail_error;
     item.detail_ready = st.detail_ready;
@@ -1265,6 +1395,7 @@ function syncRowUI(li, item) {
   li.dataset.favorite = item.favorite_at ? "1" : "0";
   li.dataset.important = item.important_at ? "1" : "0";
   li.dataset.readLater = item.read_later_at ? "1" : "0";
+  li.dataset.hasReminder = Number(item.active_reminder_count || 0) > 0 ? "1" : "0";
 
   const unreadDot = li.querySelector(".unread-dot");
   if (unreadDot) unreadDot.classList.toggle("hidden", !!item.read_at);
@@ -1272,6 +1403,14 @@ function syncRowUI(li, item) {
   if (noteBadge) {
     const hasNote = Number(item.has_note || 0) === 1;
     noteBadge.classList.toggle("hidden", !hasNote);
+  }
+  const reminderBadge = li.querySelector(".reminder-badge");
+  if (reminderBadge) {
+    const activeCount = Number(item.active_reminder_count || 0);
+    const dueCount = Number(item.due_reminder_count || 0);
+    reminderBadge.textContent = dueCount > 0 ? `到期 ${dueCount}` : `提醒 ${activeCount}`;
+    reminderBadge.classList.toggle("hidden", activeCount <= 0);
+    reminderBadge.classList.toggle("due", dueCount > 0);
   }
   const notePreview = li.querySelector(".row-note-preview");
   if (notePreview) {
@@ -1408,6 +1547,7 @@ function updateBatchActionButton() {
   if (
     state.collection === "search" ||
     state.collection === "favorites" ||
+    state.collection === "reminders" ||
     state.collection === "important" ||
     state.collection === "notes" ||
     state.collection === "market_tags" ||
@@ -1429,6 +1569,7 @@ function updateCollectionButtons() {
   if (navSearchBtn) navSearchBtn.classList.toggle("active", state.collection === "search");
   navFeedBtn.classList.toggle("active", state.collection === "feed");
   if (navFavoritesBtn) navFavoritesBtn.classList.toggle("active", state.collection === "favorites");
+  if (navRemindersBtn) navRemindersBtn.classList.toggle("active", state.collection === "reminders");
   navImportantBtn.classList.toggle("active", state.collection === "important");
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
   if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
@@ -1440,6 +1581,7 @@ function updateCollectionButtons() {
       search: "搜索",
       feed: "新闻流",
       favorites: "收藏",
+      reminders: reminderNavLabel(),
       important: "重要",
       read_later: "稍后",
       notes: "想法",
@@ -1455,7 +1597,7 @@ function updateCollectionButtons() {
     mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
   }
   if (mobileTabFilterBtn) {
-    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search");
+    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search" || state.collection === "reminders");
   }
   if (manageMarketTagsBtn) {
     manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends");
@@ -1474,6 +1616,7 @@ function updateMobileFilterCollectionText() {
     search: "搜索",
     feed: "新闻流",
     favorites: "收藏",
+    reminders: "提醒",
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
@@ -1502,6 +1645,7 @@ function renderMobileCollectionOptions() {
     { key: "search", label: "搜索" },
     { key: "feed", label: "新闻流" },
     { key: "favorites", label: "收藏" },
+    { key: "reminders", label: reminderNavLabel() },
     { key: "important", label: "重要" },
     { key: "read_later", label: "稍后阅读" },
     { key: "notes", label: "想法" },
@@ -1530,7 +1674,7 @@ function openMobileCollectionSheet() {
 }
 
 function openMobileFilterSheet() {
-  if (!mobileFilterSheet || state.collection === "search") return;
+  if (!mobileFilterSheet || state.collection === "search" || state.collection === "reminders") return;
   closeMobileCollectionSheet();
   updateMobileFilterCollectionText();
   renderSourceFilters(latestSourceOptions);
@@ -1631,6 +1775,7 @@ function renderMeta() {
   const names = {
     feed: "新闻流",
     favorites: "收藏",
+    reminders: "提醒",
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
@@ -1639,6 +1784,11 @@ function renderMeta() {
   };
   if (state.collection === "trends") {
     meta.textContent = `趋势 · 近 ${state.trendDays} 天 · ${state.trendRows.length} 个板块 · ${state.total} 条标记`;
+    pageInfo.textContent = "- / -";
+    return;
+  }
+  if (state.collection === "reminders") {
+    meta.textContent = `提醒 · 进行中 ${state.reminderSummary.active_total || 0} · 到期 ${state.reminderSummary.due_total || 0}`;
     pageInfo.textContent = "- / -";
     return;
   }
@@ -2716,9 +2866,11 @@ function openItemDetail(item, { fromTrend = false } = {}) {
   state.selectedId = item.id;
   state.detailReturnToTrend = fromTrend;
   renderDetail(state.itemsById.get(item.id) || item);
-  loadDetail(item.id);
-  startDetailPolling(item.id);
-  if (!fromTrend) saveReadingCheckpoint(item).catch(() => {});
+  if (!item.snapshotOnly) {
+    loadDetail(item.id);
+    startDetailPolling(item.id);
+    if (!fromTrend) saveReadingCheckpoint(item).catch(() => {});
+  }
   openDetailOnMobile();
 }
 
@@ -3105,6 +3257,259 @@ async function saveDetailNote(item, noteText) {
   refreshDetailNoteUI(item);
 }
 
+function currentDetailReminders(item) {
+  if (item?.snapshotOnly && state.selectedReminderId) {
+    const selected = state.reminderItems.find((reminder) => reminder.id === state.selectedReminderId);
+    return selected ? [selected] : [];
+  }
+  const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
+  return Array.isArray(cached?.reminders) ? cached.reminders : [];
+}
+
+function currentDetailReminderSummary(item) {
+  if (item?.snapshotOnly) {
+    const reminders = currentDetailReminders(item);
+    return {
+      total: reminders.length,
+      active_total: reminders.filter((reminder) => reminder.status === "active").length,
+      due_total: reminders.filter((reminder) => reminder.is_due).length,
+      done_total: reminders.filter((reminder) => reminder.status === "done").length,
+      dismissed_total: reminders.filter((reminder) => reminder.status === "dismissed").length,
+    };
+  }
+  const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
+  return cached?.reminder_summary || {
+    total: 0,
+    active_total: 0,
+    due_total: 0,
+    done_total: 0,
+    dismissed_total: 0,
+  };
+}
+
+function closeReminderEditor() {
+  state.selectedReminderDraftId = null;
+  if (detailReminderEditor) detailReminderEditor.classList.add("hidden");
+  if (detailReminderEventTitleInput) detailReminderEventTitleInput.value = "";
+  if (detailReminderEventDateInput) detailReminderEventDateInput.value = "";
+  if (detailReminderRemindAtInput) detailReminderRemindAtInput.value = "";
+  if (detailReminderNoteInput) detailReminderNoteInput.value = "";
+  if (detailReminderDeleteBtn) detailReminderDeleteBtn.classList.add("hidden");
+  if (detailReminderEditorTitle) detailReminderEditorTitle.textContent = "添加提醒";
+}
+
+function openReminderEditor(item, reminder = null) {
+  if (!detailReminderEditor || !item) return;
+  setDetailNoteEditorOpen(false);
+  closeMarketPicker();
+  state.selectedReminderDraftId = reminder?.id || null;
+  if (detailReminderEditorTitle) {
+    detailReminderEditorTitle.textContent = reminder ? "编辑提醒" : "添加提醒";
+  }
+  detailReminderEventTitleInput.value = reminder?.event_title || "";
+  detailReminderEventDateInput.value = reminder?.event_date || item.date_key || "";
+  detailReminderRemindAtInput.value = toDateTimeLocalValue(reminder?.remind_at || "");
+  detailReminderNoteInput.value = reminder?.note || "";
+  detailReminderDeleteBtn.classList.toggle("hidden", !reminder);
+  detailReminderEditor.classList.remove("hidden");
+}
+
+function refreshDetailReminderUI(item) {
+  if (!detailReminderCard || !detailReminderList || !detailReminderSummary) return;
+  const reminders = currentDetailReminders(item);
+  const summary = currentDetailReminderSummary(item);
+  detailReminderSummary.textContent = `进行中 ${summary.active_total || 0} · 到期 ${summary.due_total || 0} · 已完成 ${summary.done_total || 0}`;
+  detailReminderList.innerHTML = "";
+  if (!reminders.length) {
+    detailReminderCard.classList.add("hidden");
+    return;
+  }
+  reminders.forEach((reminder) => {
+    const card = document.createElement("div");
+    card.className = "detail-reminder-item";
+    if (state.selectedReminderId === reminder.id) card.classList.add("active");
+
+    const title = document.createElement("div");
+    title.className = "detail-reminder-item-title";
+    title.textContent = reminder.event_title || "未命名提醒";
+
+    const meta = document.createElement("div");
+    meta.className = "detail-reminder-item-meta";
+    meta.textContent = `${reminderStatusLabel(reminder.status)} · 事件日 ${reminder.event_date} · 提醒 ${formatReminderDateTime(reminder.remind_at)}`;
+    if (reminder.is_due) meta.classList.add("due");
+
+    card.appendChild(title);
+    card.appendChild(meta);
+    if (reminder.note) {
+      const note = document.createElement("p");
+      note.className = "detail-note-text";
+      note.textContent = reminder.note;
+      card.appendChild(note);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "detail-note-actions";
+
+    if (reminder.status !== "done") {
+      const doneBtn = document.createElement("button");
+      doneBtn.className = "detail-retry-btn";
+      doneBtn.type = "button";
+      doneBtn.textContent = "标记完成";
+      doneBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        const current = state.itemsById.get(state.selectedId);
+        if (!current) return;
+        await saveReminderDraft(current, reminder.id, { status: "done" });
+      });
+      actions.appendChild(doneBtn);
+    }
+
+    if (reminder.status !== "active") {
+      const reopenBtn = document.createElement("button");
+      reopenBtn.className = "detail-retry-btn";
+      reopenBtn.type = "button";
+      reopenBtn.textContent = "重新激活";
+      reopenBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        const current = state.itemsById.get(state.selectedId);
+        if (!current) return;
+        await saveReminderDraft(current, reminder.id, { status: "active" });
+      });
+      actions.appendChild(reopenBtn);
+    }
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "detail-retry-btn";
+    editBtn.type = "button";
+    editBtn.textContent = "编辑";
+    editBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openReminderEditor(item, reminder);
+    });
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "detail-retry-btn";
+    deleteBtn.type = "button";
+    deleteBtn.textContent = "删除";
+    deleteBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const current = state.itemsById.get(state.selectedId);
+      if (!current) return;
+      if (!window.confirm("确认删除这个提醒？")) return;
+      await removeReminderDraft(current, reminder.id);
+    });
+    actions.appendChild(deleteBtn);
+
+    card.appendChild(actions);
+    card.addEventListener("click", () => {
+      state.selectedReminderId = reminder.id;
+      refreshDetailReminderUI(item);
+    });
+    detailReminderList.appendChild(card);
+  });
+  detailReminderCard.classList.remove("hidden");
+}
+
+async function saveReminderDraft(item, reminderId = null, overridePayload = null) {
+  if (!item) return;
+  const payload = overridePayload || {
+    event_title: detailReminderEventTitleInput.value.trim(),
+    event_date: detailReminderEventDateInput.value,
+    remind_at: detailReminderRemindAtInput.value,
+    note: detailReminderNoteInput.value.trim(),
+  };
+  const result = reminderId
+    ? await updateReminder(reminderId, payload)
+    : await createReminder(item.id, payload);
+  applyReminderSummary(result.summary || state.reminderSummary);
+  state.selectedReminderId = result.reminder?.id || state.selectedReminderId;
+  closeReminderEditor();
+  if (item.snapshotOnly) return;
+  await loadDetail(item.id);
+  if (state.collection === "reminders") await loadFirstPage();
+}
+
+async function removeReminderDraft(item, reminderId) {
+  if (!item || !reminderId) return;
+  const result = await deleteReminder(reminderId);
+  applyReminderSummary(result.summary || state.reminderSummary);
+  if (state.selectedReminderId === reminderId) state.selectedReminderId = null;
+  closeReminderEditor();
+  if (!item.snapshotOnly) await loadDetail(item.id);
+  if (state.collection === "reminders") await loadFirstPage();
+}
+
+function buildReminderListRow(reminder) {
+  const li = document.createElement("li");
+  li.className = "news-item reminder-item";
+  li.dataset.id = String(reminder.id);
+  if (state.selectedReminderId === reminder.id) li.classList.add("selected");
+
+  const line1 = document.createElement("div");
+  line1.className = "line1";
+  const status = document.createElement("span");
+  status.className = "note-badge reminder-badge";
+  status.textContent = reminder.is_due ? "已到期" : reminderStatusLabel(reminder.status);
+  if (reminder.is_due) status.classList.add("due");
+  line1.appendChild(status);
+
+  const text = document.createElement("span");
+  text.className = "line1-text";
+  text.textContent = `${formatReminderDateTime(reminder.remind_at)} · 事件日 ${reminder.event_date}`;
+  line1.appendChild(text);
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = reminder.event_title || "未命名提醒";
+
+  const summary = document.createElement("p");
+  summary.className = "summary";
+  summary.textContent = reminder.item_title_snapshot || "关联新闻";
+
+  li.appendChild(line1);
+  li.appendChild(title);
+  li.appendChild(summary);
+  if (reminder.note) {
+    const note = document.createElement("p");
+    note.className = "row-note-preview";
+    note.textContent = reminder.note;
+    li.appendChild(note);
+  }
+  li.addEventListener("click", async () => {
+    await openReminderCard(reminder);
+  });
+  return li;
+}
+
+async function openReminderCard(reminder) {
+  if (!reminder) return;
+  state.selectedReminderId = reminder.id;
+  if (reminder.item) {
+    openItemDetail(reminder.item);
+    return;
+  }
+  const pseudoItem = {
+    id: `reminder-snapshot-${reminder.id}`,
+    title: reminder.item_title_snapshot || reminder.event_title || "提醒快照",
+    summary: reminder.note || "原新闻已不在当前索引中，仅保留提醒快照。",
+    url: reminder.item_url_snapshot || "",
+    source: "提醒快照",
+    published_at: reminder.event_date || "",
+    date_key: reminder.event_date || "",
+    date_label: reminder.event_date || "",
+    snapshotOnly: true,
+    active_reminder_count: reminder.status === "active" ? 1 : 0,
+    due_reminder_count: reminder.is_due ? 1 : 0,
+    favorite_at: null,
+    important_at: null,
+    read_later_at: null,
+    has_note: 0,
+    has_market_tags: 0,
+  };
+  openItemDetail(pseudoItem);
+}
+
 function renderDetail(item) {
   closeTagAdminView();
   if (!item) {
@@ -3112,6 +3517,8 @@ function renderDetail(item) {
     state.detailReturnToTrend = false;
     stopDetailPolling();
     closeMarketPicker();
+    closeReminderEditor();
+    if (detailReminderCard) detailReminderCard.classList.add("hidden");
     syncDetailReturnButton();
     detailTrendBody.classList.add("hidden");
     detailBody.classList.add("hidden");
@@ -3182,8 +3589,18 @@ function renderDetail(item) {
   detailInlineMarketTags.innerHTML = "";
   setDetailNoteEditorOpen(false);
   detailNoteInput.value = "";
+  closeReminderEditor();
 
-  if (detail && detail.content) {
+  if (item.snapshotOnly) {
+    statusEl.textContent = "原新闻已不在当前索引中，仅保留提醒快照。";
+    statusEl.className = "detail-status muted";
+    contentEl.textContent = item.summary || "";
+    contentEl.classList.toggle("hidden", !item.summary);
+    retryBtn.classList.add("hidden");
+    retranslateBtn.classList.add("hidden");
+    askBtn.classList.add("hidden");
+    stopDetailPolling();
+  } else if (detail && detail.content) {
     const original = detail.content;
     detailOriginalContent.textContent = original;
     detailOriginalWrap.classList.remove("hidden");
@@ -3290,6 +3707,7 @@ function renderDetail(item) {
   }
 
   const importantBtn = document.getElementById("detailImportantBtn");
+  const snapshotOnly = !!item.snapshotOnly;
   applyIcon(detailFavoriteBtn, "star", {
     filled: !!item.favorite_at,
     tone: item.favorite_at ? "warning" : "default",
@@ -3302,8 +3720,20 @@ function renderDetail(item) {
   });
   applyIcon(detailBullishBtn, "trend-up", { tone: "danger", label: "看多板块标记" });
   applyIcon(detailBearishBtn, "trend-down", { tone: "success", label: "看空板块标记" });
+  applyIcon(detailReminderToggleBtn, "bell", {
+    filled: Number(item.active_reminder_count || 0) > 0,
+    tone: Number(item.due_reminder_count || 0) > 0 ? "danger" : (Number(item.active_reminder_count || 0) > 0 ? "warning" : "default"),
+    label: Number(item.active_reminder_count || 0) > 0 ? "查看或新增提醒" : "添加提醒",
+  });
+  detailNoteToggleBtn.disabled = snapshotOnly || !item.url;
+  detailBullishBtn.disabled = snapshotOnly;
+  detailBearishBtn.disabled = snapshotOnly;
+  detailFavoriteBtn.disabled = snapshotOnly;
+  importantBtn.disabled = snapshotOnly;
+  detailReminderToggleBtn.disabled = snapshotOnly;
   refreshDetailNoteUI(item);
   refreshDetailMarketTagsUI(item);
+  refreshDetailReminderUI(item);
   updateWorkspaceLayout();
 }
 
@@ -3319,13 +3749,16 @@ async function loadDetail(itemId) {
   const payload = await fetchDetail(itemId);
   if (!payload || !payload.ok) return;
 
-  state.detailCacheByUrl.set(item.url, payload);
+  const cached = { ...payload };
+  state.detailCacheByUrl.set(item.url, cached);
   state.marketTagChoices = Array.isArray(payload.market_tag_choices) ? payload.market_tag_choices : state.marketTagChoices;
   item.detail_status = payload.detail_status;
   item.read_at = payload.read_at;
   item.favorite_at = payload.favorite_at;
   item.important_at = payload.important_at;
   item.read_later_at = payload.read_later_at;
+  item.active_reminder_count = Number(payload.reminder_summary?.active_total || 0);
+  item.due_reminder_count = Number(payload.reminder_summary?.due_total || 0);
   item.detail_ready = payload.detail ? 1 : 0;
   item.has_note = Number(payload.has_note || 0);
   item.market_tags = normalizeMarketTags(payload.market_tags || []);
@@ -3334,6 +3767,8 @@ async function loadDetail(itemId) {
   item.ai_ready = payload.ai ? 1 : 0;
   if (payload.job && payload.job.last_error) item.detail_error = payload.job.last_error;
   if (payload.ai_job && payload.ai_job.last_error) item.ai_error = payload.ai_job.last_error;
+  cached.reminders = Array.isArray(payload.reminders) ? payload.reminders : [];
+  cached.reminder_summary = payload.reminder_summary || null;
   state.itemsById.set(item.id, item);
   rerenderOne(item.id);
   if (state.selectedId === itemId) {
@@ -3490,6 +3925,9 @@ function buildItemRow(item) {
   noteBadge.className = "note-badge hidden";
   noteBadge.textContent = "想法";
   line1.appendChild(noteBadge);
+  const reminderBadge = document.createElement("span");
+  reminderBadge.className = "note-badge reminder-badge hidden";
+  line1.appendChild(reminderBadge);
 
   const title = document.createElement("div");
   title.className = "title";
@@ -3611,6 +4049,9 @@ function resetList() {
   state.hasMore = true;
   lastListScrollTop = 0;
   state.selectedId = null;
+  state.selectedReminderId = null;
+  state.selectedReminderDraftId = null;
+  state.reminderItems = [];
   stopDetailPolling();
   stopRowStatusPolling();
   clearFeedEndAutoReadTimer();
@@ -3672,6 +4113,8 @@ function appendNewsRow(item, row) {
 
 async function loadFirstPage() {
   clearFeedEndAutoReadTimer();
+  startReminderSummaryTimer();
+  await refreshReminderSummary().catch(() => {});
   if (state.collection === "feed") {
     state.readFilter = state.feedReadFilter;
   } else if (state.readFilter !== "all") {
@@ -3727,6 +4170,34 @@ async function loadFirstPage() {
       renderTrendDetail(null);
       renderMeta();
       setHint(state.trendRows.length ? "点击单元格查看趋势明细" : "暂无板块趋势数据");
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      stopRowStatusPolling();
+      return;
+    }
+
+    if (state.collection === "reminders") {
+      const data = await fetchReminders("active");
+      state.reminderItems = Array.isArray(data.items) ? data.items : [];
+      applyReminderSummary(data.summary || state.reminderSummary);
+      state.total = state.reminderItems.length;
+      state.pages = 1;
+      state.page = 1;
+      state.hasMore = false;
+      state.dateCounts = new Map();
+      showTrendsView(false);
+      state.reminderItems.forEach((reminder) => {
+        const row = buildReminderListRow(reminder);
+        if (listHint && listHint.parentElement === newsList) {
+          newsList.insertBefore(row, listHint);
+        } else {
+          newsList.appendChild(row);
+        }
+      });
+      renderMeta();
+      setHint(state.total ? "点击提醒查看关联新闻" : "还没有提醒，去任意新闻右栏添加一个。");
       if (readObserver) {
         readObserver.disconnect();
         readObserver = null;
@@ -3920,6 +4391,12 @@ if (navFavoritesBtn) {
   });
 }
 
+if (navRemindersBtn) {
+  navRemindersBtn.addEventListener("click", async () => {
+    await switchCollection("reminders");
+  });
+}
+
 navImportantBtn.addEventListener("click", async () => {
   await switchCollection("important");
 });
@@ -4098,6 +4575,7 @@ if (detailFontSelect) {
 markAllReadBtn.addEventListener("click", async () => {
   if (
     state.collection === "favorites" ||
+    state.collection === "reminders" ||
     state.collection === "important" ||
     state.collection === "notes" ||
     state.collection === "market_tags" ||
@@ -4211,6 +4689,42 @@ detailBearishBtn.addEventListener("click", () => {
   if (!item) return;
   openMarketPicker(item, "bearish");
 });
+
+if (detailReminderToggleBtn) {
+  detailReminderToggleBtn.addEventListener("click", () => {
+    if (!state.selectedId) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (!item || item.snapshotOnly) return;
+    if (!detailReminderEditor.classList.contains("hidden")) {
+      closeReminderEditor();
+      return;
+    }
+    openReminderEditor(item);
+  });
+}
+
+if (detailReminderSaveBtn) {
+  detailReminderSaveBtn.addEventListener("click", async () => {
+    if (!state.selectedId) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (!item) return;
+    await saveReminderDraft(item, state.selectedReminderDraftId || null);
+  });
+}
+
+if (detailReminderDeleteBtn) {
+  detailReminderDeleteBtn.addEventListener("click", async () => {
+    if (!state.selectedId || !state.selectedReminderDraftId) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (!item) return;
+    if (!window.confirm("确认删除这个提醒？")) return;
+    await removeReminderDraft(item, state.selectedReminderDraftId);
+  });
+}
+
+if (detailReminderCancelBtn) {
+  detailReminderCancelBtn.addEventListener("click", closeReminderEditor);
+}
 
 if (detailTagCreateBtn) {
   detailTagCreateBtn.addEventListener("click", async () => {
@@ -4412,6 +4926,7 @@ detailNoteToggleBtn.addEventListener("click", () => {
   const item = state.itemsById.get(state.selectedId);
   if (!item) return;
   const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
+  closeReminderEditor();
   detailNoteInput.value = normalizedDetailNote(cached);
   setDetailNoteEditorOpen(true);
   detailNoteInput.focus();

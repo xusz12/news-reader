@@ -76,6 +76,7 @@ DEFAULT_MARKET_TAG_CHOICES = [
     "中国资产",
 ]
 MARKET_DIRECTIONS = {"bullish", "bearish"}
+REMINDER_STATUSES = {"active", "done", "dismissed"}
 
 FEED_NEWS_ORDER_BY_SQL = """
 COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10)) ASC,
@@ -321,6 +322,29 @@ def ensure_db() -> None:
 
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_reminder_event_date(value: str) -> str:
+    normalized = (value or "").strip()
+    try:
+        return datetime.strptime(normalized, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("invalid_event_date") from exc
+
+
+def parse_reminder_remind_at(value: str) -> str:
+    normalized = (value or "").strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    raise ValueError("invalid_remind_at")
+
+
+def reminder_is_due(remind_at: str | None, status: str | None) -> bool:
+    return bool(status == "active" and remind_at and remind_at <= now_ts())
 
 
 def build_note_preview(note_text: str | None, limit: int = 120) -> str:
@@ -923,6 +947,115 @@ def serialize_news_rows(items: list[dict], market_tags_map: dict[str, list[dict]
         item["date_key"] = date_key
         item["date_label"] = date_label
     return items
+
+
+def serialize_reminder_rows(rows: list[sqlite3.Row | dict]) -> list[dict]:
+    reminders: list[dict] = []
+    for row in rows:
+        reminder = dict(row)
+        reminder["note"] = reminder.get("note") or ""
+        reminder["is_due"] = reminder_is_due(reminder.get("remind_at"), reminder.get("status"))
+        reminder["item_exists"] = 1 if reminder.get("item_exists") else 0
+        reminders.append(reminder)
+    return reminders
+
+
+def load_reminder_summary(conn: sqlite3.Connection) -> dict:
+    row = conn.execute(
+        """
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active_total,
+          SUM(CASE WHEN status='active' AND remind_at <= datetime('now', 'localtime') THEN 1 ELSE 0 END) AS due_total,
+          SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done_total,
+          SUM(CASE WHEN status='dismissed' THEN 1 ELSE 0 END) AS dismissed_total
+        FROM news_reminders
+        """
+    ).fetchone()
+    return {
+        "total": int((row["total"] if row else 0) or 0),
+        "active_total": int((row["active_total"] if row else 0) or 0),
+        "due_total": int((row["due_total"] if row else 0) or 0),
+        "done_total": int((row["done_total"] if row else 0) or 0),
+        "dismissed_total": int((row["dismissed_total"] if row else 0) or 0),
+    }
+
+
+def load_news_item_map(conn: sqlite3.Connection, item_ids: list[str]) -> dict[str, dict]:
+    ordered_ids = [item_id for item_id in item_ids if item_id]
+    if not ordered_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(ordered_ids))
+    rows = conn.execute(
+        f"""
+        SELECT items.id, items.source_file, items.item_order, items.published_at,
+               items.date, items.time, items.source, items.source_type,
+               items.source_name, items.title, items.summary, items.url,
+               st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+               dj.status AS detail_status,
+               dj.last_error AS detail_error,
+               CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+               an.note AS note_preview_source,
+               CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
+               aj.status AS ai_status,
+               aj.last_error AS ai_error,
+               CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
+               {ITEM_DATE_SQL} AS date_key,
+               (
+                 SELECT COUNT(*)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id AND nr.status = 'active'
+               ) AS active_reminder_count,
+               (
+                 SELECT COUNT(*)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id
+                   AND nr.status = 'active'
+                   AND nr.remind_at <= datetime('now', 'localtime')
+               ) AS due_reminder_count,
+               (
+                 SELECT MIN(nr.remind_at)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id AND nr.status = 'active'
+               ) AS next_remind_at
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN detail_jobs dj ON dj.url = items.url
+        LEFT JOIN article_details ad ON ad.url = items.url
+        LEFT JOIN article_notes an ON an.url = items.url
+        LEFT JOIN ai_jobs aj ON aj.url = items.url
+        LEFT JOIN article_ai aa ON aa.url = items.url
+        WHERE items.id IN ({placeholders})
+        """,
+        ordered_ids,
+    ).fetchall()
+    urls = [row["url"] for row in rows if row["url"]]
+    market_tags_map = load_market_tags_map(conn, urls)
+    serialized = serialize_news_rows([dict(row) for row in rows], market_tags_map)
+    return {item["id"]: item for item in serialized}
+
+
+def load_item_reminders(conn: sqlite3.Connection, item_id: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT nr.*,
+               CASE WHEN items.id IS NULL THEN 0 ELSE 1 END AS item_exists
+        FROM news_reminders nr
+        LEFT JOIN items ON items.id = nr.item_id
+        WHERE nr.item_id = ?
+        ORDER BY
+          CASE
+            WHEN nr.status = 'active' AND nr.remind_at <= datetime('now', 'localtime') THEN 0
+            WHEN nr.status = 'active' THEN 1
+            WHEN nr.status = 'done' THEN 2
+            ELSE 3
+          END ASC,
+          CASE WHEN nr.status = 'active' THEN nr.remind_at ELSE nr.updated_at END ASC,
+          nr.id DESC
+        """,
+        (item_id,),
+    ).fetchall()
+    return serialize_reminder_rows(rows)
 
 
 def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
@@ -1638,6 +1771,23 @@ def api_news():
                aj.status AS ai_status,
                aj.last_error AS ai_error,
                CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
+               (
+                 SELECT COUNT(*)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id AND nr.status = 'active'
+               ) AS active_reminder_count,
+               (
+                 SELECT COUNT(*)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id
+                   AND nr.status = 'active'
+                   AND nr.remind_at <= datetime('now', 'localtime')
+               ) AS due_reminder_count,
+               (
+                 SELECT MIN(nr.remind_at)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id AND nr.status = 'active'
+               ) AS next_remind_at,
                {ITEM_DATE_SQL} AS date_key
         FROM items
         {join_sql}
@@ -1726,6 +1876,23 @@ def api_news_status():
             SELECT items.id,
                    st.favorite_at,
                    st.read_later_at,
+                   (
+                     SELECT COUNT(*)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id AND nr.status = 'active'
+                   ) AS active_reminder_count,
+                   (
+                     SELECT COUNT(*)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id
+                       AND nr.status = 'active'
+                       AND nr.remind_at <= datetime('now', 'localtime')
+                   ) AS due_reminder_count,
+                   (
+                     SELECT MIN(nr.remind_at)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id AND nr.status = 'active'
+                   ) AS next_remind_at,
                    dj.status AS detail_status,
                    dj.last_error AS detail_error,
                    CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
@@ -1742,6 +1909,66 @@ def api_news_status():
     finally:
         conn.close()
     return jsonify({"ok": True, "items": [dict(r) for r in rows]})
+
+
+@app.get("/api/reminders")
+def api_reminders():
+    status = (request.args.get("status") or "active").strip().lower()
+    if status not in {"active", "done", "dismissed", "all"}:
+        return jsonify({"ok": False, "error": "invalid_status"}), 400
+
+    conn = db_conn()
+    try:
+        summary = load_reminder_summary(conn)
+        where_sql = ""
+        args: list[str] = []
+        order_by_sql = "nr.updated_at DESC, nr.id DESC"
+        if status != "all":
+            where_sql = "WHERE nr.status = ?"
+            args.append(status)
+        if status in {"active", "all"}:
+            order_by_sql = """
+            CASE
+              WHEN nr.status = 'active' AND nr.remind_at <= datetime('now', 'localtime') THEN 0
+              WHEN nr.status = 'active' THEN 1
+              WHEN nr.status = 'done' THEN 2
+              ELSE 3
+            END ASC,
+            CASE WHEN nr.status = 'active' THEN nr.remind_at ELSE nr.updated_at END ASC,
+            nr.id DESC
+            """
+        rows = conn.execute(
+            f"""
+            SELECT nr.*,
+                   CASE WHEN items.id IS NULL THEN 0 ELSE 1 END AS item_exists
+            FROM news_reminders nr
+            LEFT JOIN items ON items.id = nr.item_id
+            {where_sql}
+            ORDER BY {order_by_sql}
+            """,
+            args,
+        ).fetchall()
+        reminders = serialize_reminder_rows(rows)
+        item_map = load_news_item_map(
+            conn,
+            [reminder["item_id"] for reminder in reminders if reminder.get("item_exists")],
+        )
+    finally:
+        conn.close()
+
+    for reminder in reminders:
+        reminder["item"] = item_map.get(reminder.get("item_id"))
+    return jsonify({"ok": True, "items": reminders, "summary": summary})
+
+
+@app.get("/api/reminders/summary")
+def api_reminders_summary():
+    conn = db_conn()
+    try:
+        summary = load_reminder_summary(conn)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "summary": summary})
 
 
 @app.get("/api/search")
@@ -2673,11 +2900,27 @@ def api_news_detail(item_id: str):
         ai = None
         note_row = None
         market_tags: list[dict] = []
+        reminders: list[dict] = []
+        reminder_summary = {
+            "active_total": 0,
+            "due_total": 0,
+            "done_total": 0,
+            "dismissed_total": 0,
+            "total": 0,
+        }
         state_row = conn.execute(
             "SELECT read_at, important_at, read_later_at, favorite_at FROM item_state WHERE item_id=?",
             (item_id,),
         ).fetchone()
         market_tag_choices = load_market_tag_definitions(conn, active_only=True)
+        reminders = load_item_reminders(conn, item_id)
+        reminder_summary = {
+            "total": len(reminders),
+            "active_total": sum(1 for reminder in reminders if reminder["status"] == "active"),
+            "due_total": sum(1 for reminder in reminders if reminder["is_due"]),
+            "done_total": sum(1 for reminder in reminders if reminder["status"] == "done"),
+            "dismissed_total": sum(1 for reminder in reminders if reminder["status"] == "dismissed"),
+        }
         if url:
             job = conn.execute(
                 "SELECT status, attempts, last_error, queued_at, started_at, finished_at FROM detail_jobs WHERE url=?",
@@ -2723,9 +2966,190 @@ def api_news_detail(item_id: str):
             "market_tags": market_tags,
             "has_market_tags": 1 if market_tags else 0,
             "market_tag_choices": market_tag_choices,
+            "reminders": reminders,
+            "reminder_summary": reminder_summary,
             "chat_providers": chat_provider_catalog(),
         }
     )
+
+
+@app.post("/api/news/<item_id>/reminders")
+def api_news_reminder_create(item_id: str):
+    body = request.get_json(silent=True) or {}
+    event_title = (body.get("event_title") or "").strip()
+    if not event_title:
+        return jsonify({"ok": False, "error": "empty_event_title"}), 400
+    if len(event_title) > 200:
+        return jsonify({"ok": False, "error": "event_title_too_long"}), 400
+    try:
+        event_date = parse_reminder_event_date(body.get("event_date") or "")
+        remind_at = parse_reminder_remind_at(body.get("remind_at") or "")
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    note = body.get("note")
+    if note is None:
+        note_text = ""
+    elif isinstance(note, str):
+        note_text = note.strip()
+    else:
+        return jsonify({"ok": False, "error": "invalid_note"}), 400
+    if len(note_text) > 5000:
+        return jsonify({"ok": False, "error": "note_too_long"}), 400
+
+    conn = db_conn()
+    try:
+        item = conn.execute(
+            "SELECT id, title, url FROM items WHERE id=?",
+            (item_id,),
+        ).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        ts = now_ts()
+        with conn:
+            cur = conn.execute(
+                """
+                INSERT INTO news_reminders(
+                  item_id, item_title_snapshot, item_url_snapshot,
+                  event_title, event_date, remind_at, note,
+                  status, created_at, updated_at, completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)
+                """,
+                (
+                    item_id,
+                    item["title"] or "",
+                    item["url"] or "",
+                    event_title,
+                    event_date,
+                    remind_at,
+                    note_text,
+                    ts,
+                    ts,
+                ),
+            )
+        reminder = next((row for row in load_item_reminders(conn, item_id) if row["id"] == cur.lastrowid), None)
+        summary = load_reminder_summary(conn)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "reminder": reminder, "summary": summary})
+
+
+@app.patch("/api/reminders/<int:reminder_id>")
+def api_reminder_update(reminder_id: int):
+    body = request.get_json(silent=True) or {}
+    allowed = {"event_title", "event_date", "remind_at", "note", "status"}
+    provided = [key for key in allowed if key in body]
+    if not provided:
+        return jsonify({"ok": False, "error": "missing_fields"}), 400
+
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            "SELECT * FROM news_reminders WHERE id=?",
+            (reminder_id,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "reminder_not_found"}), 404
+
+        event_title = existing["event_title"]
+        event_date = existing["event_date"]
+        remind_at = existing["remind_at"]
+        note_text = existing["note"] or ""
+        status = existing["status"]
+        completed_at = existing["completed_at"]
+
+        if "event_title" in body:
+            event_title = (body.get("event_title") or "").strip()
+            if not event_title:
+                return jsonify({"ok": False, "error": "empty_event_title"}), 400
+            if len(event_title) > 200:
+                return jsonify({"ok": False, "error": "event_title_too_long"}), 400
+        if "event_date" in body:
+            try:
+                event_date = parse_reminder_event_date(body.get("event_date") or "")
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+        if "remind_at" in body:
+            try:
+                remind_at = parse_reminder_remind_at(body.get("remind_at") or "")
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+        if "note" in body:
+            note = body.get("note")
+            if note is None:
+                note_text = ""
+            elif isinstance(note, str):
+                note_text = note.strip()
+            else:
+                return jsonify({"ok": False, "error": "invalid_note"}), 400
+            if len(note_text) > 5000:
+                return jsonify({"ok": False, "error": "note_too_long"}), 400
+        if "status" in body:
+            status = (body.get("status") or "").strip().lower()
+            if status not in REMINDER_STATUSES:
+                return jsonify({"ok": False, "error": "invalid_status"}), 400
+            if status == "done":
+                completed_at = now_ts()
+            elif status == "active":
+                completed_at = None
+
+        updated_at = now_ts()
+        with conn:
+            conn.execute(
+                """
+                UPDATE news_reminders
+                SET event_title=?,
+                    event_date=?,
+                    remind_at=?,
+                    note=?,
+                    status=?,
+                    updated_at=?,
+                    completed_at=?
+                WHERE id=?
+                """,
+                (
+                    event_title,
+                    event_date,
+                    remind_at,
+                    note_text,
+                    status,
+                    updated_at,
+                    completed_at,
+                    reminder_id,
+                ),
+            )
+        updated = conn.execute(
+            """
+            SELECT nr.*,
+                   CASE WHEN items.id IS NULL THEN 0 ELSE 1 END AS item_exists
+            FROM news_reminders nr
+            LEFT JOIN items ON items.id = nr.item_id
+            WHERE nr.id=?
+            """,
+            (reminder_id,),
+        ).fetchone()
+        summary = load_reminder_summary(conn)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "reminder": serialize_reminder_rows([updated])[0], "summary": summary})
+
+
+@app.delete("/api/reminders/<int:reminder_id>")
+def api_reminder_delete(reminder_id: int):
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM news_reminders WHERE id=?",
+            (reminder_id,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "reminder_not_found"}), 404
+        with conn:
+            conn.execute("DELETE FROM news_reminders WHERE id=?", (reminder_id,))
+        summary = load_reminder_summary(conn)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "deleted_id": reminder_id, "summary": summary})
 
 
 @app.post("/api/news/<item_id>/chat")

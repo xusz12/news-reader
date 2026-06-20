@@ -1470,6 +1470,12 @@ button.active {
   flex: 0 0 auto;
 }
 
+.reminder-badge.due {
+  border-color: #f59e0b;
+  color: #92400e;
+  background: #fef3c7;
+}
+
 .unread-dot {
   width: 8px;
   height: 8px;
@@ -1566,6 +1572,10 @@ button.active {
 .row-actions .glyph svg {
   width: 16px;
   height: 16px;
+}
+
+.reminder-item .title {
+  color: var(--row-title-important);
 }
 
 .market-tags {
@@ -1770,6 +1780,47 @@ html[data-detail-font="large"] {
   margin-bottom: 8px;
   font-size: 12px;
   color: var(--muted);
+}
+
+.detail-reminder-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.detail-reminder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-reminder-item {
+  border: 1px solid var(--detail-card-border);
+  border-radius: 10px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--detail-card-bg) 75%, transparent);
+}
+
+.detail-reminder-item.active {
+  border-color: color-mix(in srgb, var(--status-ready) 35%, var(--detail-card-border));
+}
+
+.detail-reminder-item-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--detail-text);
+  margin-bottom: 4px;
+}
+
+.detail-reminder-item-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.detail-reminder-item-meta.due {
+  color: #d97706;
 }
 
 .detail-market-tag {
@@ -2496,6 +2547,10 @@ html[data-detail-font="large"] {
     display: grid;
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .detail-reminder-grid {
+    grid-template-columns: 1fr;
   }
 
   .mobile-source-btn {
