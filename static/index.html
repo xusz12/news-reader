@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v1.9.6.11</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.6.11" />
+    <title>News Reader v1.9.6.12</title>
+    <link rel="stylesheet" href="/static/style.css?v=1.9.6.12" />
   </head>
   <body>
     <header class="topbar">
@@ -12,7 +12,7 @@
         <div class="topbar-brand">
           <div class="topbar-title-row">
             <h1>News Reader</h1>
-            <span class="topbar-version">v1.9.6.11</span>
+            <span class="topbar-version">v1.9.6.12</span>
           </div>
           <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
         </div>
@@ -48,6 +48,7 @@
         <h2>集合入口</h2>
         <button id="navSearchBtn" class="nav-btn">搜索</button>
         <button id="navFeedBtn" class="nav-btn active">新闻流</button>
+        <button id="navFavoritesBtn" class="nav-btn">收藏</button>
         <button id="navImportantBtn" class="nav-btn">重要新闻</button>
         <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
         <button id="navNotesBtn" class="nav-btn">想法</button>
@@ -180,6 +181,7 @@
             <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
             <button id="detailBullishBtn" class="icon-btn" type="button" title="看多板块标记" aria-label="看多板块标记"></button>
             <button id="detailBearishBtn" class="icon-btn" type="button" title="看空板块标记" aria-label="看空板块标记"></button>
+            <button id="detailFavoriteBtn" class="icon-btn" type="button"></button>
             <button id="detailImportantBtn" class="icon-btn" type="button"></button>
           </div>
           <section id="detailMarketPicker" class="detail-market-picker hidden">
@@ -330,6 +332,6 @@
       <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.6.8"></script>
+    <script src="/static/app.js?v=1.9.6.12"></script>
   </body>
 </html>

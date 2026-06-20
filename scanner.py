@@ -36,6 +36,23 @@ def apply_schema(conn: sqlite3.Connection, schema_path: Path) -> None:
         conn.execute("ALTER TABLE item_state ADD COLUMN important_at TEXT")
     if "read_later_at" not in cols:
         conn.execute("ALTER TABLE item_state ADD COLUMN read_later_at TEXT")
+    if "favorite_at" not in cols:
+        conn.execute("ALTER TABLE item_state ADD COLUMN favorite_at TEXT")
+    if "bookmarked" in cols:
+        conn.execute(
+            """
+            UPDATE item_state
+            SET favorite_at = COALESCE(
+              favorite_at,
+              updated_at,
+              read_at,
+              important_at,
+              read_later_at,
+              datetime('now', 'localtime')
+            )
+            WHERE bookmarked = 1 AND favorite_at IS NULL
+            """
+        )
     conn.commit()
 
 

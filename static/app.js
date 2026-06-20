@@ -6,7 +6,7 @@ let state = {
   readFilter: "unread", // all | unread
   feedReadFilter: "unread", // 仅新闻流记忆 all | unread
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
-  collection: "feed", // search | feed | important | read_later | notes | market_tags | trends
+  collection: "feed", // search | feed | favorites | important | read_later | notes | market_tags | trends
   total: 0,
   loading: false,
   hasMore: true,
@@ -65,6 +65,7 @@ const manageMarketTagsBtn = document.getElementById("manageMarketTagsBtn");
 
 const navSearchBtn = document.getElementById("navSearchBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
+const navFavoritesBtn = document.getElementById("navFavoritesBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
@@ -180,6 +181,7 @@ const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
 const detailReturnToTrendBtn = document.getElementById("detailReturnToTrendBtn");
 const detailBullishBtn = document.getElementById("detailBullishBtn");
 const detailBearishBtn = document.getElementById("detailBearishBtn");
+const detailFavoriteBtn = document.getElementById("detailFavoriteBtn");
 const detailInlineMarketTags = document.getElementById("detailInlineMarketTags");
 const detailMarketPicker = document.getElementById("detailMarketPicker");
 const detailMarketPickerTitle = document.getElementById("detailMarketPickerTitle");
@@ -469,6 +471,7 @@ function itemMatchesCurrentDateCountScope(item) {
   if (!item || state.collection === "trends" || state.collection === "search") return false;
   let inCollection = false;
   if (state.collection === "feed") inCollection = true;
+  else if (state.collection === "favorites") inCollection = !!item.favorite_at;
   else if (state.collection === "important") inCollection = !!item.important_at;
   else if (state.collection === "read_later") inCollection = !!item.read_later_at;
   else if (state.collection === "notes") inCollection = !!item.has_note;
@@ -1155,6 +1158,12 @@ function iconSvg(name, filled = false) {
     }
     return `<svg ${common}><path d="M8 4.5h8a1 1 0 0 1 1 1V20l-5-3-5 3V5.5a1 1 0 0 1 1-1Z"/></svg>`;
   }
+  if (name === "star") {
+    if (filled) {
+      return `<svg ${common}><path d="m12 4.7 2.2 4.5 5 .7-3.6 3.5.9 4.9-4.5-2.4-4.5 2.4.9-4.9L4.8 9.9l5-.7L12 4.7Z" fill="currentColor" stroke="currentColor"/></svg>`;
+    }
+    return `<svg ${common}><path d="m12 4.7 2.2 4.5 5 .7-3.6 3.5.9 4.9-4.5-2.4-4.5 2.4.9-4.9L4.8 9.9l5-.7L12 4.7Z"/></svg>`;
+  }
   if (name === "crosshair") {
     return `<svg ${common}><circle cx="12" cy="12" r="6.8"/><path d="M12 3.5v2.2"/><path d="M12 18.3v2.2"/><path d="M3.5 12h2.2"/><path d="M18.3 12h2.2"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg>`;
   }
@@ -1253,6 +1262,7 @@ function rowIsRead(li) {
 
 function syncRowUI(li, item) {
   li.dataset.read = item.read_at ? "1" : "0";
+  li.dataset.favorite = item.favorite_at ? "1" : "0";
   li.dataset.important = item.important_at ? "1" : "0";
   li.dataset.readLater = item.read_later_at ? "1" : "0";
 
@@ -1308,6 +1318,15 @@ function syncRowUI(li, item) {
     });
   }
 
+  const favoriteBtn = li.querySelector(".btn-favorite");
+  if (favoriteBtn) {
+    applyIcon(favoriteBtn, "star", {
+      filled: !!item.favorite_at,
+      tone: item.favorite_at ? "warning" : "default",
+      label: item.favorite_at ? "取消收藏" : "加入收藏",
+    });
+  }
+
   const readLaterBtn = li.querySelector(".btn-read-later");
   if (readLaterBtn) {
     const detailReady = Number(item.detail_ready || 0) === 1;
@@ -1356,7 +1375,7 @@ function applyResumeIcon(label = "回到上次阅读") {
 }
 
 function supportsSortToggle(collection = state.collection) {
-  return ["feed", "important", "read_later", "notes", "market_tags"].includes(collection);
+  return ["feed", "favorites", "important", "read_later", "notes", "market_tags"].includes(collection);
 }
 
 function getNewsSortOrder(collection = state.collection) {
@@ -1388,6 +1407,7 @@ function updateSortOrderButton() {
 function updateBatchActionButton() {
   if (
     state.collection === "search" ||
+    state.collection === "favorites" ||
     state.collection === "important" ||
     state.collection === "notes" ||
     state.collection === "market_tags" ||
@@ -1408,6 +1428,7 @@ function updateBatchActionButton() {
 function updateCollectionButtons() {
   if (navSearchBtn) navSearchBtn.classList.toggle("active", state.collection === "search");
   navFeedBtn.classList.toggle("active", state.collection === "feed");
+  if (navFavoritesBtn) navFavoritesBtn.classList.toggle("active", state.collection === "favorites");
   navImportantBtn.classList.toggle("active", state.collection === "important");
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
   if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
@@ -1418,6 +1439,7 @@ function updateCollectionButtons() {
     const names = {
       search: "搜索",
       feed: "新闻流",
+      favorites: "收藏",
       important: "重要",
       read_later: "稍后",
       notes: "想法",
@@ -1451,6 +1473,7 @@ function updateMobileFilterCollectionText() {
   const names = {
     search: "搜索",
     feed: "新闻流",
+    favorites: "收藏",
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
@@ -1478,6 +1501,7 @@ function renderMobileCollectionOptions() {
   const options = [
     { key: "search", label: "搜索" },
     { key: "feed", label: "新闻流" },
+    { key: "favorites", label: "收藏" },
     { key: "important", label: "重要" },
     { key: "read_later", label: "稍后阅读" },
     { key: "notes", label: "想法" },
@@ -1606,6 +1630,7 @@ function renderMeta() {
   }
   const names = {
     feed: "新闻流",
+    favorites: "收藏",
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
@@ -2499,6 +2524,7 @@ async function locateReadingCheckpoint() {
 
 function applyPatchToItem(item, patchResult) {
   if ("read_at" in patchResult) item.read_at = patchResult.read_at;
+  if ("favorite_at" in patchResult) item.favorite_at = patchResult.favorite_at;
   if ("important_at" in patchResult) item.important_at = patchResult.important_at;
   if ("read_later_at" in patchResult) item.read_later_at = patchResult.read_later_at;
   state.itemsById.set(item.id, item);
@@ -2522,6 +2548,7 @@ async function patchStateWithRollback(itemId, payload) {
   const backup = {
     date_key: item.date_key,
     read_at: item.read_at,
+    favorite_at: item.favorite_at,
     important_at: item.important_at,
     read_later_at: item.read_later_at,
     has_note: item.has_note,
@@ -2531,6 +2558,7 @@ async function patchStateWithRollback(itemId, payload) {
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   const beforeItem = { ...backup };
   if ("read" in payload) item.read_at = payload.read ? now : null;
+  if ("favorite" in payload) item.favorite_at = payload.favorite ? now : null;
   if ("important" in payload) item.important_at = payload.important ? now : null;
   if ("read_later" in payload) {
     item.read_later_at = payload.read_later ? now : null;
@@ -2551,6 +2579,14 @@ async function patchStateWithRollback(itemId, payload) {
   try {
     const result = await patchState(itemId, payload);
     applyPatchToItem(item, result);
+    if (state.collection === "favorites" && "favorite" in payload && !payload.favorite) {
+      if (state.selectedId === itemId) {
+        state.selectedId = null;
+        renderDetail(null);
+      }
+      await loadFirstPage();
+      return;
+    }
     rerenderOne(itemId);
     if ("read_later" in payload) {
       if (payload.read_later) {
@@ -2562,6 +2598,7 @@ async function patchStateWithRollback(itemId, payload) {
   } catch {
     adjustDateCountForScopeTransition(item, backup);
     item.read_at = backup.read_at;
+    item.favorite_at = backup.favorite_at;
     item.important_at = backup.important_at;
     item.read_later_at = backup.read_later_at;
     rerenderOne(itemId);
@@ -2903,6 +2940,7 @@ async function upsertMarketTag(item, tag, direction) {
   const beforeItem = {
     date_key: item.date_key,
     read_at: item.read_at,
+    favorite_at: item.favorite_at,
     important_at: item.important_at,
     read_later_at: item.read_later_at,
     has_note: item.has_note,
@@ -2923,6 +2961,7 @@ async function upsertMarketTag(item, tag, direction) {
   if (item.url) state.detailCacheByUrl.set(item.url, cached);
   item.market_tags = tags;
   item.has_market_tags = Number(payload.has_market_tags || 0);
+  if ("favorite_at" in payload) item.favorite_at = payload.favorite_at;
   if ("important_at" in payload && payload.important_at) item.important_at = payload.important_at;
   state.itemsById.set(item.id, item);
   adjustDateCountForScopeTransition(beforeItem, item);
@@ -2933,6 +2972,7 @@ async function deleteMarketTag(item, tag) {
   const beforeItem = {
     date_key: item.date_key,
     read_at: item.read_at,
+    favorite_at: item.favorite_at,
     important_at: item.important_at,
     read_later_at: item.read_later_at,
     has_note: item.has_note,
@@ -3038,6 +3078,7 @@ async function saveDetailNote(item, noteText) {
   const beforeItem = {
     date_key: item.date_key,
     read_at: item.read_at,
+    favorite_at: item.favorite_at,
     important_at: item.important_at,
     read_later_at: item.read_later_at,
     has_note: item.has_note,
@@ -3249,6 +3290,11 @@ function renderDetail(item) {
   }
 
   const importantBtn = document.getElementById("detailImportantBtn");
+  applyIcon(detailFavoriteBtn, "star", {
+    filled: !!item.favorite_at,
+    tone: item.favorite_at ? "warning" : "default",
+    label: item.favorite_at ? "取消收藏" : "加入收藏",
+  });
   applyIcon(importantBtn, "important", {
     filled: !!item.important_at,
     tone: item.important_at ? "danger" : "default",
@@ -3276,6 +3322,10 @@ async function loadDetail(itemId) {
   state.detailCacheByUrl.set(item.url, payload);
   state.marketTagChoices = Array.isArray(payload.market_tag_choices) ? payload.market_tag_choices : state.marketTagChoices;
   item.detail_status = payload.detail_status;
+  item.read_at = payload.read_at;
+  item.favorite_at = payload.favorite_at;
+  item.important_at = payload.important_at;
+  item.read_later_at = payload.read_later_at;
   item.detail_ready = payload.detail ? 1 : 0;
   item.has_note = Number(payload.has_note || 0);
   item.market_tags = normalizeMarketTags(payload.market_tags || []);
@@ -3475,6 +3525,16 @@ function buildItemRow(item) {
     patchStateWithRollback(item.id, { read_later: !current });
   });
 
+  const btnFavorite = document.createElement("button");
+  btnFavorite.className = "btn-favorite icon-btn";
+  btnFavorite.type = "button";
+  btnFavorite.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const current = !!state.itemsById.get(item.id)?.favorite_at;
+    patchStateWithRollback(item.id, { favorite: !current });
+  });
+
+  actions.appendChild(btnFavorite);
   actions.appendChild(btnImportant);
   if (!isBloombergVideoUrl(item.url) && item.source_type !== "twitter") {
     actions.appendChild(btnReadLater);
@@ -3854,6 +3914,12 @@ navFeedBtn.addEventListener("click", async () => {
   await switchCollection("feed");
 });
 
+if (navFavoritesBtn) {
+  navFavoritesBtn.addEventListener("click", async () => {
+    await switchCollection("favorites");
+  });
+}
+
 navImportantBtn.addEventListener("click", async () => {
   await switchCollection("important");
 });
@@ -4031,6 +4097,7 @@ if (detailFontSelect) {
 
 markAllReadBtn.addEventListener("click", async () => {
   if (
+    state.collection === "favorites" ||
     state.collection === "important" ||
     state.collection === "notes" ||
     state.collection === "market_tags" ||
@@ -4118,6 +4185,12 @@ detailPanel.addEventListener("touchcancel", handleDetailTouchEnd, { passive: tru
 
 const detailImportantBtn = document.getElementById("detailImportantBtn");
 const detailLink = document.getElementById("detailLink");
+
+detailFavoriteBtn.addEventListener("click", async () => {
+  if (!state.selectedId) return;
+  const current = !!state.itemsById.get(state.selectedId)?.favorite_at;
+  await patchStateWithRollback(state.selectedId, { favorite: !current });
+});
 
 detailImportantBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;

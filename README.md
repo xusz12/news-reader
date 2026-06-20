@@ -4,6 +4,20 @@
 
 ## What's Changed
 
+### 2026-06-20 — v1.9.6.12 improve: 收藏新闻功能
+- **文件**
+  - *schema.sql（+）*、*scanner.py（+）*、*app.py（+）*
+    - `item_state` 新增独立 `favorite_at` 字段，收藏状态不再复用历史 `bookmarked`
+    - 启动/测试建库链路补齐 `favorite_at` 幂等 migration，并兼容旧库里极少数 `bookmarked=1` 的一次性迁移
+    - `PATCH /api/news/:id/state` 新增 `favorite` 开关；`/api/news`、`/api/news/:id/detail`、`/api/news/status`、`/api/sources` 同步支持 favorites 集合与 `favorite_at` 返回
+  - *static/index.html（+）*、*static/app.js（+）*
+    - 左侧与移动端集合入口新增“收藏”，新闻 row 与右栏详情新增星标收藏按钮
+    - 收藏按钮接入现有 `icon-btn + applyIcon` 体系，选中态使用浅金色；在收藏集合内取消收藏后会立即刷新列表保持一致
+    - 收藏集合默认按新闻时间新到旧排序，继续兼容 `sort_order=default|reverse`
+  - *tests/test_api.py（+）*
+    - 补覆盖：`favorite_at` migration、收藏状态增删、favorites 集合筛选/排序、`/api/news/status` 与详情/来源响应带出 `favorite_at`
+- **影响**：现在可以把值得反复阅读的新闻单独收藏，且收藏与重要/稍后再看完全独立；本版涉及 `app.py` 和 schema，合入后需重启 Flask。
+
 ### 2026-06-19 — v1.9.6.11 improve: 新闻流时间排序切换
 - **文件**
   - *app.py（+）*、*tests/test_api.py（+）*

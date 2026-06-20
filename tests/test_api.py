@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import sqlite3
 import types
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -43,6 +44,7 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     assert data["items"][0]["date_label"]
     item_id = data["items"][0]["id"]
     assert data["items"][0]["read_at"] is None
+    assert data["items"][0]["favorite_at"] is None
     assert data["items"][0]["important_at"] is None
     assert data["items"][0]["read_later_at"] is None
 
@@ -58,6 +60,7 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     r5 = client.patch(f"/api/news/{item_id}/state", json={"read": False})
     assert r5.status_code == 200
     assert r5.get_json()["read_at"] is None
+    assert r5.get_json()["favorite_at"] is None
     assert r5.get_json()["important_at"] is None
 
     r6 = client.get("/api/news?read_filter=unread")
@@ -67,11 +70,16 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     # New flags should be independent and combinable.
     r7 = client.patch(
         f"/api/news/{item_id}/state",
-        json={"important": True, "read_later": True},
+        json={"favorite": True, "important": True, "read_later": True},
     )
     assert r7.status_code == 200
+    assert r7.get_json()["favorite_at"] is not None
     assert r7.get_json()["important_at"] is not None
     assert r7.get_json()["read_later_at"] is not None
+
+    favorites = client.get("/api/news?collection=favorites")
+    assert favorites.status_code == 200
+    assert favorites.get_json()["total"] == 1
 
     important = client.get("/api/news?collection=important")
     assert important.status_code == 200
@@ -218,6 +226,59 @@ def test_global_search_mvp(tmp_path: Path, monkeypatch):
     assert missing_hit["items"] == []
 
 
+def test_apply_schema_adds_favorite_at_and_migrates_legacy_bookmarked(tmp_path: Path, monkeypatch):
+    daily_root = tmp_path / "DailyNews"
+    daily_root.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_root))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE item_state (
+              item_id TEXT PRIMARY KEY,
+              bookmarked INTEGER DEFAULT 0,
+              skipped INTEGER DEFAULT 0,
+              read_at TEXT,
+              important_at TEXT,
+              read_later_at TEXT,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO item_state(item_id, bookmarked, updated_at)
+            VALUES ('legacy-1', 1, '2026-06-20 10:00:00')
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    app_module.ensure_db()
+    app_module.ensure_db()
+
+    conn = app_module.db_conn()
+    try:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(item_state)").fetchall()}
+        assert "favorite_at" in cols
+        migrated = conn.execute(
+            "SELECT favorite_at FROM item_state WHERE item_id='legacy-1'"
+        ).fetchone()
+        assert migrated is not None
+        assert migrated["favorite_at"] == "2026-06-20 10:00:00"
+    finally:
+        conn.close()
+
+
 def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -252,6 +313,16 @@ def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
     for item in feed_items:
         res = client.patch(f"/api/news/{item['id']}/state", json={"important": True})
         assert res.status_code == 200
+
+    for item in feed_items:
+        res = client.patch(f"/api/news/{item['id']}/state", json={"favorite": True})
+        assert res.status_code == 200
+
+    favorite_items = client.get("/api/news?collection=favorites&per=20").get_json()["items"]
+    assert [item["title"] for item in favorite_items] == ["Evening", "Noon", "Morning"]
+
+    favorite_reverse = client.get("/api/news?collection=favorites&sort_order=reverse&per=20").get_json()["items"]
+    assert [item["title"] for item in favorite_reverse] == ["Morning", "Noon", "Evening"]
 
     important_items = client.get("/api/news?collection=important&per=20").get_json()["items"]
     assert [item["title"] for item in important_items] == ["Evening", "Noon", "Morning"]
@@ -933,6 +1004,69 @@ def test_detail_api_includes_ai_fields(tmp_path: Path, monkeypatch):
     assert payload["ai_status"] == "success"
     assert payload["ai"] is not None
     assert payload["ai"]["conclusion_zh"] == "结论"
+
+
+def test_favorite_state_surfaces_in_status_detail_and_sources(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        """## Reuters · World（1条）
+### [Fav Reuters](https://www.reuters.com/world/fav-r)
+- 发布时间：2026-05-25 12:00:00
+## Bloomberg · Markets（1条）
+### [Fav Bloomberg](https://www.bloomberg.com/news/articles/fav-b)
+- 发布时间：2026-05-25 13:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    first_id = items[0]["id"]
+    second_id = items[1]["id"]
+
+    first_patch = client.patch(f"/api/news/{first_id}/state", json={"favorite": True})
+    second_patch = client.patch(f"/api/news/{second_id}/state", json={"favorite": True})
+    assert first_patch.status_code == 200
+    assert second_patch.status_code == 200
+    assert first_patch.get_json()["favorite_at"] is not None
+
+    favorites = client.get("/api/news?collection=favorites&per=20").get_json()
+    assert favorites["total"] == 2
+    assert all(item["favorite_at"] is not None for item in favorites["items"])
+
+    status = client.get(f"/api/news/status?ids={first_id},{second_id}")
+    assert status.status_code == 200
+    status_items = {item["id"]: item for item in status.get_json()["items"]}
+    assert status_items[first_id]["favorite_at"] is not None
+    assert status_items[second_id]["favorite_at"] is not None
+
+    detail = client.get(f"/api/news/{first_id}/detail")
+    assert detail.status_code == 200
+    assert detail.get_json()["favorite_at"] is not None
+
+    sources = client.get("/api/sources?collection=favorites&read_filter=all")
+    assert sources.status_code == 200
+    source_keys = {item["key"] for item in sources.get_json()["sources"]}
+    assert "reuters" in source_keys
+    assert "bloomberg" in source_keys
+
+    cancel = client.patch(f"/api/news/{first_id}/state", json={"favorite": False})
+    assert cancel.status_code == 200
+    assert cancel.get_json()["favorite_at"] is None
+
+    favorites_after = client.get("/api/news?collection=favorites&per=20").get_json()
+    assert favorites_after["total"] == 1
+    assert favorites_after["items"][0]["id"] == second_id
 
 
 def test_sources_and_source_filter(tmp_path: Path, monkeypatch):
