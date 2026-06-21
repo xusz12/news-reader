@@ -1697,10 +1697,10 @@ function renderMobileCollectionOptions() {
   const options = [
     { key: "search", label: "搜索" },
     { key: "feed", label: "新闻流" },
-    { key: "favorites", label: "收藏" },
-    { key: "reminders", label: reminderNavLabel() },
-    { key: "important", label: "重要" },
     { key: "read_later", label: "稍后阅读" },
+    { key: "important", label: "重要" },
+    { key: "reminders", label: reminderNavLabel() },
+    { key: "favorites", label: "收藏" },
     { key: "notes", label: "想法" },
     { key: "market_tags", label: "板块" },
   ];
