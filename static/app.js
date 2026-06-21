@@ -13,6 +13,7 @@ let state = {
   selectedId: null,
   selectedReminderId: null,
   selectedReminderDraftId: null,
+  reminderFilter: "active", // active | done | all
   itemsById: new Map(),
   reminderItems: [],
   reminderSummary: {
@@ -110,6 +111,10 @@ const searchPageSubmitBtn = document.getElementById("searchPageSubmitBtn");
 const newsList = document.getElementById("newsList");
 const meta = document.getElementById("meta");
 const pageInfo = document.getElementById("pageInfo");
+const reminderFilterBar = document.getElementById("reminderFilterBar");
+const reminderFilterActiveBtn = document.getElementById("reminderFilterActiveBtn");
+const reminderFilterDoneBtn = document.getElementById("reminderFilterDoneBtn");
+const reminderFilterAllBtn = document.getElementById("reminderFilterAllBtn");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 const workspace = document.getElementById("workspace");
@@ -200,9 +205,8 @@ const detailMarketPickerTitle = document.getElementById("detailMarketPickerTitle
 const detailMarketPickerOptions = document.getElementById("detailMarketPickerOptions");
 const detailReminderEditor = document.getElementById("detailReminderEditor");
 const detailReminderEditorTitle = document.getElementById("detailReminderEditorTitle");
-const detailReminderEventTitleInput = document.getElementById("detailReminderEventTitleInput");
+const detailReminderEventTitleText = document.getElementById("detailReminderEventTitleText");
 const detailReminderEventDateInput = document.getElementById("detailReminderEventDateInput");
-const detailReminderRemindAtInput = document.getElementById("detailReminderRemindAtInput");
 const detailReminderNoteInput = document.getElementById("detailReminderNoteInput");
 const detailReminderSaveBtn = document.getElementById("detailReminderSaveBtn");
 const detailReminderDeleteBtn = document.getElementById("detailReminderDeleteBtn");
@@ -300,6 +304,30 @@ function reminderStatusLabel(status) {
   return mapping[status] || "提醒";
 }
 
+function reminderFilterLabel(filter = state.reminderFilter) {
+  const mapping = { active: "进行中", done: "已完成", all: "全部" };
+  return mapping[filter] || "进行中";
+}
+
+function normalizeReminderItems(items) {
+  const rows = Array.isArray(items) ? [...items] : [];
+  rows.sort((a, b) => {
+    const rank = (row) => {
+      if (row.status === "active" && row.is_due) return 0;
+      if (row.status === "active") return 1;
+      if (row.status === "done") return 2;
+      return 3;
+    };
+    const diff = rank(a) - rank(b);
+    if (diff !== 0) return diff;
+    const at = String(a.remind_at || "");
+    const bt = String(b.remind_at || "");
+    if (at !== bt) return at.localeCompare(bt);
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
+  return rows;
+}
+
 function formatReminderDateTime(value) {
   if (!value) return "";
   return String(value).replace("T", " ").slice(0, 16);
@@ -308,6 +336,11 @@ function formatReminderDateTime(value) {
 function toDateTimeLocalValue(value) {
   if (!value) return "";
   return String(value).replace(" ", "T").slice(0, 16);
+}
+
+function reminderDateToDefaultRemindAt(dateValue) {
+  if (!dateValue) return "";
+  return `${dateValue} 08:00:00`;
 }
 
 function startReminderSummaryTimer() {
@@ -1309,6 +1342,9 @@ function iconSvg(name, filled = false) {
   if (name === "bell") {
     return `<svg ${common}><path d="M6.5 10.2a5.5 5.5 0 1 1 11 0c0 5 2 5.8 2 7.3H4.5c0-1.5 2-2.3 2-7.3"/><path d="M10 19.3a2.2 2.2 0 0 0 4 0"/></svg>`;
   }
+  if (name === "message-circle") {
+    return `<svg ${common}><path d="M8.5 17.5 5 19l1-3.4A6.8 6.8 0 1 1 8.5 17.5Z"/></svg>`;
+  }
   if (name === "settings") {
     return `<svg ${common}><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.9 1.9 0 0 1-2.7 2.7l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.9 1.9 0 1 1-3.8 0v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.9 1.9 0 1 1-2.7-2.7l.1-.1A1 1 0 0 0 6 15a1 1 0 0 0-.9-.6H5a1.9 1.9 0 1 1 0-3.8h.2A1 1 0 0 0 6 10a1 1 0 0 0-.2-1.1l-.1-.1a1.9 1.9 0 1 1 2.7-2.7l.1.1A1 1 0 0 0 9.6 6a1 1 0 0 0 .6-.9V5a1.9 1.9 0 1 1 3.8 0v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.9 1.9 0 1 1 2.7 2.7l-.1.1A1 1 0 0 0 18 10a1 1 0 0 0 .9.6h.2a1.9 1.9 0 1 1 0 3.8h-.2a1 1 0 0 0-.9.6Z"/></svg>`;
   }
@@ -1497,6 +1533,22 @@ function updateFilterButtons() {
   });
 }
 
+function updateReminderFilterBar() {
+  if (!reminderFilterBar) return;
+  const visible = state.collection === "reminders";
+  reminderFilterBar.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  const buttons = [
+    [reminderFilterActiveBtn, "active"],
+    [reminderFilterDoneBtn, "done"],
+    [reminderFilterAllBtn, "all"],
+  ];
+  buttons.forEach(([button, value]) => {
+    if (!button) return;
+    button.classList.toggle("active", state.reminderFilter === value);
+  });
+}
+
 function updateResumeButton() {
   const visible = state.collection === "feed" && !!state.readingCheckpoint?.url;
   resumeAnchorBtn.classList.toggle("hidden", !visible);
@@ -1608,6 +1660,7 @@ function updateCollectionButtons() {
       });
     }
   }
+  updateReminderFilterBar();
 }
 
 function updateMobileFilterCollectionText() {
@@ -1788,7 +1841,7 @@ function renderMeta() {
     return;
   }
   if (state.collection === "reminders") {
-    meta.textContent = `提醒 · 进行中 ${state.reminderSummary.active_total || 0} · 到期 ${state.reminderSummary.due_total || 0}`;
+    meta.textContent = `提醒 · ${reminderFilterLabel()} · 进行中 ${state.reminderSummary.active_total || 0} · 到期 ${state.reminderSummary.due_total || 0} · 已完成 ${state.reminderSummary.done_total || 0}`;
     pageInfo.textContent = "- / -";
     return;
   }
@@ -3290,9 +3343,8 @@ function currentDetailReminderSummary(item) {
 function closeReminderEditor() {
   state.selectedReminderDraftId = null;
   if (detailReminderEditor) detailReminderEditor.classList.add("hidden");
-  if (detailReminderEventTitleInput) detailReminderEventTitleInput.value = "";
+  if (detailReminderEventTitleText) detailReminderEventTitleText.textContent = "";
   if (detailReminderEventDateInput) detailReminderEventDateInput.value = "";
-  if (detailReminderRemindAtInput) detailReminderRemindAtInput.value = "";
   if (detailReminderNoteInput) detailReminderNoteInput.value = "";
   if (detailReminderDeleteBtn) detailReminderDeleteBtn.classList.add("hidden");
   if (detailReminderEditorTitle) detailReminderEditorTitle.textContent = "添加提醒";
@@ -3306,9 +3358,10 @@ function openReminderEditor(item, reminder = null) {
   if (detailReminderEditorTitle) {
     detailReminderEditorTitle.textContent = reminder ? "编辑提醒" : "添加提醒";
   }
-  detailReminderEventTitleInput.value = reminder?.event_title || "";
+  if (detailReminderEventTitleText) {
+    detailReminderEventTitleText.textContent = `关联新闻：${item.title || reminder?.event_title || ""}`;
+  }
   detailReminderEventDateInput.value = reminder?.event_date || item.date_key || "";
-  detailReminderRemindAtInput.value = toDateTimeLocalValue(reminder?.remind_at || "");
   detailReminderNoteInput.value = reminder?.note || "";
   detailReminderDeleteBtn.classList.toggle("hidden", !reminder);
   detailReminderEditor.classList.remove("hidden");
@@ -3316,7 +3369,7 @@ function openReminderEditor(item, reminder = null) {
 
 function refreshDetailReminderUI(item) {
   if (!detailReminderCard || !detailReminderList || !detailReminderSummary) return;
-  const reminders = currentDetailReminders(item);
+  const reminders = normalizeReminderItems(currentDetailReminders(item));
   const summary = currentDetailReminderSummary(item);
   detailReminderSummary.textContent = `进行中 ${summary.active_total || 0} · 到期 ${summary.due_total || 0} · 已完成 ${summary.done_total || 0}`;
   detailReminderList.innerHTML = "";
@@ -3328,21 +3381,18 @@ function refreshDetailReminderUI(item) {
     const card = document.createElement("div");
     card.className = "detail-reminder-item";
     if (state.selectedReminderId === reminder.id) card.classList.add("active");
-
-    const title = document.createElement("div");
-    title.className = "detail-reminder-item-title";
-    title.textContent = reminder.event_title || "未命名提醒";
+    if (reminder.status === "done") card.classList.add("done");
 
     const meta = document.createElement("div");
     meta.className = "detail-reminder-item-meta";
     meta.textContent = `${reminderStatusLabel(reminder.status)} · 事件日 ${reminder.event_date} · 提醒 ${formatReminderDateTime(reminder.remind_at)}`;
     if (reminder.is_due) meta.classList.add("due");
 
-    card.appendChild(title);
     card.appendChild(meta);
     if (reminder.note) {
-      const note = document.createElement("p");
-      note.className = "detail-note-text";
+      const note = document.createElement("div");
+      note.className = "detail-reminder-item-note";
+      if (reminder.status === "done") note.classList.add("done");
       note.textContent = reminder.note;
       card.appendChild(note);
     }
@@ -3414,9 +3464,9 @@ function refreshDetailReminderUI(item) {
 async function saveReminderDraft(item, reminderId = null, overridePayload = null) {
   if (!item) return;
   const payload = overridePayload || {
-    event_title: detailReminderEventTitleInput.value.trim(),
+    event_title: (item.title || "").trim(),
     event_date: detailReminderEventDateInput.value,
-    remind_at: detailReminderRemindAtInput.value,
+    remind_at: reminderDateToDefaultRemindAt(detailReminderEventDateInput.value),
     note: detailReminderNoteInput.value.trim(),
   };
   const result = reminderId
@@ -3445,6 +3495,7 @@ function buildReminderListRow(reminder) {
   li.className = "news-item reminder-item";
   li.dataset.id = String(reminder.id);
   if (state.selectedReminderId === reminder.id) li.classList.add("selected");
+  if (reminder.status === "done") li.classList.add("done");
 
   const line1 = document.createElement("div");
   line1.className = "line1";
@@ -3461,11 +3512,18 @@ function buildReminderListRow(reminder) {
 
   const title = document.createElement("div");
   title.className = "title";
-  title.textContent = reminder.event_title || "未命名提醒";
+  title.textContent = reminder.item_title_snapshot || reminder.event_title || "关联新闻";
 
   const summary = document.createElement("p");
   summary.className = "summary";
-  summary.textContent = reminder.item_title_snapshot || "关联新闻";
+  const summaryParts = [];
+  if (reminder.item?.source) {
+    summaryParts.push(reminder.item.source);
+  }
+  if (reminder.note) {
+    summaryParts.push(reminder.note);
+  }
+  summary.textContent = summaryParts.join(" · ") || "无备注";
 
   li.appendChild(line1);
   li.appendChild(title);
@@ -3707,6 +3765,10 @@ function renderDetail(item) {
   }
 
   const importantBtn = document.getElementById("detailImportantBtn");
+  applyIcon(askBtn, "message-circle", {
+    label: "提问",
+    tone: chatReady ? "accent" : "default",
+  });
   const snapshotOnly = !!item.snapshotOnly;
   applyIcon(detailFavoriteBtn, "star", {
     filled: !!item.favorite_at,
@@ -3972,11 +4034,11 @@ function buildItemRow(item) {
     patchStateWithRollback(item.id, { favorite: !current });
   });
 
-  actions.appendChild(btnFavorite);
   actions.appendChild(btnImportant);
   if (!isBloombergVideoUrl(item.url) && item.source_type !== "twitter") {
     actions.appendChild(btnReadLater);
   }
+  actions.appendChild(btnFavorite);
 
   li.appendChild(line1);
   li.appendChild(title);
@@ -4179,8 +4241,8 @@ async function loadFirstPage() {
     }
 
     if (state.collection === "reminders") {
-      const data = await fetchReminders("active");
-      state.reminderItems = Array.isArray(data.items) ? data.items : [];
+      const data = await fetchReminders(state.reminderFilter);
+      state.reminderItems = normalizeReminderItems(data.items);
       applyReminderSummary(data.summary || state.reminderSummary);
       state.total = state.reminderItems.length;
       state.pages = 1;
@@ -4197,7 +4259,15 @@ async function loadFirstPage() {
         }
       });
       renderMeta();
-      setHint(state.total ? "点击提醒查看关联新闻" : "还没有提醒，去任意新闻右栏添加一个。");
+      if (state.total) {
+        setHint("点击提醒查看关联新闻");
+      } else if (state.reminderFilter === "done") {
+        setHint("还没有已完成提醒。");
+      } else if (state.reminderFilter === "all") {
+        setHint("还没有提醒，去任意新闻右栏添加一个。");
+      } else {
+        setHint("还没有进行中的提醒，去任意新闻右栏添加一个。");
+      }
       if (readObserver) {
         readObserver.disconnect();
         readObserver = null;
@@ -4314,6 +4384,19 @@ readFilterToggleBtn.addEventListener("click", async () => {
   state.readFilter = state.readFilter === "all" ? "unread" : "all";
   state.feedReadFilter = state.readFilter;
   await loadFirstPage();
+});
+
+[
+  [reminderFilterActiveBtn, "active"],
+  [reminderFilterDoneBtn, "done"],
+  [reminderFilterAllBtn, "all"],
+].forEach(([button, filter]) => {
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    if (state.reminderFilter === filter) return;
+    state.reminderFilter = filter;
+    await loadFirstPage();
+  });
 });
 
 if (sortOrderBtn) {

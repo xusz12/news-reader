@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v1.9.7.0</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.7.0" />
+    <title>News Reader v1.9.7.1</title>
+    <link rel="stylesheet" href="/static/style.css?v=1.9.7.1" />
   </head>
   <body>
     <header class="topbar">
@@ -12,7 +12,7 @@
         <div class="topbar-brand">
           <div class="topbar-title-row">
             <h1>News Reader</h1>
-            <span class="topbar-version">v1.9.7.0</span>
+            <span class="topbar-version">v1.9.7.1</span>
           </div>
           <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
         </div>
@@ -68,6 +68,11 @@
           <button id="markAllReadBtn" class="icon-btn" type="button"></button>
           <button id="refreshBtn" class="icon-btn" type="button"></button>
           <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
+        </div>
+        <div id="reminderFilterBar" class="reminder-filter-bar hidden" aria-label="提醒状态筛选">
+          <button id="reminderFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
+          <button id="reminderFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
+          <button id="reminderFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
         </div>
         <section id="searchPageControls" class="search-page-controls hidden" aria-label="搜索条件">
           <div class="search-page-form" role="search">
@@ -175,10 +180,10 @@
           <div id="detailMeta" class="detail-meta"></div>
           <div class="detail-actions">
             <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
-            <button id="detailAskBtn" class="detail-retry-btn hidden" type="button">提问</button>
             <button id="detailRetryBtn" class="detail-retry-btn hidden" type="button">重试详情抓取</button>
             <button id="detailRetranslateBtn" class="detail-retry-btn hidden" type="button">重新翻译</button>
             <span class="detail-action-spacer" aria-hidden="true"></span>
+            <button id="detailAskBtn" class="icon-btn hidden" type="button" title="提问" aria-label="提问"></button>
             <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
             <button id="detailBullishBtn" class="icon-btn" type="button" title="看多板块标记" aria-label="看多板块标记"></button>
             <button id="detailBearishBtn" class="icon-btn" type="button" title="看空板块标记" aria-label="看空板块标记"></button>
@@ -200,11 +205,8 @@
           </section>
           <section id="detailReminderEditor" class="detail-note-editor hidden">
             <div id="detailReminderEditorTitle" class="detail-note-editor-title">添加提醒</div>
-            <input id="detailReminderEventTitleInput" class="detail-tag-create-input" type="text" maxlength="200" placeholder="事件标题，例如：英伟达财报" />
-            <div class="detail-reminder-grid">
-              <input id="detailReminderEventDateInput" class="detail-tag-create-input" type="date" />
-              <input id="detailReminderRemindAtInput" class="detail-tag-create-input" type="datetime-local" />
-            </div>
+            <div id="detailReminderEventTitleText" class="detail-reminder-event-title"></div>
+            <input id="detailReminderEventDateInput" class="detail-tag-create-input" type="date" />
             <textarea id="detailReminderNoteInput" class="detail-note-input" rows="3" maxlength="5000" placeholder="备注：你希望到时重点回看什么？"></textarea>
             <div class="detail-note-actions">
               <button id="detailReminderSaveBtn" class="detail-retry-btn" type="button">保存</button>

@@ -763,6 +763,34 @@ button.active {
   padding: 4px 0 8px;
 }
 
+.reminder-filter-bar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  margin: 2px 6px 8px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.reminder-filter-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.reminder-filter-btn.active {
+  border-color: color-mix(in srgb, var(--status-ready) 35%, var(--border));
+  background: color-mix(in srgb, var(--status-ready) 12%, var(--panel));
+  color: var(--detail-text);
+  font-weight: 600;
+}
+
 .search-page-form {
   display: flex;
   gap: 8px;
@@ -1782,6 +1810,14 @@ html[data-detail-font="large"] {
   color: var(--muted);
 }
 
+.detail-reminder-event-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--detail-text);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .detail-reminder-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1806,11 +1842,9 @@ html[data-detail-font="large"] {
   border-color: color-mix(in srgb, var(--status-ready) 35%, var(--detail-card-border));
 }
 
-.detail-reminder-item-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--detail-text);
-  margin-bottom: 4px;
+.detail-reminder-item.done {
+  opacity: 0.75;
+  background: color-mix(in srgb, var(--detail-card-bg) 52%, transparent);
 }
 
 .detail-reminder-item-meta {
@@ -1821,6 +1855,26 @@ html[data-detail-font="large"] {
 
 .detail-reminder-item-meta.due {
   color: #d97706;
+}
+
+.detail-reminder-item-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--detail-text);
+  white-space: pre-wrap;
+}
+
+.detail-reminder-item-note.done {
+  color: var(--muted);
+}
+
+.reminder-item.done {
+  opacity: 0.72;
+}
+
+.reminder-item .summary {
+  color: var(--muted);
 }
 
 .detail-market-tag {
@@ -1971,6 +2025,10 @@ html[data-detail-font="large"] {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.detail-actions .icon-btn.hidden {
+  display: none;
 }
 
 .detail-action-spacer {
