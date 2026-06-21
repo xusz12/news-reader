@@ -47,6 +47,7 @@ let state = {
   detailChatModel: "",
   detailChatStatus: "",
   detailChatSending: false,
+  detailChatArchiving: false,
   settingsOpen: false,
   settingsLoading: false,
   settingsSaving: false,
@@ -160,6 +161,7 @@ const detailChatCapability = document.getElementById("detailChatCapability");
 const detailChatStatus = document.getElementById("detailChatStatus");
 const detailChatMessages = document.getElementById("detailChatMessages");
 const detailChatInput = document.getElementById("detailChatInput");
+const detailChatArchiveBtn = document.getElementById("detailChatArchiveBtn");
 const detailChatSendBtn = document.getElementById("detailChatSendBtn");
 const settingsOverlay = document.getElementById("settingsOverlay");
 const settingsBackdrop = document.getElementById("settingsBackdrop");
@@ -2939,6 +2941,7 @@ function resetDetailChatState({ keepProvider = false } = {}) {
   state.detailChatModel = "";
   state.detailChatStatus = "";
   state.detailChatSending = false;
+  state.detailChatArchiving = false;
   if (detailChatInput) detailChatInput.value = "";
 }
 
@@ -3015,11 +3018,18 @@ function renderDetailChat(item) {
   const providers = chatProvidersFromItem(item);
   const codexMeta = providers.codex || { available: true, model: currentCodexChatModel() };
   const chatEnabled = !!codexMeta.available;
+  const archiveEnabled = chatEnabled
+    && !state.detailChatSending
+    && !state.detailChatArchiving
+    && state.detailChatMessages.some((message) => message.role === "assistant");
 
   renderDetailChatMeta(item, codexMeta);
   renderDetailChatKeyPoints(item);
-  detailChatInput.disabled = state.detailChatSending || !chatEnabled;
-  detailChatSendBtn.disabled = state.detailChatSending || !chatEnabled;
+  detailChatInput.disabled = state.detailChatSending || state.detailChatArchiving || !chatEnabled;
+  detailChatSendBtn.disabled = state.detailChatSending || state.detailChatArchiving || !chatEnabled;
+  if (detailChatArchiveBtn) {
+    detailChatArchiveBtn.disabled = !archiveEnabled;
+  }
   detailChatInput.placeholder = chatEnabled
     ? "围绕这条新闻继续追问，例如：这件事对相关公司/板块意味着什么？"
     : "Codex chat 当前不可用。";
@@ -3064,6 +3074,21 @@ async function requestNewsChat(item, requestPayload) {
   const payload = await res.json().catch(() => ({ ok: false, error: "chat_request_failed" }));
   if (!res.ok || !payload.ok) {
     const err = new Error(payload.error || "chat_request_failed");
+    err.detail = payload.detail || "";
+    throw err;
+  }
+  return payload;
+}
+
+async function archiveNewsChat(item, requestPayload) {
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/chat/archive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestPayload),
+  });
+  const payload = await res.json().catch(() => ({ ok: false, error: "archive_request_failed" }));
+  if (!res.ok || !payload.ok) {
+    const err = new Error(payload.error || "archive_request_failed");
     err.detail = payload.detail || "";
     throw err;
   }
@@ -3120,6 +3145,51 @@ async function sendDetailChatMessage() {
     state.detailChatStatus = labelMap[code] || "发送失败，请稍后重试。";
   } finally {
     state.detailChatSending = false;
+    renderDetailChat(item);
+  }
+}
+
+async function archiveDetailChat() {
+  if (!state.selectedId || state.detailChatSending || state.detailChatArchiving) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item) return;
+  if (!state.detailChatMessages.some((message) => message.role === "assistant")) return;
+
+  const configuredModel = currentCodexChatModel();
+  state.detailChatArchiving = true;
+  state.detailChatStatus = "正在归档到想法...";
+  renderDetailChat(item);
+
+  try {
+    const payload = await archiveNewsChat(item, {
+      messages: state.detailChatMessages,
+      model: configuredModel,
+    });
+    const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
+    cached.has_note = payload.has_note;
+    cached.note = payload.note;
+    cached.note_preview = payload.note_preview || "";
+    if (item.url) state.detailCacheByUrl.set(item.url, cached);
+    item.has_note = payload.has_note;
+    item.note_preview = payload.note_preview || "";
+    state.itemsById.set(item.id, item);
+    rerenderOne(item.id);
+    refreshDetailNoteUI(item);
+    state.detailChatStatus = "已归档到想法。";
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "archive_request_failed";
+    const labelMap = {
+      empty_archive_source: "没有可归档回答。",
+      empty_archive_summary: "没有生成可归档结论。",
+      invalid_archive_summary: "归档结果无效，请重试。",
+      note_too_long: "想法过长，无法追加归档。",
+      provider_busy: "Codex 当前正忙，请稍后重试。",
+      provider_timeout: "归档超时，请稍后重试。",
+      provider_failed: "Codex 归档失败，请稍后重试。",
+    };
+    state.detailChatStatus = labelMap[code] || "归档失败，请稍后重试。";
+  } finally {
+    state.detailChatArchiving = false;
     renderDetailChat(item);
   }
 }
@@ -4947,6 +5017,12 @@ if (detailChatBackBtn) {
 if (detailChatSendBtn) {
   detailChatSendBtn.addEventListener("click", () => {
     sendDetailChatMessage();
+  });
+}
+
+if (detailChatArchiveBtn) {
+  detailChatArchiveBtn.addEventListener("click", () => {
+    archiveDetailChat();
   });
 }
 

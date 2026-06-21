@@ -4,6 +4,17 @@
 
 ## What's Changed
 
+### 2026-06-21 — v1.9.7.3 improve: Chat 归档到新闻想法
+- **文件**
+  - *app.py（+）*、*tests/test_api.py（+）*
+    - 新增 `POST /api/news/:id/chat/archive`，把当前 chatPage 可见对话压缩为不超过 100 字的中文归档结论，并追加写入 `article_notes`
+    - 归档仅复用现有新闻想法表，不保存完整 transcript、不新增 schema；无 assistant 回答、Codex 失败、摘要无效或追加后超 5000 字时都不会写入
+    - 补覆盖：首次归档写入、已有想法时追加、无 assistant 拒绝、超长拒绝且旧想法不变、Codex 失败不落库
+  - *static/index.html（+）*、*static/app.js（+）*
+    - chatPage 在发送按钮旁新增 `归档` 按钮，仅在已有 assistant 回复且当前未发送时可用
+    - 归档成功后同步更新右栏“我的想法”、新闻 row 的想法状态与 `note_preview`
+- **影响**：用户现在可以把一轮新闻提问压缩为可复用结论并沉淀到该新闻自己的想法内，但不会把完整聊天过程原样存入笔记。
+
 ### 2026-06-21 — v1.9.7.1 fix: 提醒集合与表单交互收口
 - **文件**
   - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*

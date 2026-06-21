@@ -891,6 +891,78 @@ def run_codex_chat(*, question: str, title: str, source: str, published_at: str,
     }
 
 
+def build_chat_archive_prompt(*, title: str, source: str, published_at: str, messages: list[dict[str, str]]) -> str:
+    transcript = "\n".join(
+        f"{'用户' if message['role'] == 'user' else '助手'}：{message['content']}"
+        for message in messages
+    )
+    return (
+        "你是一名新闻研究助手。请把下面这轮围绕同一篇新闻的对话压缩成一条中文归档结论。\n"
+        "硬性要求：\n"
+        "1. 只输出最终归档内容，不要任何前后缀。\n"
+        "2. 必须是中文，且不超过100字。\n"
+        "3. 不复述问答过程，不列Q/A。\n"
+        "4. 不写“用户问了”“助手回答了”“本轮对话”。\n"
+        "5. 只保留最终解决的核心信息、判断或行动线索。\n"
+        "6. 如果对话没有形成有效答案，直接输出空字符串。\n\n"
+        f"新闻标题：{title}\n"
+        f"来源：{source}\n"
+        f"发布时间：{published_at}\n"
+        "对话记录：\n"
+        f"{transcript}"
+    )
+
+
+def run_codex_chat_archive(*, title: str, source: str, published_at: str, messages: list[dict[str, str]], model: str = "", timeout: int = 90) -> dict:
+    prompt = build_chat_archive_prompt(
+        title=title,
+        source=source,
+        published_at=published_at,
+        messages=messages,
+    )
+    command = ["codex", "exec", prompt, "--json", "--skip-git-repo-check"]
+    if model:
+        command.extend(["--model", model])
+
+    with tempfile.NamedTemporaryFile(prefix="news-reader-codex-archive-", suffix=".txt", delete=False) as handle:
+        output_path = handle.name
+    command.extend(["--output-last-message", output_path])
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(BASE_DIR),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("codex_timeout") from exc
+
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+
+    summary = ""
+    try:
+        summary = " ".join(Path(output_path).read_text(encoding="utf-8").split())
+    except Exception:
+        summary = ""
+    finally:
+        Path(output_path).unlink(missing_ok=True)
+
+    if completed.returncode != 0:
+        detail = (stderr or stdout).strip()
+        raise RuntimeError(detail or "codex_failed")
+    if not summary:
+        raise RuntimeError("codex_empty_archive")
+
+    return {
+        "provider": "codex",
+        "model": model,
+        "summary": summary,
+    }
+
+
 def normalize_chat_messages(raw_messages: object, *, max_messages: int = 20, max_chars: int = 4000) -> list[dict[str, str]]:
     if not isinstance(raw_messages, list) or not raw_messages:
         raise ValueError("invalid_messages")
@@ -3221,6 +3293,108 @@ def api_news_chat(item_id: str):
         lock.release()
 
     return jsonify({"ok": True, **payload})
+
+
+@app.post("/api/news/<item_id>/chat/archive")
+def api_news_chat_archive(item_id: str):
+    body = request.get_json(silent=True) or {}
+    try:
+        messages = normalize_chat_messages(body.get("messages"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    if not any(message["role"] == "assistant" for message in messages):
+        return jsonify({"ok": False, "error": "empty_archive_source"}), 400
+
+    requested_model = (body.get("model") or "").strip()
+    model = requested_model or current_codex_chat_model()
+
+    conn = db_conn()
+    try:
+        item = conn.execute(
+            "SELECT id, title, url, source, published_at FROM items WHERE id=?",
+            (item_id,),
+        ).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        existing_note_row = conn.execute(
+            "SELECT note, created_at, updated_at FROM article_notes WHERE url=?",
+            (url,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    lock = codex_chat_lock(item_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "provider_busy"}), 409
+
+    try:
+        payload = run_codex_chat_archive(
+            title=(item["title"] or "").strip(),
+            source=(item["source"] or "").strip(),
+            published_at=(item["published_at"] or "").strip(),
+            messages=messages,
+            model=model,
+        )
+    except RuntimeError as exc:
+        error = str(exc)
+        if error == "codex_timeout":
+            return jsonify({"ok": False, "error": "provider_timeout"}), 504
+        if error == "codex_empty_archive":
+            return jsonify({"ok": False, "error": "empty_archive_summary"}), 502
+        return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
+    finally:
+        lock.release()
+
+    summary = " ".join((payload.get("summary") or "").split()).strip()
+    if not summary:
+        return jsonify({"ok": False, "error": "empty_archive_summary"}), 502
+    if len(summary) > 100:
+        return jsonify({"ok": False, "error": "invalid_archive_summary"}), 502
+
+    stamp = now_ts()[:16]
+    block = f"【Chat 归档｜{stamp}】\n{summary}"
+    existing_note = (existing_note_row["note"] or "").strip() if existing_note_row else ""
+    merged_note = block if not existing_note else f"{existing_note}\n\n---\n{block}"
+    if len(merged_note) > 5000:
+        return jsonify({"ok": False, "error": "note_too_long"}), 409
+
+    conn = db_conn()
+    try:
+        with conn:
+            ts = now_ts()
+            conn.execute(
+                """
+                INSERT INTO article_notes(url, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET
+                  note=excluded.note,
+                  updated_at=excluded.updated_at
+                """,
+                (url, merged_note, ts, ts),
+            )
+        saved = conn.execute(
+            "SELECT note, created_at, updated_at FROM article_notes WHERE url=?",
+            (url,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "provider": payload.get("provider") or "codex",
+            "model": payload.get("model") or model,
+            "archive_summary": summary,
+            "has_note": 1 if saved else 0,
+            "note": (dict(saved) if saved else None),
+            "note_preview": build_note_preview(saved["note"] if saved else None),
+        }
+    )
 
 
 @app.get("/api/market-tags")
