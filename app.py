@@ -92,6 +92,7 @@ items.id DESC
 
 ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10))"
 NEWS_SORT_ORDERS = {"default", "reverse"}
+IDEA_TYPE_FILTERS = {"all", "article", "trend"}
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -134,6 +135,13 @@ def parse_news_sort_order(args) -> str:
     if sort_order not in NEWS_SORT_ORDERS:
         raise ValueError("invalid_sort_order")
     return sort_order
+
+
+def parse_idea_type_filter(args) -> str:
+    idea_type = (args.get("type") or "all").strip().lower()
+    if idea_type not in IDEA_TYPE_FILTERS:
+        raise ValueError("invalid_idea_type")
+    return idea_type
 
 
 def parse_feed_unread_cursor(args) -> dict | None:
@@ -1107,6 +1115,124 @@ def load_news_item_map(conn: sqlite3.Connection, item_ids: list[str]) -> dict[st
     return {item["id"]: item for item in serialized}
 
 
+def load_idea_rows(conn: sqlite3.Connection, idea_type: str, sort_order: str) -> list[dict]:
+    ideas: list[dict] = []
+
+    if idea_type in ("all", "article"):
+        article_rows = conn.execute(
+            f"""
+            SELECT items.id, items.source_file, items.item_order, items.published_at,
+                   items.date, items.time, items.source, items.source_type,
+                   items.source_name, items.title, items.summary, items.url,
+                   st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+                   dj.status AS detail_status,
+                   dj.last_error AS detail_error,
+                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+                   an.note AS note,
+                   an.note AS note_preview_source,
+                   CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
+                   aj.status AS ai_status,
+                   aj.last_error AS ai_error,
+                   CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
+                   (
+                     SELECT COUNT(*)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id AND nr.status = 'active'
+                   ) AS active_reminder_count,
+                   (
+                     SELECT COUNT(*)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id
+                       AND nr.status = 'active'
+                       AND nr.remind_at <= datetime('now', 'localtime')
+                   ) AS due_reminder_count,
+                   (
+                     SELECT MIN(nr.remind_at)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id AND nr.status = 'active'
+                   ) AS next_remind_at,
+                   an.created_at AS idea_created_at,
+                   an.updated_at AS idea_updated_at
+            FROM article_notes an
+            JOIN items ON items.url = an.url
+            LEFT JOIN item_state st ON st.item_id = items.id
+            LEFT JOIN detail_jobs dj ON dj.url = items.url
+            LEFT JOIN article_details ad ON ad.url = items.url
+            LEFT JOIN ai_jobs aj ON aj.url = items.url
+            LEFT JOIN article_ai aa ON aa.url = items.url
+            """
+        ).fetchall()
+        article_items = [dict(row) for row in article_rows]
+        article_tags_map = load_market_tags_map(conn, [item["url"] for item in article_items if item.get("url")])
+        article_items = serialize_news_rows(article_items, article_tags_map)
+        for item in article_items:
+            item["idea_id"] = f"article:{item['id']}"
+            item["idea_type"] = "article_note"
+            item["idea_context_label"] = "新闻想法"
+            item["created_at"] = item.get("idea_created_at") or ""
+            item["updated_at"] = item.get("idea_updated_at") or ""
+            date_key, date_label = derive_ts_date_meta(item.get("updated_at"))
+            item["date_key"] = date_key
+            item["date_label"] = date_label
+            ideas.append(item)
+
+    if idea_type in ("all", "trend"):
+        trend_rows = conn.execute(
+            """
+            SELECT mtn.id,
+                   mtn.date_key,
+                   mtn.tag,
+                   mtn.direction,
+                   mtn.note,
+                   mtn.created_at,
+                   mtn.updated_at,
+                   mtd.display_name
+            FROM market_trend_notes mtn
+            LEFT JOIN market_tag_definitions mtd ON mtd.key = mtn.tag
+            """
+        ).fetchall()
+        for row in trend_rows:
+            direction_label = "看多" if row["direction"] == "bullish" else "看空"
+            tag_label = row["display_name"] or row["tag"]
+            updated_at = row["updated_at"] or ""
+            date_key, date_label = derive_ts_date_meta(updated_at)
+            ideas.append(
+                {
+                    "id": None,
+                    "idea_id": f"trend:{row['id']}",
+                    "idea_type": "trend_note",
+                    "idea_context_label": "趋势想法",
+                    "trend_note_id": row["id"],
+                    "trend_date_key": row["date_key"],
+                    "tag_key": row["tag"],
+                    "tag_label": tag_label,
+                    "direction": row["direction"],
+                    "direction_label": direction_label,
+                    "title": f"{tag_label} · {direction_label}",
+                    "summary": f"{row['date_key']} · {tag_label} · {direction_label}",
+                    "source": "趋势",
+                    "published_at": row["date_key"],
+                    "url": "",
+                    "note": row["note"],
+                    "note_preview": build_note_preview(row["note"]),
+                    "created_at": row["created_at"] or "",
+                    "updated_at": updated_at,
+                    "date_key": date_key,
+                    "date_label": date_label,
+                }
+            )
+
+    reverse = sort_order != "reverse"
+    ideas.sort(
+        key=lambda idea: (
+            idea.get("updated_at") or "",
+            str(idea.get("idea_id") or idea.get("id") or ""),
+        ),
+        reverse=reverse,
+    )
+    return ideas
+
+
 def load_item_reminders(conn: sqlite3.Connection, item_id: str) -> list[dict]:
     rows = conn.execute(
         """
@@ -1380,6 +1506,13 @@ def derive_date_meta(published_at: str | None, raw_date: str | None) -> tuple[st
     if day == today.fromordinal(today.toordinal() - 1):
         return (date_key, "昨天")
     return (date_key, f"{day.year}年{day.month}月{day.day}日")
+
+
+def derive_ts_date_meta(timestamp: str | None) -> tuple[str, str]:
+    normalized = (timestamp or "").strip()
+    if len(normalized) >= 10:
+        return normalized[:10], normalized[:10]
+    return "unknown", "未知日期"
 
 
 def resolve_detail_route(url: str) -> dict | None:
@@ -1925,6 +2058,46 @@ def api_news():
             "has_more": has_more if cursor_mode else page < pages,
             "next_cursor": next_cursor if cursor_mode else None,
             "sort_order": sort_order,
+        }
+    )
+
+
+@app.get("/api/ideas")
+def api_ideas():
+    page = max(1, int(request.args.get("page", "1")))
+    per = min(100, max(10, int(request.args.get("per", "30"))))
+    try:
+        sort_order = parse_news_sort_order(request.args)
+        idea_type = parse_idea_type_filter(request.args)
+    except ValueError as exc:
+        error = "invalid_idea_type" if str(exc) == "invalid_idea_type" else "invalid_sort_order"
+        return jsonify({"ok": False, "error": error}), 400
+
+    conn = db_conn()
+    try:
+        ideas = load_idea_rows(conn, idea_type, sort_order)
+    finally:
+        conn.close()
+
+    total = len(ideas)
+    date_counts: dict[str, int] = {}
+    for idea in ideas:
+        date_key = idea.get("date_key") or "unknown"
+        date_counts[date_key] = date_counts.get(date_key, 0) + 1
+
+    offset = (page - 1) * per
+    page_items = ideas[offset: offset + per]
+    pages = max(1, math.ceil(total / per)) if total else 1
+    return jsonify(
+        {
+            "items": page_items,
+            "total": total,
+            "date_counts": date_counts,
+            "page": page,
+            "pages": pages,
+            "has_more": page < pages,
+            "sort_order": sort_order,
+            "type": idea_type,
         }
     )
 

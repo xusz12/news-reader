@@ -778,6 +778,111 @@ def test_news_sort_order_switches_default_and_reverse_by_collection(tmp_path: Pa
     assert invalid.get_json()["error"] == "invalid_sort_order"
 
 
+def test_unified_ideas_feed_combines_article_and_trend_notes(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-06.md").write_text(
+        """## Reuters · World（2条）
+### [Idea Alpha](https://example.com/idea-alpha)
+- 发布时间：2026-06-06 08:00:00
+### [Idea Beta](https://example.com/idea-beta)
+- 发布时间：2026-06-06 10:00:00
+""",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    alpha = next(item for item in items if item["title"] == "Idea Alpha")
+    beta = next(item for item in items if item["title"] == "Idea Beta")
+
+    assert client.put(f"/api/news/{alpha['id']}/note", json={"note": "新闻想法 Alpha"}).status_code == 200
+    assert client.put(f"/api/news/{beta['id']}/note", json={"note": "新闻想法 Beta"}).status_code == 200
+    assert client.put(
+        f"/api/news/{alpha['id']}/market-tag",
+        json={"tag": "AI", "direction": "bullish"},
+    ).status_code == 200
+
+    trend_create = client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-06", "tag_key": "AI", "direction": "bullish", "note": "趋势想法 Bull"},
+    )
+    assert trend_create.status_code == 200
+    trend_note_id = trend_create.get_json()["trend_note"]["id"]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE article_notes SET created_at=?, updated_at=? WHERE url=?",
+            ("2026-06-06 09:00:00", "2026-06-06 09:00:00", alpha["url"]),
+        )
+        conn.execute(
+            "UPDATE article_notes SET created_at=?, updated_at=? WHERE url=?",
+            ("2026-06-06 11:00:00", "2026-06-06 11:00:00", beta["url"]),
+        )
+        conn.execute(
+            "UPDATE market_trend_notes SET created_at=?, updated_at=? WHERE id=?",
+            ("2026-06-06 12:30:00", "2026-06-06 12:30:00", trend_note_id),
+        )
+        conn.commit()
+
+    ideas = client.get("/api/ideas?per=20")
+    assert ideas.status_code == 200
+    payload = ideas.get_json()
+    assert payload["total"] == 3
+    assert [item["idea_type"] for item in payload["items"]] == ["trend_note", "article_note", "article_note"]
+    assert [item["idea_id"] for item in payload["items"]] == [f"trend:{trend_note_id}", f"article:{beta['id']}", f"article:{alpha['id']}"]
+    trend_item = payload["items"][0]
+    assert trend_item["tag_key"] == "AI"
+    assert trend_item["trend_date_key"] == "2026-06-06"
+    assert trend_item["direction"] == "bullish"
+    assert trend_item["note"] == "趋势想法 Bull"
+    assert trend_item["created_at"] == "2026-06-06 12:30:00"
+    assert trend_item["updated_at"] == "2026-06-06 12:30:00"
+    article_item = payload["items"][1]
+    assert article_item["title"] == "Idea Beta"
+    assert article_item["url"] == beta["url"]
+    assert article_item["note"] == "新闻想法 Beta"
+    assert article_item["created_at"] == "2026-06-06 11:00:00"
+    assert article_item["updated_at"] == "2026-06-06 11:00:00"
+
+    article_only = client.get("/api/ideas?type=article&per=20")
+    assert article_only.status_code == 200
+    assert [item["title"] for item in article_only.get_json()["items"]] == ["Idea Beta", "Idea Alpha"]
+
+    trend_only = client.get("/api/ideas?type=trend&per=20")
+    assert trend_only.status_code == 200
+    assert [item["idea_id"] for item in trend_only.get_json()["items"]] == [f"trend:{trend_note_id}"]
+
+    reverse = client.get("/api/ideas?per=20&sort_order=reverse")
+    assert reverse.status_code == 200
+    assert [item["idea_id"] for item in reverse.get_json()["items"]] == [f"article:{alpha['id']}", f"article:{beta['id']}", f"trend:{trend_note_id}"]
+
+    legacy_notes = client.get("/api/news?collection=notes&per=20")
+    assert legacy_notes.status_code == 200
+    assert [item["title"] for item in legacy_notes.get_json()["items"]] == ["Idea Beta", "Idea Alpha"]
+
+    delete_res = client.delete(f"/api/market-trends/note/{trend_note_id}")
+    assert delete_res.status_code == 200
+    trend_after_delete = client.get("/api/ideas?type=trend&per=20")
+    assert trend_after_delete.status_code == 200
+    assert trend_after_delete.get_json()["total"] == 0
+
+    invalid_type = client.get("/api/ideas?type=weird")
+    assert invalid_type.status_code == 400
+    assert invalid_type.get_json()["error"] == "invalid_idea_type"
+
+
 def test_search_range_and_time_filters(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "news_index.sqlite3"
     daily_dir = tmp_path / "DailyNews"

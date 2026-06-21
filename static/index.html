@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v1.9.7.1</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.7.1" />
+    <title>News Reader v1.9.7.5</title>
+    <link rel="stylesheet" href="/static/style.css?v=1.9.7.5" />
   </head>
   <body>
     <header class="topbar">
@@ -12,7 +12,7 @@
         <div class="topbar-brand">
           <div class="topbar-title-row">
             <h1>News Reader</h1>
-            <span class="topbar-version">v1.9.7.1</span>
+            <span class="topbar-version">v1.9.7.5</span>
           </div>
           <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
         </div>
@@ -73,6 +73,11 @@
           <button id="reminderFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
           <button id="reminderFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
           <button id="reminderFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+        </div>
+        <div id="ideaFilterBar" class="reminder-filter-bar hidden" aria-label="想法类型筛选">
+          <button id="ideaFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+          <button id="ideaFilterArticleBtn" class="reminder-filter-btn" type="button">新闻想法</button>
+          <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">趋势想法</button>
         </div>
         <section id="searchPageControls" class="search-page-controls hidden" aria-label="搜索条件">
           <div class="search-page-form" role="search">
@@ -157,6 +162,26 @@
               <button id="trendNoteComposeSaveBtn" class="detail-retry-btn" type="button">保存</button>
               <button id="trendNoteComposeDeleteBtn" class="detail-retry-btn" type="button">删除</button>
               <button id="trendNoteComposeCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+        </div>
+        <div id="detailTrendIdeaBody" class="detail-trend-body hidden">
+          <h3 id="detailTrendIdeaTitle" class="detail-title"></h3>
+          <div id="detailTrendIdeaMeta" class="detail-meta"></div>
+          <div class="detail-actions detail-trend-actions">
+            <button id="detailTrendIdeaEditBtn" class="detail-retry-btn" type="button">编辑趋势想法</button>
+            <button id="detailTrendIdeaDeleteBtn" class="detail-retry-btn" type="button">删除趋势想法</button>
+          </div>
+          <section id="detailTrendIdeaCard" class="detail-note-card">
+            <h4>趋势想法全文</h4>
+            <p id="detailTrendIdeaText" class="detail-note-text"></p>
+          </section>
+          <section id="detailTrendIdeaEditor" class="detail-note-editor hidden">
+            <div class="detail-note-editor-title">编辑趋势想法</div>
+            <textarea id="detailTrendIdeaInput" class="detail-note-input" rows="6" maxlength="5000" placeholder="记录你对这个趋势单元格的判断..."></textarea>
+            <div class="detail-note-actions">
+              <button id="detailTrendIdeaSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="detailTrendIdeaCancelBtn" class="detail-retry-btn" type="button">取消</button>
             </div>
           </section>
         </div>

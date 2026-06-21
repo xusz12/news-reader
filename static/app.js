@@ -11,9 +11,11 @@ let state = {
   loading: false,
   hasMore: true,
   selectedId: null,
+  selectedIdeaId: "",
   selectedReminderId: null,
   selectedReminderDraftId: null,
   reminderFilter: "active", // active | done | all
+  ideaFilter: "all", // all | article | trend
   itemsById: new Map(),
   reminderItems: [],
   reminderSummary: {
@@ -29,6 +31,7 @@ let state = {
   trendRows: [],
   trendDates: [],
   trendSelection: null,
+  selectedTrendIdea: null,
   trendNoteContext: null,
   marketTagChoices: [],
   selectedTagAdminKey: "",
@@ -116,6 +119,10 @@ const reminderFilterBar = document.getElementById("reminderFilterBar");
 const reminderFilterActiveBtn = document.getElementById("reminderFilterActiveBtn");
 const reminderFilterDoneBtn = document.getElementById("reminderFilterDoneBtn");
 const reminderFilterAllBtn = document.getElementById("reminderFilterAllBtn");
+const ideaFilterBar = document.getElementById("ideaFilterBar");
+const ideaFilterAllBtn = document.getElementById("ideaFilterAllBtn");
+const ideaFilterArticleBtn = document.getElementById("ideaFilterArticleBtn");
+const ideaFilterTrendBtn = document.getElementById("ideaFilterTrendBtn");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 const workspace = document.getElementById("workspace");
@@ -148,6 +155,17 @@ const trendNoteComposeInput = document.getElementById("trendNoteComposeInput");
 const trendNoteComposeSaveBtn = document.getElementById("trendNoteComposeSaveBtn");
 const trendNoteComposeDeleteBtn = document.getElementById("trendNoteComposeDeleteBtn");
 const trendNoteComposeCancelBtn = document.getElementById("trendNoteComposeCancelBtn");
+const detailTrendIdeaBody = document.getElementById("detailTrendIdeaBody");
+const detailTrendIdeaTitle = document.getElementById("detailTrendIdeaTitle");
+const detailTrendIdeaMeta = document.getElementById("detailTrendIdeaMeta");
+const detailTrendIdeaCard = document.getElementById("detailTrendIdeaCard");
+const detailTrendIdeaText = document.getElementById("detailTrendIdeaText");
+const detailTrendIdeaEditBtn = document.getElementById("detailTrendIdeaEditBtn");
+const detailTrendIdeaDeleteBtn = document.getElementById("detailTrendIdeaDeleteBtn");
+const detailTrendIdeaEditor = document.getElementById("detailTrendIdeaEditor");
+const detailTrendIdeaInput = document.getElementById("detailTrendIdeaInput");
+const detailTrendIdeaSaveBtn = document.getElementById("detailTrendIdeaSaveBtn");
+const detailTrendIdeaCancelBtn = document.getElementById("detailTrendIdeaCancelBtn");
 const detailTagAdminBody = document.getElementById("detailTagAdminBody");
 const detailTagCreateInput = document.getElementById("detailTagCreateInput");
 const detailTagCreateBtn = document.getElementById("detailTagCreateBtn");
@@ -453,7 +471,7 @@ function updateWorkspaceLayout() {
 }
 
 function updateSourceFilterVisibility() {
-  const visible = state.collection !== "trends" && state.collection !== "search" && state.collection !== "reminders";
+  const visible = state.collection !== "trends" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes";
   document.querySelectorAll(".sources-title, #sourceFilters").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
@@ -1535,6 +1553,21 @@ function updateFilterButtons() {
   });
 }
 
+function updateIdeaFilterBar() {
+  if (!ideaFilterBar) return;
+  const visible = state.collection === "notes";
+  ideaFilterBar.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  [
+    [ideaFilterAllBtn, "all"],
+    [ideaFilterArticleBtn, "article"],
+    [ideaFilterTrendBtn, "trend"],
+  ].forEach(([button, value]) => {
+    if (!button) return;
+    button.classList.toggle("active", state.ideaFilter === value);
+  });
+}
+
 function updateReminderFilterBar() {
   if (!reminderFilterBar) return;
   const visible = state.collection === "reminders";
@@ -1651,7 +1684,7 @@ function updateCollectionButtons() {
     mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
   }
   if (mobileTabFilterBtn) {
-    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search" || state.collection === "reminders");
+    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search" || state.collection === "reminders" || state.collection === "notes");
   }
   if (manageMarketTagsBtn) {
     manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends");
@@ -1662,6 +1695,7 @@ function updateCollectionButtons() {
       });
     }
   }
+  updateIdeaFilterBar();
   updateReminderFilterBar();
 }
 
@@ -1729,7 +1763,7 @@ function openMobileCollectionSheet() {
 }
 
 function openMobileFilterSheet() {
-  if (!mobileFilterSheet || state.collection === "search" || state.collection === "reminders") return;
+  if (!mobileFilterSheet || state.collection === "search" || state.collection === "reminders" || state.collection === "notes") return;
   closeMobileCollectionSheet();
   updateMobileFilterCollectionText();
   renderSourceFilters(latestSourceOptions);
@@ -1847,6 +1881,16 @@ function renderMeta() {
     pageInfo.textContent = "- / -";
     return;
   }
+  if (state.collection === "notes") {
+    const ideaNames = {
+      all: "全部",
+      article: "新闻想法",
+      trend: "趋势想法",
+    };
+    meta.textContent = `想法 · ${ideaNames[state.ideaFilter] || "全部"} · 共 ${state.total} 条`;
+    pageInfo.textContent = `${state.page} / ${state.pages}`;
+    return;
+  }
   const readNames = {
     all: "全部",
     unread: "仅未读",
@@ -1866,6 +1910,23 @@ function closeTrendComposerView() {
   if (detailTrendComposerBody) {
     detailTrendComposerBody.classList.add("hidden");
   }
+}
+
+function setTrendIdeaEditorOpen(open) {
+  if (!detailTrendIdeaEditor) return;
+  detailTrendIdeaEditor.classList.toggle("hidden", !open);
+}
+
+function clearTrendIdeaDetailState() {
+  state.selectedTrendIdea = null;
+  if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
+  setTrendIdeaEditorOpen(false);
+}
+
+function emptyDetailMessage() {
+  if (state.collection === "trends") return "选择一个趋势单元格查看新闻明细";
+  if (state.collection === "notes") return "选择一条想法查看详情";
+  return "选择一条新闻查看摘要与正文";
 }
 
 function closeTrendNoteEditor() {
@@ -1948,6 +2009,7 @@ function renderTrendComposeOptions() {
 
 function openTrendComposeView(prefill = null) {
   const base = prefill || currentTrendSelectionBase();
+  clearTrendIdeaDetailState();
   closeTagAdminView();
   closeTrendNoteEditor();
   detailBody.classList.add("hidden");
@@ -2258,6 +2320,7 @@ async function refreshTrendSelectionAfterMutation(nextSelection = state.trendSel
 
 async function openTagAdminView() {
   state.tagAdminOpen = true;
+  clearTrendIdeaDetailState();
   closeTrendComposerView();
   closeTrendNoteEditor();
   state.trendSelection = null;
@@ -2275,6 +2338,7 @@ function renderTrendDetail(payload) {
   closeTagAdminView();
   closeTrendComposerView();
   closeTrendNoteEditor();
+  clearTrendIdeaDetailState();
   state.detailReturnToTrend = false;
   syncDetailReturnButton();
   detailBody.classList.add("hidden");
@@ -2283,7 +2347,7 @@ function renderTrendDetail(payload) {
     detailTrendNoteCard.classList.add("hidden");
     detailTrendList.innerHTML = "";
     detailEmpty.classList.remove("hidden");
-    detailEmpty.textContent = state.collection === "trends" ? "选择一个趋势单元格查看新闻明细" : "选择一条新闻查看摘要与正文";
+    detailEmpty.textContent = emptyDetailMessage();
     updateWorkspaceLayout();
     return;
   }
@@ -3640,6 +3704,7 @@ async function openReminderCard(reminder) {
 
 function renderDetail(item) {
   closeTagAdminView();
+  clearTrendIdeaDetailState();
   if (!item) {
     resetDetailChatState({ keepProvider: true });
     state.detailReturnToTrend = false;
@@ -3652,7 +3717,7 @@ function renderDetail(item) {
     detailBody.classList.add("hidden");
     detailChatBody.classList.add("hidden");
     detailEmpty.classList.remove("hidden");
-    detailEmpty.textContent = state.collection === "trends" ? "选择一个趋势单元格查看新闻明细" : "选择一条新闻查看摘要与正文";
+    detailEmpty.textContent = emptyDetailMessage();
     updateWorkspaceLayout();
     return;
   }
@@ -4137,6 +4202,161 @@ function buildItemRow(item) {
   return li;
 }
 
+function ideaDirectionLabel(item) {
+  if (item.direction_label) return item.direction_label;
+  if (item.direction === "bullish") return "看多";
+  if (item.direction === "bearish") return "看空";
+  return "";
+}
+
+function syncIdeaRowSelection() {
+  newsList.querySelectorAll(".idea-item").forEach((row) => {
+    row.classList.toggle("selected", row.dataset.ideaId === state.selectedIdeaId);
+  });
+}
+
+async function openIdeaCard(item) {
+  if (!item) return;
+  state.selectedIdeaId = item.idea_id || "";
+  syncIdeaRowSelection();
+  if (item.idea_type === "trend_note") {
+    state.selectedId = null;
+    state.selectedTrendIdea = { ...item };
+    renderTrendIdeaDetail(state.selectedTrendIdea);
+    openDetailOnMobile();
+    return;
+  }
+  state.selectedTrendIdea = null;
+  openItemDetail(item, { fromTrend: false });
+}
+
+function buildIdeaRow(item) {
+  const li = document.createElement("li");
+  li.className = "news-item idea-item";
+  li.dataset.ideaId = item.idea_id || "";
+
+  const line1 = document.createElement("div");
+  line1.className = "line1";
+
+  const kindBadge = document.createElement("span");
+  kindBadge.className = `note-badge idea-kind-badge ${item.idea_type === "trend_note" ? "trend" : "article"}`;
+  kindBadge.textContent = item.idea_type === "trend_note" ? "趋势想法" : "新闻想法";
+
+  const text = document.createElement("span");
+  text.className = "line1-text";
+  if (item.idea_type === "trend_note") {
+    text.textContent = `${item.updated_at || ""} · ${item.trend_date_key || ""}`;
+  } else {
+    text.textContent = `${item.source || "未知来源"} · ${item.updated_at || ""}`;
+  }
+
+  line1.appendChild(kindBadge);
+  line1.appendChild(text);
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = item.title || "";
+
+  const summary = document.createElement("p");
+  summary.className = "summary";
+  if (item.idea_type === "trend_note") {
+    summary.textContent = `${item.tag_label || ""} · ${ideaDirectionLabel(item)} · ${item.trend_date_key || ""}`;
+  } else {
+    summary.textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
+  }
+
+  const notePreview = document.createElement("p");
+  notePreview.className = "row-note-preview";
+  notePreview.textContent = item.note || item.note_preview || "";
+  if (item.idea_type === "trend_note") {
+    notePreview.classList.add("full-text");
+  }
+
+  li.appendChild(line1);
+  li.appendChild(title);
+  if (summary.textContent) li.appendChild(summary);
+  li.appendChild(notePreview);
+
+  li.addEventListener("click", async () => {
+    await openIdeaCard(item);
+  });
+
+  li.classList.toggle("selected", li.dataset.ideaId === state.selectedIdeaId);
+  return li;
+}
+
+function updateIdeaDateCountOnDelete(item) {
+  const dateKey = item?.date_key || "unknown";
+  if (!state.dateCounts.has(dateKey)) return;
+  const next = Math.max(0, Number(state.dateCounts.get(dateKey) || 0) - 1);
+  state.dateCounts.set(dateKey, next);
+  updateDateSectionCount(dateKey);
+}
+
+function removeIdeaRow(ideaId) {
+  if (!newsList || !ideaId) return;
+  const row = newsList.querySelector(`.idea-item[data-idea-id="${CSS.escape(ideaId)}"]`);
+  if (!row) return;
+  const prev = row.previousElementSibling;
+  row.remove();
+  if (prev && prev.classList.contains("date-section")) {
+    const next = prev.nextElementSibling;
+    if (!next || !next.classList.contains("idea-item")) {
+      prev.remove();
+    }
+  }
+}
+
+function updateIdeaRow(item) {
+  if (!newsList || !item?.idea_id) return;
+  const row = newsList.querySelector(`.idea-item[data-idea-id="${CSS.escape(item.idea_id)}"]`);
+  if (!row) return;
+  const summary = row.querySelector(".summary");
+  const notePreview = row.querySelector(".row-note-preview");
+  if (summary) {
+    summary.textContent = `${item.tag_label || ""} · ${ideaDirectionLabel(item)} · ${item.trend_date_key || ""}`;
+  }
+  if (notePreview) {
+    notePreview.textContent = item.note || item.note_preview || "";
+  }
+  const lineText = row.querySelector(".line1-text");
+  if (lineText) {
+    lineText.textContent = `${item.updated_at || ""} · ${item.trend_date_key || ""}`;
+  }
+}
+
+function renderTrendIdeaDetail(item) {
+  closeTagAdminView();
+  closeTrendComposerView();
+  closeTrendNoteEditor();
+  resetDetailChatState({ keepProvider: true });
+  stopDetailPolling();
+  closeMarketPicker();
+  closeReminderEditor();
+  if (detailReminderCard) detailReminderCard.classList.add("hidden");
+  state.detailReturnToTrend = false;
+  syncDetailReturnButton();
+  detailBody.classList.add("hidden");
+  detailTrendBody.classList.add("hidden");
+  detailChatBody.classList.add("hidden");
+  if (!item) {
+    clearTrendIdeaDetailState();
+    detailEmpty.classList.remove("hidden");
+    detailEmpty.textContent = emptyDetailMessage();
+    updateWorkspaceLayout();
+    return;
+  }
+
+  state.selectedTrendIdea = { ...item };
+  detailEmpty.classList.add("hidden");
+  detailTrendIdeaBody.classList.remove("hidden");
+  setTrendIdeaEditorOpen(false);
+  detailTrendIdeaTitle.textContent = `${item.tag_label || ""} · ${ideaDirectionLabel(item)}`;
+  detailTrendIdeaMeta.textContent = `${item.trend_date_key || ""} · 创建 ${item.created_at || "-"} · 更新 ${item.updated_at || "-"}`;
+  detailTrendIdeaText.textContent = item.note || "";
+  updateWorkspaceLayout();
+}
+
 async function fetchNewsPage(page) {
   const params = new URLSearchParams({
     page: String(page),
@@ -4154,6 +4374,18 @@ async function fetchNewsPage(page) {
   }
   const res = await fetch(`/api/news?${params.toString()}`);
   if (!res.ok) throw new Error("news_fetch_failed");
+  return res.json();
+}
+
+async function fetchIdeasPage(page) {
+  const params = new URLSearchParams({
+    page: String(page),
+    per: String(state.per),
+    type: state.ideaFilter,
+    sort_order: getNewsSortOrder("notes"),
+  });
+  const res = await fetch(`/api/ideas?${params.toString()}`);
+  if (!res.ok) throw new Error("ideas_fetch_failed");
   return res.json();
 }
 
@@ -4181,6 +4413,7 @@ function resetList() {
   state.hasMore = true;
   lastListScrollTop = 0;
   state.selectedId = null;
+  state.selectedIdeaId = "";
   state.selectedReminderId = null;
   state.selectedReminderDraftId = null;
   state.reminderItems = [];
@@ -4191,6 +4424,7 @@ function resetList() {
   state.trendRows = [];
   state.trendDates = [];
   state.trendSelection = null;
+  state.selectedTrendIdea = null;
   state.trendNoteContext = null;
   state.tagAdminOpen = false;
   state.trendComposeOpen = false;
@@ -4346,6 +4580,31 @@ async function loadFirstPage() {
       return;
     }
 
+    if (state.collection === "notes") {
+      const data = await fetchIdeasPage(1);
+      state.total = data.total;
+      setDateCounts(data.date_counts);
+      state.pages = data.pages;
+      state.page = 1;
+      state.hasMore = state.page < state.pages;
+      showTrendsView(false);
+      data.items.forEach((item) => appendNewsRow(item, buildIdeaRow(item)));
+      renderMeta();
+      if (state.total === 0) {
+        setHint("还没有想法，去新闻详情或趋势页记录第一条。");
+      } else if (state.hasMore) {
+        setHint("继续下滑加载更多");
+      } else {
+        setHint("已加载全部想法");
+      }
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      stopRowStatusPolling();
+      return;
+    }
+
     const sourceList = await fetchSources();
     const available = new Set(sourceList.map((x) => x.key));
     if (state.sourceFilter !== "all" && !available.has(state.sourceFilter)) {
@@ -4413,6 +4672,25 @@ async function loadNextPage() {
     return;
   }
   if (state.collection === "trends") return;
+  if (state.collection === "notes") {
+    if (!state.hasMore) return;
+    const next = state.page + 1;
+    state.loading = true;
+    try {
+      const data = await fetchIdeasPage(next);
+      setDateCounts(data.date_counts);
+      data.items.forEach((item) => appendNewsRow(item, buildIdeaRow(item)));
+      state.page = next;
+      state.pages = data.pages;
+      state.total = data.total;
+      state.hasMore = state.page < state.pages;
+      renderMeta();
+      setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部想法");
+    } finally {
+      state.loading = false;
+    }
+    return;
+  }
   if (!state.hasMore) return;
   const next = state.page + 1;
   state.loading = true;
@@ -4465,6 +4743,19 @@ readFilterToggleBtn.addEventListener("click", async () => {
   button.addEventListener("click", async () => {
     if (state.reminderFilter === filter) return;
     state.reminderFilter = filter;
+    await loadFirstPage();
+  });
+});
+
+[
+  [ideaFilterAllBtn, "all"],
+  [ideaFilterArticleBtn, "article"],
+  [ideaFilterTrendBtn, "trend"],
+].forEach(([button, filter]) => {
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    if (state.ideaFilter === filter) return;
+    state.ideaFilter = filter;
     await loadFirstPage();
   });
 });
@@ -5115,6 +5406,72 @@ detailNoteSaveBtn.addEventListener("click", async () => {
     detailNoteCancelBtn.disabled = false;
   }
 });
+
+if (detailTrendIdeaEditBtn) {
+  detailTrendIdeaEditBtn.addEventListener("click", () => {
+    if (!state.selectedTrendIdea) return;
+    detailTrendIdeaInput.value = state.selectedTrendIdea.note || "";
+    setTrendIdeaEditorOpen(true);
+    detailTrendIdeaInput.focus();
+  });
+}
+
+if (detailTrendIdeaCancelBtn) {
+  detailTrendIdeaCancelBtn.addEventListener("click", () => {
+    if (!state.selectedTrendIdea) return;
+    detailTrendIdeaInput.value = state.selectedTrendIdea.note || "";
+    setTrendIdeaEditorOpen(false);
+  });
+}
+
+if (detailTrendIdeaSaveBtn) {
+  detailTrendIdeaSaveBtn.addEventListener("click", async () => {
+    const item = state.selectedTrendIdea;
+    if (!item) return;
+    detailTrendIdeaSaveBtn.disabled = true;
+    if (detailTrendIdeaCancelBtn) detailTrendIdeaCancelBtn.disabled = true;
+    try {
+      const result = await updateTrendNote(item.trend_note_id, detailTrendIdeaInput.value);
+      const updated = {
+        ...item,
+        note: result.trend_note.note,
+        note_preview: result.trend_note.note,
+        updated_at: result.trend_note.updated_at,
+      };
+      state.selectedTrendIdea = updated;
+      updateIdeaRow(updated);
+      renderTrendIdeaDetail(updated);
+    } finally {
+      detailTrendIdeaSaveBtn.disabled = false;
+      if (detailTrendIdeaCancelBtn) detailTrendIdeaCancelBtn.disabled = false;
+    }
+  });
+}
+
+if (detailTrendIdeaDeleteBtn) {
+  detailTrendIdeaDeleteBtn.addEventListener("click", async () => {
+    const item = state.selectedTrendIdea;
+    if (!item) return;
+    const ok = window.confirm(`删除这条趋势想法？\n\n${item.tag_label || ""} · ${ideaDirectionLabel(item)} · ${item.trend_date_key || ""}`);
+    if (!ok) return;
+    detailTrendIdeaDeleteBtn.disabled = true;
+    try {
+      await deleteTrendNote(item.trend_note_id);
+      removeIdeaRow(item.idea_id);
+      updateIdeaDateCountOnDelete(item);
+      state.total = Math.max(0, Number(state.total || 0) - 1);
+      state.pages = Math.max(1, Math.ceil(state.total / state.per));
+      state.page = Math.min(state.page, state.pages);
+      state.selectedIdeaId = "";
+      syncIdeaRowSelection();
+      renderMeta();
+      renderTrendIdeaDetail(null);
+      setHint(state.total > 0 ? "趋势想法已删除" : "还没有想法，去新闻详情或趋势页记录第一条。");
+    } finally {
+      detailTrendIdeaDeleteBtn.disabled = false;
+    }
+  });
+}
 
 detailLink.addEventListener("click", async (e) => {
   if (!state.selectedId) return;
