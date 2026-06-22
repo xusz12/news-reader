@@ -21,7 +21,9 @@ let state = {
   reminderItems: [],
   trackedTopics: [],
   trackedTimelineItems: [],
+  trackedDailySummaries: [],
   trackedBackfillMode: "recent_important",
+  trackedDetailView: "timeline",
   reminderSummary: {
     total: 0,
     active_total: 0,
@@ -141,6 +143,8 @@ const trackedBackfillModeSelect = document.getElementById("trackedBackfillModeSe
 const trackedBackfillBtn = document.getElementById("trackedBackfillBtn");
 const trackedEditBtn = document.getElementById("trackedEditBtn");
 const trackedDeleteBtn = document.getElementById("trackedDeleteBtn");
+const trackedViewTimelineBtn = document.getElementById("trackedViewTimelineBtn");
+const trackedViewTimeflowBtn = document.getElementById("trackedViewTimeflowBtn");
 const trackedTimelineHint = document.getElementById("trackedTimelineHint");
 const trackedTimelineList = document.getElementById("trackedTimelineList");
 
@@ -2022,6 +2026,116 @@ function buildTrackedTimelineRow(item) {
   return row;
 }
 
+function trackedDailySummaryStatusLabel(day) {
+  if (day?.status === "success") return "已生成";
+  if (day?.status === "stale") return "已过期";
+  if (day?.status === "failed") return "生成失败";
+  return "未生成";
+}
+
+function renderTrackedViewSwitch() {
+  if (trackedViewTimelineBtn) trackedViewTimelineBtn.classList.toggle("active", state.trackedDetailView === "timeline");
+  if (trackedViewTimeflowBtn) trackedViewTimeflowBtn.classList.toggle("active", state.trackedDetailView === "timeflow");
+}
+
+function buildTrackedTimeflowRow(day) {
+  const row = document.createElement("div");
+  row.className = "tracked-timeflow-row";
+
+  const axis = document.createElement("div");
+  axis.className = "tracked-timeflow-axis";
+
+  const date = document.createElement("div");
+  date.className = "tracked-timeflow-date";
+  date.textContent = day.date || "未知日期";
+  axis.appendChild(date);
+
+  const dot = document.createElement("div");
+  dot.className = "tracked-timeflow-dot";
+  axis.appendChild(dot);
+
+  const body = document.createElement("div");
+  body.className = "tracked-timeflow-body";
+
+  const meta = document.createElement("div");
+  meta.className = "tracked-timeflow-meta";
+  meta.textContent = `${trackedDailySummaryStatusLabel(day)} · ${Number(day.item_count || 0)} 条新闻`;
+  body.appendChild(meta);
+
+  if (day.summary_text) {
+    const summary = document.createElement("div");
+    summary.className = "tracked-timeflow-summary";
+    summary.textContent = day.summary_text;
+    body.appendChild(summary);
+  } else {
+    const empty = document.createElement("div");
+    empty.className = "tracked-timeflow-summary muted";
+    empty.textContent = day.status === "failed" ? "上次生成失败，可重试。" : "当前还没有生成这一天的时间流总结。";
+    body.appendChild(empty);
+  }
+
+  if (day.error && day.status === "failed") {
+    const error = document.createElement("div");
+    error.className = "tracked-timeflow-error";
+    error.textContent = `失败原因：${day.error}`;
+    body.appendChild(error);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "tracked-timeflow-actions";
+
+  const generateBtn = document.createElement("button");
+  generateBtn.type = "button";
+  generateBtn.className = "detail-retry-btn";
+  generateBtn.textContent = day.status === "stale" ? "重新生成" : "生成当日总结";
+  if (day.status === "success") generateBtn.textContent = "重新生成";
+  generateBtn.addEventListener("click", async () => {
+    const topic = selectedTrackedTopic();
+    if (!topic) return;
+    generateBtn.disabled = true;
+    try {
+      await generateTrackedTopicDailySummary(topic.id, day.date);
+      await loadTrackedTopicDailySummaries(topic.id);
+      setHint(`已生成 ${day.date} 的时间流总结`);
+    } catch (error) {
+      setHint(`时间流总结生成失败：${error?.message || error}`);
+      await loadTrackedTopicDailySummaries(topic.id).catch(() => {});
+    } finally {
+      generateBtn.disabled = false;
+    }
+  });
+  actions.appendChild(generateBtn);
+  body.appendChild(actions);
+
+  const details = document.createElement("details");
+  details.className = "tracked-timeflow-details";
+  const summaryToggle = document.createElement("summary");
+  summaryToggle.textContent = `展开原始新闻 ${Number(day.item_count || 0)} 条`;
+  details.appendChild(summaryToggle);
+
+  const list = document.createElement("div");
+  list.className = "tracked-timeflow-items";
+  (Array.isArray(day.items) ? day.items : []).forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tracked-timeflow-item";
+    button.textContent = `${item.published_at || ""} · ${item.title || "未命名新闻"}`;
+    button.addEventListener("click", async () => {
+      const matched = state.trackedTimelineItems.find((row) => String(row.id) === String(item.id));
+      if (matched) {
+        await openItemDetail(matched, { fromTrackedTopicId: state.selectedTrackedTopicId });
+      }
+    });
+    list.appendChild(button);
+  });
+  details.appendChild(list);
+  body.appendChild(details);
+
+  row.appendChild(axis);
+  row.appendChild(body);
+  return row;
+}
+
 function renderTrackedTopicEmpty(message = "选择一个跟踪主题，右栏会展示详情、回扫和时间线。") {
   closeTagAdminView();
   clearTrendIdeaDetailState();
@@ -2062,11 +2176,23 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
   detailTrackedMeta.textContent = `${trackedScopeLabel(topic)} · 可见 ${Number(topic.visible_item_count || 0)} · 隐藏 ${Number(topic.hidden_item_count || 0)}`;
   detailTrackedKeywords.textContent = trackedDescriptionSummary(topic);
   if (trackedBackfillModeSelect) trackedBackfillModeSelect.value = state.trackedBackfillMode;
-  trackedTimelineHint.textContent = items.length
-    ? `时间线按新闻发布时间新→旧，共 ${items.length} 条`
-    : "当前主题还没有命中新闻。可先执行历史回扫，或从新闻详情里手动加入。";
+  renderTrackedViewSwitch();
   trackedTimelineList.innerHTML = "";
-  items.forEach((item) => trackedTimelineList.appendChild(buildTrackedTimelineRow(item)));
+  if (state.trackedDetailView === "timeflow") {
+    if (state.trackedDailySummaries.length) {
+      trackedTimelineHint.textContent = `时间流按日期新→旧展示；需手动逐日生成或重新生成。共 ${state.trackedDailySummaries.length} 天。`;
+      state.trackedDailySummaries.forEach((day) => trackedTimelineList.appendChild(buildTrackedTimeflowRow(day)));
+    } else {
+      trackedTimelineHint.textContent = items.length
+        ? "当前主题已有原始新闻，但还没有任何时间流总结。可逐日点击“生成当日总结”。"
+        : "当前主题还没有命中新闻，暂时无法生成时间流总结。";
+    }
+  } else {
+    trackedTimelineHint.textContent = items.length
+      ? `时间线按新闻发布时间新→旧，共 ${items.length} 条`
+      : "当前主题还没有命中新闻。可先执行历史回扫，或从新闻详情里手动加入。";
+    items.forEach((item) => trackedTimelineList.appendChild(buildTrackedTimelineRow(item)));
+  }
   updateWorkspaceLayout();
   openDetailOnMobile();
 }
@@ -2074,11 +2200,28 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
 async function loadTrackedTopicTimeline(topicId) {
   const data = await fetchTrackedTopicItems(topicId);
   state.trackedTimelineItems = Array.isArray(data.items) ? data.items : [];
+  if (state.trackedDetailView === "timeflow") {
+    const daily = await fetchTrackedTopicDailySummaries(topicId);
+    state.trackedDailySummaries = Array.isArray(daily.days) ? daily.days : [];
+  } else {
+    state.trackedDailySummaries = [];
+  }
   if (data.topic) {
     state.trackedTopics = state.trackedTopics.map((topic) => String(topic.id) === String(data.topic.id) ? data.topic : topic);
   }
   renderTrackedTopicsList();
   renderTrackedTopicDetail(data.topic, state.trackedTimelineItems);
+  renderMeta();
+}
+
+async function loadTrackedTopicDailySummaries(topicId) {
+  const data = await fetchTrackedTopicDailySummaries(topicId);
+  state.trackedDailySummaries = Array.isArray(data.days) ? data.days : [];
+  if (data.topic) {
+    state.trackedTopics = state.trackedTopics.map((topic) => String(topic.id) === String(data.topic.id) ? data.topic : topic);
+  }
+  renderTrackedTopicsList();
+  renderTrackedTopicDetail(data.topic || selectedTrackedTopic(), state.trackedTimelineItems);
   renderMeta();
 }
 
@@ -4837,6 +4980,26 @@ async function fetchTrackedTopicItems(topicId) {
   return data;
 }
 
+async function fetchTrackedTopicDailySummaries(topicId) {
+  const res = await fetch(`/api/tracked-topics/${encodeURIComponent(topicId)}/daily-summaries`);
+  if (!res.ok) throw new Error("tracked_topic_daily_summaries_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "tracked_topic_daily_summaries_fetch_failed");
+  return data;
+}
+
+async function generateTrackedTopicDailySummary(topicId, summaryDate) {
+  const res = await fetch(`/api/tracked-topics/${encodeURIComponent(topicId)}/daily-summaries/${encodeURIComponent(summaryDate)}/generate`, {
+    method: "POST",
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_topic_daily_summary_generate_failed" }));
+  if (!res.ok || !data.ok) {
+    const detail = data.detail ? `: ${data.detail}` : "";
+    throw new Error((data.error || "tracked_topic_daily_summary_generate_failed") + detail);
+  }
+  return data;
+}
+
 async function createTrackedTopic(payload) {
   const res = await fetch("/api/tracked-topics", {
     method: "POST",
@@ -5446,6 +5609,35 @@ if (trackedEditBtn) {
   });
 }
 
+if (trackedViewTimelineBtn) {
+  trackedViewTimelineBtn.addEventListener("click", async () => {
+    if (state.trackedDetailView === "timeline") return;
+    state.trackedDetailView = "timeline";
+    renderTrackedViewSwitch();
+    renderTrackedTopicDetail(selectedTrackedTopic(), state.trackedTimelineItems);
+  });
+}
+
+if (trackedViewTimeflowBtn) {
+  trackedViewTimeflowBtn.addEventListener("click", async () => {
+    if (state.trackedDetailView === "timeflow") return;
+    state.trackedDetailView = "timeflow";
+    renderTrackedViewSwitch();
+    const topic = selectedTrackedTopic();
+    if (!topic) {
+      renderTrackedTopicDetail(null, state.trackedTimelineItems);
+      return;
+    }
+    try {
+      await loadTrackedTopicDailySummaries(topic.id);
+    } catch (error) {
+      state.trackedDailySummaries = [];
+      renderTrackedTopicDetail(topic, state.trackedTimelineItems);
+      setHint(`读取时间流失败：${error?.message || error}`);
+    }
+  });
+}
+
 if (trackedDeleteBtn) {
   trackedDeleteBtn.addEventListener("click", async () => {
     const topic = selectedTrackedTopic();
@@ -5456,6 +5648,7 @@ if (trackedDeleteBtn) {
     state.trackedTopics = await fetchTrackedTopics();
     state.selectedTrackedTopicId = null;
     state.trackedTimelineItems = [];
+    state.trackedDailySummaries = [];
     renderTrackedTopicsList();
     renderTrackedTopicEmpty(state.trackedTopics.length ? "主题已删除。请选择其他主题。" : "跟踪主题已删除，点击“新建跟踪”开始新的主题。");
     renderMeta();
@@ -5489,9 +5682,14 @@ if (trackedBackfillBtn) {
     const data = await backfillTrackedTopic(topic.id, state.trackedBackfillMode);
     state.trackedTopics = await fetchTrackedTopics();
     state.trackedTimelineItems = Array.isArray(data.items) ? data.items : [];
-    renderTrackedTopicsList();
-    renderTrackedTopicDetail(data.topic || selectedTrackedTopic(), state.trackedTimelineItems);
-    renderMeta();
+    if (state.trackedDetailView === "timeflow") {
+      await loadTrackedTopicDailySummaries(topic.id);
+    } else {
+      state.trackedDailySummaries = [];
+      renderTrackedTopicsList();
+      renderTrackedTopicDetail(data.topic || selectedTrackedTopic(), state.trackedTimelineItems);
+      renderMeta();
+    }
     setHint(`历史回扫完成，当前范围命中 ${Number(data.matched_count || 0)} 条`);
   });
 }

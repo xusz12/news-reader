@@ -4,6 +4,19 @@
 
 ## What's Changed
 
+### 2026-06-23 — v1.9.8.4 feat: 跟踪时间流总结视图
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*llm_client.py（+）*、*tests/test_api.py（+）*
+    - 新增 `tracked_topic_daily_summaries` 缓存表，以及 `GET /api/tracked-topics/:id/daily-summaries`、`POST /api/tracked-topics/:id/daily-summaries/:date/generate`
+    - 按跟踪主题和日期聚合已命中的本地新闻，生成 `未生成 / 已生成 / 已过期 / 生成失败` 状态；新闻集合变化时只标记过期，不静默覆盖旧摘要
+    - 时间流单日总结默认调用 DeepSeek，输入仅使用本地已入库的标题、摘要、AI 摘要、正文、用户想法等事实材料，不联网、不抓新网页
+    - 补覆盖：新表与索引建库、单日生成成功/失败、按发布时间顺序组织材料、手动加入后摘要转为过期
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 跟踪主题右栏新增 `原始新闻 / 时间流` 视图切换，默认仍停留在原始新闻时间线
+    - 时间流视图改为左侧纵向时间轴，日期节点右侧直接展示当天融合摘要；摘要下方可弱化展开当天原始新闻列表
+    - 单日摘要改为手动生成/重生成，打开页面不会自动批量触发 LLM
+- **影响**：用户现在可以在不改变原始新闻时间线的前提下，按日期查看同一主题的“时间流”压缩总结，并且随时展开回看当天原始新闻做事实核查。
+
 ### 2026-06-22 — v1.9.8.3 improve: 跟踪回扫重算与权重可调
 - **文件**
   - *app.py（+）*、*tests/test_api.py（+）*

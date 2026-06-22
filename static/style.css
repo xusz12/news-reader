@@ -1702,6 +1702,28 @@ button.active {
   gap: 8px;
 }
 
+.tracked-view-switch {
+  display: inline-flex;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.tracked-view-switch-btn {
+  border: 1px solid var(--border-color, #d7dce5);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-text, #6b7280);
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tracked-view-switch-btn.active {
+  border-color: var(--accent-color, #2563eb);
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent-color, #2563eb);
+}
+
 .tracked-timeline-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1738,6 +1760,103 @@ button.active {
 .tracked-topic-badge.muted {
   background: #e5e7eb;
   color: #4b5563;
+}
+
+.tracked-timeflow-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.tracked-timeflow-axis {
+  position: relative;
+  min-height: 100%;
+  padding-right: 12px;
+  text-align: right;
+}
+
+.tracked-timeflow-axis::after {
+  content: "";
+  position: absolute;
+  top: 22px;
+  right: 9px;
+  bottom: -10px;
+  width: 1px;
+  background: var(--border-color, #d7dce5);
+}
+
+.tracked-timeflow-row:last-child .tracked-timeflow-axis::after {
+  display: none;
+}
+
+.tracked-timeflow-date {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted-text, #6b7280);
+}
+
+.tracked-timeflow-dot {
+  position: absolute;
+  top: 18px;
+  right: 4px;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--panel-bg, #fff);
+  border: 2px solid var(--accent-color, #2563eb);
+}
+
+.tracked-timeflow-body {
+  border: 1px solid var(--border-color, #d7dce5);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--panel-bg, #fff) 92%, var(--accent-color, #2563eb) 8%);
+}
+
+.tracked-timeflow-meta,
+.tracked-timeflow-error {
+  font-size: 12px;
+  color: var(--muted-text, #6b7280);
+}
+
+.tracked-timeflow-summary {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.tracked-timeflow-actions {
+  margin-top: 10px;
+}
+
+.tracked-timeflow-details {
+  margin-top: 10px;
+}
+
+.tracked-timeflow-details summary {
+  cursor: pointer;
+  color: var(--muted-text, #6b7280);
+}
+
+.tracked-timeflow-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tracked-timeflow-item {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.tracked-timeflow-item:hover {
+  color: var(--accent-color, #2563eb);
 }
 
 .row-actions {

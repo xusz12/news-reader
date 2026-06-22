@@ -198,3 +198,21 @@ ON tracked_topic_items(topic_id, hidden_at, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_tracked_topic_items_item_id
 ON tracked_topic_items(item_id);
+
+CREATE TABLE IF NOT EXISTS tracked_topic_daily_summaries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  topic_id INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  item_ids_hash TEXT NOT NULL DEFAULT '',
+  summary_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'success',
+  error TEXT,
+  model TEXT,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(topic_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_topic_daily_summaries_topic_date
+ON tracked_topic_daily_summaries(topic_id, date DESC);

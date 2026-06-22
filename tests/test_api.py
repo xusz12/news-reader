@@ -481,6 +481,7 @@ def test_apply_schema_creates_tracked_topic_tables_and_indexes(tmp_path: Path, m
         }
         assert "tracked_topics" in tables
         assert "tracked_topic_items" in tables
+        assert "tracked_topic_daily_summaries" in tables
         tracked_topic_cols = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(tracked_topics)").fetchall()
@@ -496,6 +497,7 @@ def test_apply_schema_creates_tracked_topic_tables_and_indexes(tmp_path: Path, m
         assert "idx_tracked_topics_active_updated_at" in indexes
         assert "idx_tracked_topic_items_topic_hidden" in indexes
         assert "idx_tracked_topic_items_item_id" in indexes
+        assert "idx_tracked_topic_daily_summaries_topic_date" in indexes
     finally:
         conn.close()
 
@@ -845,6 +847,156 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     detail = client.get(f"/api/news/{manual_item['id']}/detail")
     assert detail.status_code == 200
     assert detail.get_json()["tracked_topic_choices"][0]["title"] == "俄乌战争"
+
+
+def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-20.md").write_text(
+        """## Reuters · World（4条）
+### [俄乌战争：乌克兰回应](https://example.com/ru-day-1)
+- 发布时间：2026-06-20 09:00:00
+- 摘要：乌克兰方面作出回应
+
+### [俄乌战争：俄罗斯表态](https://example.com/ru-day-2)
+- 发布时间：2026-06-20 11:00:00
+- 摘要：俄罗斯方面发布声明
+
+### [补充战况](https://example.com/ru-day-manual)
+- 发布时间：2026-06-20 12:00:00
+- 摘要：更多细节出现
+
+### [俄乌战争：停火谈判](https://example.com/ru-day-3)
+- 发布时间：2026-06-21 08:30:00
+- 摘要：谈判出现新进展
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    assert client.post("/api/reindex", json={}).status_code == 200
+    items = client.get("/api/news?per=20").get_json()["items"]
+    by_title = {item["title"]: item for item in items}
+
+    topic_res = client.post(
+        "/api/tracked-topics",
+        json={
+            "title": "俄乌战争",
+            "strong_phrases": ["俄乌战争"],
+            "threshold": 6,
+            "scope": "all",
+            "active": True,
+        },
+    )
+    assert topic_res.status_code == 200
+    topic_id = topic_res.get_json()["topic"]["id"]
+
+    conn = sqlite3.connect(db_path)
+    try:
+        ts = "2026-06-20 13:00:00"
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                by_title["俄乌战争：乌克兰回应"]["url"],
+                "Reuters",
+                "俄乌战争：乌克兰回应",
+                "2026-06-20 09:00:00",
+                "Full local body 1",
+                17,
+                "{}",
+                ts,
+                ts,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                by_title["俄乌战争：俄罗斯表态"]["url"],
+                "Reuters",
+                "俄乌战争：俄罗斯表态",
+                "2026-06-20 11:00:00",
+                "Full local body 2",
+                17,
+                "{}",
+                ts,
+                ts,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    backfill = client.post(f"/api/tracked-topics/{topic_id}/backfill", json={"mode": "all_news"})
+    assert backfill.status_code == 200
+
+    listing = client.get(f"/api/tracked-topics/{topic_id}/daily-summaries")
+    assert listing.status_code == 200
+    days = listing.get_json()["days"]
+    assert [day["date"] for day in days] == ["2026-06-21", "2026-06-20"]
+    assert days[0]["status"] == "missing"
+    assert [item["title"] for item in days[1]["items"]] == [
+        "俄乌战争：乌克兰回应",
+        "俄乌战争：俄罗斯表态",
+    ]
+
+    def fail_summary(**kwargs):
+        raise app_module.LLMClientError("DEEPSEEK_CALL_FAILED: unavailable")
+
+    monkeypatch.setattr(app_module, "generate_tracked_topic_daily_summary", fail_summary)
+    failed = client.post(f"/api/tracked-topics/{topic_id}/daily-summaries/2026-06-20/generate")
+    assert failed.status_code == 502
+    assert failed.get_json()["error"] == "daily_summary_generate_failed"
+
+    failed_listing = client.get(f"/api/tracked-topics/{topic_id}/daily-summaries").get_json()["days"]
+    failed_day = next(day for day in failed_listing if day["date"] == "2026-06-20")
+    assert failed_day["status"] == "failed"
+
+    captured: dict[str, str] = {}
+
+    def ok_summary(**kwargs):
+        captured["materials"] = kwargs["materials"]
+        return {
+            "model": "deepseek-chat",
+            "summary_text": "先发生乌克兰回应，随后俄罗斯发布声明。",
+            "raw_json": "{}",
+        }
+
+    monkeypatch.setattr(app_module, "generate_tracked_topic_daily_summary", ok_summary)
+    generated = client.post(f"/api/tracked-topics/{topic_id}/daily-summaries/2026-06-20/generate")
+    assert generated.status_code == 200
+    generated_day = generated.get_json()["day"]
+    assert generated_day["status"] == "success"
+    assert generated_day["summary_text"] == "先发生乌克兰回应，随后俄罗斯发布声明。"
+    assert captured["materials"].index("标题：俄乌战争：乌克兰回应") < captured["materials"].index("标题：俄乌战争：俄罗斯表态")
+    assert "正文：Full local body 1" in captured["materials"]
+    assert "正文：Full local body 2" in captured["materials"]
+
+    manual_add = client.post(
+        f"/api/tracked-topics/{topic_id}/items",
+        json={"item_id": by_title["补充战况"]["id"]},
+    )
+    assert manual_add.status_code == 200
+
+    stale_listing = client.get(f"/api/tracked-topics/{topic_id}/daily-summaries").get_json()["days"]
+    stale_day = next(day for day in stale_listing if day["date"] == "2026-06-20")
+    assert stale_day["status"] == "stale"
+    assert stale_day["item_count"] == 3
 
 
 def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):

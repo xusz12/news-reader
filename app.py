@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,7 @@ from llm_client import (
     LLMClientError,
     generate_codex_fallback_translation,
     generate_article_ai,
+    generate_tracked_topic_daily_summary,
     resolve_translation_default_model,
 )
 from parser import parse_daily_errors
@@ -96,6 +98,7 @@ IDEA_TYPE_FILTERS = {"all", "article", "trend"}
 TRACKED_TOPIC_SCOPES = {"important", "all"}
 TRACKED_BACKFILL_MODES = {"recent_important", "all_important", "all_news"}
 TRACKED_MATCH_METHODS = {"keyword", "manual"}
+TRACKED_DAILY_SUMMARY_STATUSES = {"success", "failed"}
 TRACKED_RULE_FIELD_SCORES = {
     "title": {"strong": 8, "core": 4, "context": 2},
     "note": {"strong": 6, "core": 3, "context": 2},
@@ -127,6 +130,11 @@ TRACKED_RULE_CANDIDATE_THRESHOLD_DEFAULT = 4
 TRACKED_RULE_WEIGHT_MIN = 0
 TRACKED_RULE_WEIGHT_MAX = 20
 TRACKED_RULE_EXCLUDE_PENALTY_BASE = 100
+TRACKED_DAILY_SUMMARY_TEXT_LIMIT = 12000
+TRACKED_DAILY_SUMMARY_CONTENT_LIMIT = 4000
+TRACKED_DAILY_SUMMARY_AI_BODY_LIMIT = 2000
+TRACKED_DAILY_SUMMARY_NOTE_LIMIT = 800
+TRACKED_DAILY_SUMMARY_SUMMARY_LIMIT = 800
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -444,6 +452,13 @@ def tracked_backfill_mode_value(value: object) -> str:
     if mode not in TRACKED_BACKFILL_MODES:
         raise ValueError("invalid_backfill_mode")
     return mode
+
+
+def tracked_daily_summary_status_value(value: object) -> str:
+    status = str(value or "success").strip().lower()
+    if status not in TRACKED_DAILY_SUMMARY_STATUSES:
+        raise ValueError("invalid_daily_summary_status")
+    return status
 
 
 def parse_tracked_threshold(value: object, *, default: int) -> int:
@@ -2012,6 +2027,220 @@ def tracked_topic_timeline_items(conn: sqlite3.Connection, topic_id: int) -> lis
     return items
 
 
+def tracked_daily_summary_source_rows(conn: sqlite3.Connection, topic_id: int, *, date: str | None = None) -> list[sqlite3.Row]:
+    where_sql = "WHERE tti.topic_id = ? AND tti.hidden_at IS NULL"
+    args: list[object] = [topic_id]
+    if date:
+        where_sql += f" AND {ITEM_DATE_SQL} = ?"
+        args.append(date)
+    return conn.execute(
+        f"""
+        SELECT items.id,
+               items.url,
+               items.title,
+               items.summary,
+               items.published_at,
+               items.date,
+               items.time,
+               items.source,
+               items.source_name,
+               an.note,
+               aa.conclusion_zh,
+               aa.body_zh,
+               ad.content,
+               items.updated_at AS item_updated_at,
+               tti.updated_at AS tracked_updated_at,
+               COALESCE(an.updated_at, '') AS note_updated_at,
+               COALESCE(aa.updated_at, '') AS ai_updated_at,
+               COALESCE(ad.updated_at, '') AS detail_updated_at
+        FROM tracked_topic_items tti
+        JOIN items ON items.id = tti.item_id
+        LEFT JOIN article_notes an ON an.url = items.url
+        LEFT JOIN article_ai aa ON aa.url = items.url
+        LEFT JOIN article_details ad ON ad.url = items.url
+        {where_sql}
+        ORDER BY {ITEM_DATE_SQL} DESC, items.published_at ASC, items.id ASC
+        """,
+        args,
+    ).fetchall()
+
+
+def tracked_daily_summary_row(conn: sqlite3.Connection, topic_id: int, date: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT topic_id, date, item_ids_hash, summary_text, status, error, model, raw_json, created_at, updated_at
+        FROM tracked_topic_daily_summaries
+        WHERE topic_id = ? AND date = ?
+        """,
+        (topic_id, date),
+    ).fetchone()
+
+
+def truncate_daily_summary_text(value: object, limit: int) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def build_tracked_daily_summary_hash(rows: list[dict]) -> str:
+    basis = []
+    for row in rows:
+        basis.append(
+            "||".join(
+                [
+                    str(row.get("id") or ""),
+                    str(row.get("published_at") or ""),
+                    str(row.get("title") or ""),
+                    str(row.get("summary") or ""),
+                    str(row.get("note") or ""),
+                    str(row.get("conclusion_zh") or ""),
+                    str(row.get("body_zh") or ""),
+                    str(row.get("content") or ""),
+                    str(row.get("item_updated_at") or ""),
+                    str(row.get("tracked_updated_at") or ""),
+                    str(row.get("note_updated_at") or ""),
+                    str(row.get("ai_updated_at") or ""),
+                    str(row.get("detail_updated_at") or ""),
+                ]
+            )
+        )
+    return hashlib.sha256("\n".join(basis).encode("utf-8")).hexdigest()
+
+
+def build_tracked_daily_summary_materials(topic: dict, date: str, rows: list[dict]) -> str:
+    blocks = [f"主题：{topic.get('title') or '未命名主题'}", f"日期：{date}"]
+    for index, row in enumerate(rows, start=1):
+        source_label = row.get("source_name") or row.get("source") or "未知来源"
+        published_at = row.get("published_at") or row.get("date") or ""
+        lines = [
+            f"新闻 {index}",
+            f"发布时间：{published_at}",
+            f"来源：{source_label}",
+            f"标题：{row.get('title') or '无标题'}",
+        ]
+        summary = truncate_daily_summary_text(row.get("summary"), TRACKED_DAILY_SUMMARY_SUMMARY_LIMIT)
+        if summary:
+            lines.append(f"摘要：{summary}")
+        conclusion = truncate_daily_summary_text(row.get("conclusion_zh"), TRACKED_DAILY_SUMMARY_SUMMARY_LIMIT)
+        if conclusion:
+            lines.append(f"AI 摘要：{conclusion}")
+        note = truncate_daily_summary_text(row.get("note"), TRACKED_DAILY_SUMMARY_NOTE_LIMIT)
+        if note:
+            lines.append(f"用户想法：{note}")
+        body_zh = truncate_daily_summary_text(row.get("body_zh"), TRACKED_DAILY_SUMMARY_AI_BODY_LIMIT)
+        if body_zh:
+            lines.append(f"AI 正文摘录：{body_zh}")
+        content = truncate_daily_summary_text(row.get("content"), TRACKED_DAILY_SUMMARY_CONTENT_LIMIT)
+        if content:
+            lines.append(f"正文：{content}")
+        blocks.append("\n".join(lines))
+    materials = "\n\n".join(blocks).strip()
+    if len(materials) <= TRACKED_DAILY_SUMMARY_TEXT_LIMIT:
+        return materials
+    return materials[:TRACKED_DAILY_SUMMARY_TEXT_LIMIT].rstrip()
+
+
+def serialize_tracked_daily_summary_group(topic: dict, date: str, rows: list[dict], summary_row: sqlite3.Row | None) -> dict:
+    current_hash = build_tracked_daily_summary_hash(rows)
+    saved_hash = (summary_row["item_ids_hash"] if summary_row else "") or ""
+    saved_status = (summary_row["status"] if summary_row else "") or ""
+    if not summary_row:
+        status = "missing"
+    elif saved_hash != current_hash:
+        status = "stale"
+    elif saved_status == "failed":
+        status = "failed"
+    else:
+        status = "success"
+
+    items = []
+    for row in rows:
+        items.append(
+            {
+                "id": row.get("id") or "",
+                "url": row.get("url") or "",
+                "title": row.get("title") or "未命名新闻",
+                "published_at": row.get("published_at") or "",
+                "source": row.get("source_name") or row.get("source") or "",
+                "summary": row.get("summary") or "",
+            }
+        )
+
+    return {
+        "date": date,
+        "item_count": len(items),
+        "item_ids_hash": current_hash,
+        "status": status,
+        "summary_text": (summary_row["summary_text"] if summary_row else "") or "",
+        "error": (summary_row["error"] if summary_row else "") or "",
+        "model": (summary_row["model"] if summary_row else "") or "",
+        "created_at": (summary_row["created_at"] if summary_row else "") or "",
+        "updated_at": (summary_row["updated_at"] if summary_row else "") or "",
+        "items": items,
+    }
+
+
+def load_tracked_topic_daily_summaries(conn: sqlite3.Connection, topic: dict) -> list[dict]:
+    rows = [dict(row) for row in tracked_daily_summary_source_rows(conn, int(topic["id"]))]
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        date = (row.get("date") or "") or ((row.get("published_at") or "")[:10])
+        if not date:
+            continue
+        grouped.setdefault(date, []).append(row)
+
+    payload: list[dict] = []
+    for date in sorted(grouped.keys(), reverse=True):
+        source_rows = grouped[date]
+        summary_row = tracked_daily_summary_row(conn, int(topic["id"]), date)
+        payload.append(serialize_tracked_daily_summary_group(topic, date, source_rows, summary_row))
+    return payload
+
+
+def save_tracked_daily_summary(
+    conn: sqlite3.Connection,
+    *,
+    topic_id: int,
+    date: str,
+    item_ids_hash: str,
+    status: str,
+    summary_text: str,
+    error: str,
+    model: str,
+    raw_json: str,
+) -> None:
+    ts = now_ts()
+    conn.execute(
+        """
+        INSERT INTO tracked_topic_daily_summaries(
+          topic_id, date, item_ids_hash, summary_text, status, error, model, raw_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(topic_id, date) DO UPDATE SET
+          item_ids_hash=excluded.item_ids_hash,
+          summary_text=excluded.summary_text,
+          status=excluded.status,
+          error=excluded.error,
+          model=excluded.model,
+          raw_json=excluded.raw_json,
+          updated_at=excluded.updated_at
+        """,
+        (
+            topic_id,
+            date,
+            item_ids_hash,
+            summary_text,
+            status,
+            error[:500] if error else None,
+            model,
+            raw_json or "{}",
+            ts,
+            ts,
+        ),
+    )
+
+
 def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
     where_sql = "WHERE mtd.active=1" if active_only else ""
     rows = conn.execute(
@@ -3042,6 +3271,89 @@ def api_tracked_topic_items(topic_id: int):
     finally:
         conn.close()
     return jsonify({"ok": True, "topic": topic, "items": items, "total": len(items)})
+
+
+@app.get("/api/tracked-topics/<int:topic_id>/daily-summaries")
+def api_tracked_topic_daily_summaries(topic_id: int):
+    conn = db_conn()
+    try:
+        topic = load_tracked_topic(conn, topic_id)
+        if not topic:
+            return jsonify({"ok": False, "error": "topic_not_found"}), 404
+        days = load_tracked_topic_daily_summaries(conn, topic)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "topic": topic, "days": days, "total": len(days)})
+
+
+@app.post("/api/tracked-topics/<int:topic_id>/daily-summaries/<summary_date>/generate")
+def api_tracked_topic_daily_summary_generate(topic_id: int, summary_date: str):
+    try:
+        normalized_date = datetime.strptime((summary_date or "").strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid_summary_date"}), 400
+
+    conn = db_conn()
+    try:
+        topic = load_tracked_topic(conn, topic_id)
+        if not topic:
+            return jsonify({"ok": False, "error": "topic_not_found"}), 404
+        rows = [dict(row) for row in tracked_daily_summary_source_rows(conn, topic_id, date=normalized_date)]
+        if not rows:
+            return jsonify({"ok": False, "error": "summary_source_items_not_found"}), 404
+        item_ids_hash = build_tracked_daily_summary_hash(rows)
+        materials = build_tracked_daily_summary_materials(topic, normalized_date, rows)
+        llm_settings = current_runtime_settings()["llm"]
+        model_name = (llm_settings["translation"].get("model") or "").strip()
+
+        try:
+            payload = generate_tracked_topic_daily_summary(
+                topic_title=(topic.get("title") or "").strip(),
+                summary_date=normalized_date,
+                materials=materials,
+                model=model_name,
+            )
+        except LLMClientError as exc:
+            with conn:
+                save_tracked_daily_summary(
+                    conn,
+                    topic_id=topic_id,
+                    date=normalized_date,
+                    item_ids_hash=item_ids_hash,
+                    status="failed",
+                    summary_text="",
+                    error=str(exc),
+                    model=model_name or "deepseek-chat",
+                    raw_json="{}",
+                )
+            summary_row = tracked_daily_summary_row(conn, topic_id, normalized_date)
+            day = serialize_tracked_daily_summary_group(topic, normalized_date, rows, summary_row)
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "daily_summary_generate_failed",
+                    "detail": str(exc),
+                    "day": day,
+                }
+            ), 502
+
+        with conn:
+            save_tracked_daily_summary(
+                conn,
+                topic_id=topic_id,
+                date=normalized_date,
+                item_ids_hash=item_ids_hash,
+                status="success",
+                summary_text=payload.get("summary_text", ""),
+                error="",
+                model=payload.get("model", model_name or "deepseek-chat"),
+                raw_json=payload.get("raw_json", "{}"),
+            )
+        summary_row = tracked_daily_summary_row(conn, topic_id, normalized_date)
+        day = serialize_tracked_daily_summary_group(topic, normalized_date, rows, summary_row)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "topic": topic, "day": day})
 
 
 @app.post("/api/tracked-topics/<int:topic_id>/backfill")

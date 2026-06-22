@@ -218,6 +218,21 @@ def test_generate_article_ai_rejects_non_chinese_body(monkeypatch):
     assert str(exc.value) == "INVALID_BODY_ZH"
 
 
+def test_build_tracked_daily_summary_messages_require_story_style(monkeypatch):
+    import llm_client
+
+    importlib.reload(llm_client)
+    messages = llm_client._build_tracked_daily_summary_messages(
+        topic_title="俄乌战争",
+        summary_date="2026-06-20",
+        materials="新闻 1\n发布时间：2026-06-20 09:00:00\n标题：A",
+    )
+    system = messages[0]["content"]
+    assert "连续叙述式总结" in system
+    assert "不要按 1/2/3/4" in system
+    assert "不要把原始新闻一条条改写后顺序拼接" in system
+
+
 def test_generate_codex_fallback_translation_uses_codex_exec(monkeypatch, tmp_path):
     commands = []
 

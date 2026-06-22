@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>News Reader v1.9.8.0</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.8.0" />
+    <link rel="stylesheet" href="/static/style.css?v=1.9.8.4" />
   </head>
   <body>
     <header class="topbar">
@@ -213,6 +213,10 @@
             <button id="trackedBackfillBtn" class="detail-retry-btn" type="button">回扫历史新闻</button>
             <button id="trackedEditBtn" class="detail-retry-btn" type="button">编辑</button>
             <button id="trackedDeleteBtn" class="detail-retry-btn" type="button">删除</button>
+          </div>
+          <div class="tracked-view-switch" role="tablist" aria-label="跟踪视图切换">
+            <button id="trackedViewTimelineBtn" class="tracked-view-switch-btn active" type="button">原始新闻</button>
+            <button id="trackedViewTimeflowBtn" class="tracked-view-switch-btn" type="button">时间流</button>
           </div>
           <div id="trackedTimelineHint" class="detail-meta"></div>
           <div id="trackedTimelineList" class="detail-trend-list tracked-timeline-list"></div>
@@ -462,6 +466,6 @@
       <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.8.0"></script>
+    <script src="/static/app.js?v=1.9.8.4"></script>
   </body>
 </html>
