@@ -673,6 +673,10 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     topic_id = topic["id"]
     assert topic["rules"]["core_terms"] == ["乌克兰", "俄罗斯"]
     assert topic["rules"]["threshold"] == 6
+    assert topic["rules"]["title_weight"] == 1
+    assert topic["rules"]["note_weight"] == 1
+    assert topic["rules"]["strong_score"] == 1
+    assert topic["rules"]["exclude_penalty"] == 1
 
     all_backfill = client.post(
         f"/api/tracked-topics/{topic_id}/backfill",
@@ -743,11 +747,32 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
         "乌克兰俄罗斯谈判旧战况",
     ]
 
+    update_topic = client.patch(
+        f"/api/tracked-topics/{topic_id}",
+        json={
+            "core_terms": ["乌克兰", "俄罗斯"],
+            "context_terms": ["停火"],
+            "threshold": 6,
+        },
+    )
+    assert update_topic.status_code == 200
+
+    recomputed = client.post(
+        f"/api/tracked-topics/{topic_id}/backfill",
+        json={"mode": "all_news"},
+    )
+    assert recomputed.status_code == 200
+    recomputed_titles = [item["title"] for item in recomputed.get_json()["items"]]
+    assert recomputed_titles == [
+        "无关宏观观察",
+        "乌克兰基辅停火进展",
+    ]
+
     (daily_dir / "dailyFreshNews_2026-06-21.md").write_text(
         """## Reuters · World（1条）
-### [乌克兰袭击基辅新消息](https://example.com/ru-new)
+### [乌克兰停火新消息](https://example.com/ru-new)
 - 发布时间：2026-06-21 11:00:00
-- 摘要：俄罗斯方面回应
+- 摘要：俄罗斯与乌克兰回应停火
 """,
         encoding="utf-8",
     )
@@ -757,15 +782,65 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
 
     final_timeline = client.get(f"/api/tracked-topics/{topic_id}/items").get_json()
     assert [item["title"] for item in final_timeline["items"]] == [
-        "乌克兰袭击基辅新消息",
+        "乌克兰停火新消息",
         "无关宏观观察",
         "乌克兰基辅停火进展",
-        "欧洲防务观察二",
-        "欧洲防务观察",
-        "乌克兰俄罗斯谈判旧战况",
     ]
     assert final_timeline["items"][1]["tracked_match_method"] == "manual"
     assert "标题命中" in final_timeline["items"][0]["tracked_reason"]
+
+    custom_weight_topic = client.post(
+        "/api/tracked-topics",
+        json={
+            "title": "笔记权重测试",
+            "core_terms": ["乌克兰"],
+            "context_terms": ["袭击"],
+            "exclude_terms": ["俄罗斯方块"],
+            "threshold": 7,
+            "note_weight": 1.5,
+            "scope": "all",
+            "active": False,
+        },
+    )
+    assert custom_weight_topic.status_code == 200
+    custom_topic = custom_weight_topic.get_json()["topic"]
+    assert custom_topic["rules"]["note_weight"] == 1.5
+    custom_topic_id = custom_topic["id"]
+
+    custom_backfill = client.post(
+        f"/api/tracked-topics/{custom_topic_id}/backfill",
+        json={"mode": "all_important"},
+    )
+    assert custom_backfill.status_code == 200
+    custom_items = custom_backfill.get_json()["items"]
+    assert [item["title"] for item in custom_items] == ["欧洲防务观察"]
+    assert custom_items[0]["tracked_score"] == 7.5
+    assert "笔记命中" in custom_items[0]["tracked_reason"]
+    assert "score=7.5" in custom_items[0]["tracked_reason"]
+
+    zero_weight_update = client.patch(
+        f"/api/tracked-topics/{custom_topic_id}",
+        json={
+            "title": custom_topic["title"],
+            "description": custom_topic["description"],
+            "core_terms": ["乌克兰"],
+            "context_terms": ["袭击"],
+            "exclude_terms": ["俄罗斯方块"],
+            "threshold": 7,
+            "note_weight": 0,
+            "scope": "all",
+            "active": False,
+        },
+    )
+    assert zero_weight_update.status_code == 200
+    assert zero_weight_update.get_json()["topic"]["rules"]["note_weight"] == 0
+
+    zero_weight_backfill = client.post(
+        f"/api/tracked-topics/{custom_topic_id}/backfill",
+        json={"mode": "all_important"},
+    )
+    assert zero_weight_backfill.status_code == 200
+    assert zero_weight_backfill.get_json()["items"] == []
 
     detail = client.get(f"/api/news/{manual_item['id']}/detail")
     assert detail.status_code == 200

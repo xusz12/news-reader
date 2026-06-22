@@ -194,12 +194,19 @@ const detailTrackedFormBackBtn = document.getElementById("detailTrackedFormBackB
 const detailTrackedFormTitle = document.getElementById("detailTrackedFormTitle");
 const detailTrackedFormMeta = document.getElementById("detailTrackedFormMeta");
 const detailTrackedTitleInput = document.getElementById("detailTrackedTitleInput");
-const detailTrackedDescriptionInput = document.getElementById("detailTrackedDescriptionInput");
 const detailTrackedStrongInput = document.getElementById("detailTrackedStrongInput");
 const detailTrackedCoreInput = document.getElementById("detailTrackedCoreInput");
 const detailTrackedContextInput = document.getElementById("detailTrackedContextInput");
 const detailTrackedExcludeInput = document.getElementById("detailTrackedExcludeInput");
 const detailTrackedThresholdInput = document.getElementById("detailTrackedThresholdInput");
+const detailTrackedTitleWeightInput = document.getElementById("detailTrackedTitleWeightInput");
+const detailTrackedNoteWeightInput = document.getElementById("detailTrackedNoteWeightInput");
+const detailTrackedSummaryWeightInput = document.getElementById("detailTrackedSummaryWeightInput");
+const detailTrackedContentWeightInput = document.getElementById("detailTrackedContentWeightInput");
+const detailTrackedStrongScoreInput = document.getElementById("detailTrackedStrongScoreInput");
+const detailTrackedCoreScoreInput = document.getElementById("detailTrackedCoreScoreInput");
+const detailTrackedContextScoreInput = document.getElementById("detailTrackedContextScoreInput");
+const detailTrackedExcludePenaltyInput = document.getElementById("detailTrackedExcludePenaltyInput");
 const detailTrackedScopeSelect = document.getElementById("detailTrackedScopeSelect");
 const detailTrackedActiveInput = document.getElementById("detailTrackedActiveInput");
 const detailTrackedFormSaveBtn = document.getElementById("detailTrackedFormSaveBtn");
@@ -1915,8 +1922,6 @@ function trackedKeywordSummary(topic) {
 }
 
 function trackedDescriptionSummary(topic) {
-  const description = String(topic?.description || "").trim();
-  if (description) return description;
   const strong = trackedRuleList(topic?.rules?.strong_phrases);
   const core = trackedRuleList(topic?.rules?.core_terms);
   if (strong.length) return `强短语：${strong.join(" / ")}`;
@@ -2055,7 +2060,7 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
   detailTrackedBody.classList.remove("hidden");
   detailTrackedTitle.textContent = topic.title || "未命名主题";
   detailTrackedMeta.textContent = `${trackedScopeLabel(topic)} · 可见 ${Number(topic.visible_item_count || 0)} · 隐藏 ${Number(topic.hidden_item_count || 0)}`;
-  detailTrackedKeywords.textContent = String(topic.description || "").trim();
+  detailTrackedKeywords.textContent = trackedDescriptionSummary(topic);
   if (trackedBackfillModeSelect) trackedBackfillModeSelect.value = state.trackedBackfillMode;
   trackedTimelineHint.textContent = items.length
     ? `时间线按新闻发布时间新→旧，共 ${items.length} 条`
@@ -2080,13 +2085,24 @@ async function loadTrackedTopicTimeline(topicId) {
 function fillTrackedTopicForm(topic = null) {
   if (!detailTrackedTitleInput) return;
   const rules = topic?.rules || {};
+  const ruleNumber = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
   detailTrackedTitleInput.value = topic?.title || "";
-  detailTrackedDescriptionInput.value = topic?.description || "";
   detailTrackedStrongInput.value = trackedRuleList(rules.strong_phrases).join(", ");
   detailTrackedCoreInput.value = trackedRuleList(rules.core_terms).join(", ");
   detailTrackedContextInput.value = trackedRuleList(rules.context_terms).join(", ");
   detailTrackedExcludeInput.value = trackedRuleList(rules.exclude_terms).join(", ");
-  detailTrackedThresholdInput.value = String(Number(rules.threshold || 0) || 6);
+  detailTrackedThresholdInput.value = String(ruleNumber(rules.threshold, 6));
+  detailTrackedTitleWeightInput.value = String(ruleNumber(rules.title_weight, 1));
+  detailTrackedNoteWeightInput.value = String(ruleNumber(rules.note_weight, 1));
+  detailTrackedSummaryWeightInput.value = String(ruleNumber(rules.summary_weight, 1));
+  detailTrackedContentWeightInput.value = String(ruleNumber(rules.content_weight, 1));
+  detailTrackedStrongScoreInput.value = String(ruleNumber(rules.strong_score, 1));
+  detailTrackedCoreScoreInput.value = String(ruleNumber(rules.core_score, 1));
+  detailTrackedContextScoreInput.value = String(ruleNumber(rules.context_score, 1));
+  detailTrackedExcludePenaltyInput.value = String(ruleNumber(rules.exclude_penalty, 1));
   detailTrackedScopeSelect.value = topic?.scope || "important";
   detailTrackedActiveInput.checked = Number(topic?.active ?? 1) === 1;
 }
@@ -2118,12 +2134,19 @@ function openTrackedTopicForm(mode, topic = null) {
 function trackedFormPayload() {
   return {
     title: detailTrackedTitleInput.value.trim(),
-    description: detailTrackedDescriptionInput.value.trim(),
     strong_phrases: detailTrackedStrongInput.value.trim(),
     core_terms: detailTrackedCoreInput.value.trim(),
     context_terms: detailTrackedContextInput.value.trim(),
     exclude_terms: detailTrackedExcludeInput.value.trim(),
     threshold: detailTrackedThresholdInput.value.trim(),
+    title_weight: detailTrackedTitleWeightInput.value.trim(),
+    note_weight: detailTrackedNoteWeightInput.value.trim(),
+    summary_weight: detailTrackedSummaryWeightInput.value.trim(),
+    content_weight: detailTrackedContentWeightInput.value.trim(),
+    strong_score: detailTrackedStrongScoreInput.value.trim(),
+    core_score: detailTrackedCoreScoreInput.value.trim(),
+    context_score: detailTrackedContextScoreInput.value.trim(),
+    exclude_penalty: detailTrackedExcludePenaltyInput.value.trim(),
     scope: detailTrackedScopeSelect.value,
     active: detailTrackedActiveInput.checked,
   };
@@ -5450,13 +5473,26 @@ if (trackedBackfillBtn) {
   trackedBackfillBtn.addEventListener("click", async () => {
     const topic = selectedTrackedTopic();
     if (!topic) return;
+    const modeLabelMap = {
+      recent_important: "近180天重要新闻",
+      all_important: "全部重要新闻",
+      all_news: "全部新闻",
+    };
+    const modeLabel = modeLabelMap[state.trackedBackfillMode] || state.trackedBackfillMode;
+    const ok = window.confirm(
+      `确认重新回扫“${topic.title}”吗？\n\n` +
+      `范围：${modeLabel}\n` +
+      "本操作会按当前规则重新计算该主题在所选范围内的自动命中，并覆盖旧自动匹配结果。\n" +
+      "手动加入和手动隐藏不会被覆盖。"
+    );
+    if (!ok) return;
     const data = await backfillTrackedTopic(topic.id, state.trackedBackfillMode);
     state.trackedTopics = await fetchTrackedTopics();
     state.trackedTimelineItems = Array.isArray(data.items) ? data.items : [];
     renderTrackedTopicsList();
     renderTrackedTopicDetail(data.topic || selectedTrackedTopic(), state.trackedTimelineItems);
     renderMeta();
-    setHint(data.matched_count > 0 ? `历史回扫完成，新增 ${data.matched_count} 条命中` : "历史回扫完成，没有新增命中");
+    setHint(`历史回扫完成，当前范围命中 ${Number(data.matched_count || 0)} 条`);
   });
 }
 

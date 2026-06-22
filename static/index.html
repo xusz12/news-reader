@@ -227,7 +227,6 @@
           </div>
           <section class="detail-note-editor detail-tracked-form-panel">
             <input id="detailTrackedTitleInput" class="detail-tag-create-input" type="text" maxlength="80" placeholder="主题名称，例如：俄乌战争" />
-            <textarea id="detailTrackedDescriptionInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="主题摘要 / 关注角度 / 补充说明"></textarea>
             <textarea id="detailTrackedStrongInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="强匹配短语，逗号或换行分隔"></textarea>
             <div class="detail-meta">强匹配短语：完整表达该主题的短语，命中后通常可高分收录，例如 `俄乌战争 / Russia-Ukraine war`。</div>
             <textarea id="detailTrackedCoreInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="核心对象词，逗号或换行分隔"></textarea>
@@ -236,8 +235,25 @@
             <div class="detail-meta">相关场景词：动作、事件、子场景、政策动作，用来和核心对象词共同判断主题相关性。</div>
             <textarea id="detailTrackedExcludeInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="排除词，可留空"></textarea>
             <div class="detail-meta">排除词：常见误伤场景，命中后会优先排除，例如旅游、体育、俄罗斯方块。</div>
-            <input id="detailTrackedThresholdInput" class="detail-tag-create-input" type="number" min="1" max="50" step="1" placeholder="最低收录分数，例如 6" />
+            <div class="detail-note-editor-title">最低收录分数</div>
+            <input id="detailTrackedThresholdInput" class="detail-tag-create-input" type="number" min="1" max="50" step="1" placeholder="例如 6" />
             <div class="detail-meta">最低收录分数：标题权重最高，用户想法第二，摘要 / AI 摘要第三，正文最低；强匹配短语或“核心对象词 + 相关场景词”达到该分数才进入时间线。</div>
+            <div class="detail-note-editor-title">字段倍率</div>
+            <div class="detail-reminder-grid">
+              <label class="detail-inline-checkbox"><span>标题倍率</span><input id="detailTrackedTitleWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
+              <label class="detail-inline-checkbox"><span>想法倍率</span><input id="detailTrackedNoteWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
+              <label class="detail-inline-checkbox"><span>摘要 / AI 倍率</span><input id="detailTrackedSummaryWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
+              <label class="detail-inline-checkbox"><span>正文倍率</span><input id="detailTrackedContentWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
+            </div>
+            <div class="detail-meta">字段倍率会在默认口径上放大或压低该字段贡献。默认仍是：标题最高，用户想法第二，摘要 / AI 摘要第三，正文最低。</div>
+            <div class="detail-note-editor-title">规则得分</div>
+            <div class="detail-reminder-grid">
+              <label class="detail-inline-checkbox"><span>强匹配短语得分</span><input id="detailTrackedStrongScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
+              <label class="detail-inline-checkbox"><span>核心对象词得分</span><input id="detailTrackedCoreScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
+              <label class="detail-inline-checkbox"><span>相关场景词得分</span><input id="detailTrackedContextScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
+              <label class="detail-inline-checkbox"><span>排除词惩罚</span><input id="detailTrackedExcludePenaltyInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
+            </div>
+            <div class="detail-meta">规则得分会在默认规则强度上继续放大；`排除强度` 越高，排除词越接近一票否决。</div>
             <select id="detailTrackedScopeSelect" class="pref-select">
               <option value="important">仅重要新闻增量</option>
               <option value="all">全部新闻增量</option>

@@ -102,6 +102,18 @@ TRACKED_RULE_FIELD_SCORES = {
     "summary": {"strong": 5, "core": 2, "context": 1},
     "content": {"strong": 2, "core": 1, "context": 1},
 }
+TRACKED_RULE_FIELD_WEIGHT_DEFAULTS = {
+    "title": 1.0,
+    "note": 1.0,
+    "summary": 1.0,
+    "content": 1.0,
+}
+TRACKED_RULE_TERM_SCORE_DEFAULTS = {
+    "strong": 1.0,
+    "core": 1.0,
+    "context": 1.0,
+    "exclude": 1.0,
+}
 TRACKED_RULE_FIELD_LABELS = {
     "title": "标题",
     "note": "笔记",
@@ -112,6 +124,9 @@ TRACKED_RULE_THRESHOLD_DEFAULT = 6
 TRACKED_RULE_THRESHOLD_MIN = 1
 TRACKED_RULE_THRESHOLD_MAX = 50
 TRACKED_RULE_CANDIDATE_THRESHOLD_DEFAULT = 4
+TRACKED_RULE_WEIGHT_MIN = 0
+TRACKED_RULE_WEIGHT_MAX = 20
+TRACKED_RULE_EXCLUDE_PENALTY_BASE = 100
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -443,6 +458,18 @@ def parse_tracked_threshold(value: object, *, default: int) -> int:
     return parsed
 
 
+def parse_tracked_weight(value: object, *, default: float) -> float:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = float(str(value).strip())
+    except Exception as exc:
+        raise ValueError("invalid_tracked_weight") from exc
+    if parsed < TRACKED_RULE_WEIGHT_MIN or parsed > TRACKED_RULE_WEIGHT_MAX:
+        raise ValueError("invalid_tracked_weight")
+    return parsed
+
+
 def parse_key_points_text(value: object) -> str:
     key_points = value or ""
     if isinstance(key_points, str):
@@ -468,6 +495,14 @@ def tracked_default_rules(
         "exclude_terms": list(exclude_keywords or []),
         "threshold": TRACKED_RULE_THRESHOLD_DEFAULT,
         "candidate_threshold": TRACKED_RULE_CANDIDATE_THRESHOLD_DEFAULT,
+        "title_weight": TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["title"],
+        "note_weight": TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["note"],
+        "summary_weight": TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["summary"],
+        "content_weight": TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["content"],
+        "strong_score": TRACKED_RULE_TERM_SCORE_DEFAULTS["strong"],
+        "core_score": TRACKED_RULE_TERM_SCORE_DEFAULTS["core"],
+        "context_score": TRACKED_RULE_TERM_SCORE_DEFAULTS["context"],
+        "exclude_penalty": TRACKED_RULE_TERM_SCORE_DEFAULTS["exclude"],
     }
 
 
@@ -492,6 +527,38 @@ def normalize_tracked_rules(raw_rules: object, *, fallback_keywords: list[str] |
         "candidate_threshold": parse_tracked_threshold(
             rules.get("candidate_threshold"),
             default=TRACKED_RULE_CANDIDATE_THRESHOLD_DEFAULT,
+        ),
+        "title_weight": parse_tracked_weight(
+            rules.get("title_weight"),
+            default=TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["title"],
+        ),
+        "note_weight": parse_tracked_weight(
+            rules.get("note_weight"),
+            default=TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["note"],
+        ),
+        "summary_weight": parse_tracked_weight(
+            rules.get("summary_weight"),
+            default=TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["summary"],
+        ),
+        "content_weight": parse_tracked_weight(
+            rules.get("content_weight"),
+            default=TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["content"],
+        ),
+        "strong_score": parse_tracked_weight(
+            rules.get("strong_score"),
+            default=TRACKED_RULE_TERM_SCORE_DEFAULTS["strong"],
+        ),
+        "core_score": parse_tracked_weight(
+            rules.get("core_score"),
+            default=TRACKED_RULE_TERM_SCORE_DEFAULTS["core"],
+        ),
+        "context_score": parse_tracked_weight(
+            rules.get("context_score"),
+            default=TRACKED_RULE_TERM_SCORE_DEFAULTS["context"],
+        ),
+        "exclude_penalty": parse_tracked_weight(
+            rules.get("exclude_penalty"),
+            default=TRACKED_RULE_TERM_SCORE_DEFAULTS["exclude"],
         ),
     }
 
@@ -527,7 +594,11 @@ def tracked_text_fields(row: sqlite3.Row | dict) -> dict[str, str]:
     }
 
 
-def compact_tracked_reason(evidence: dict[str, dict[str, list[str]]] | None, score: int) -> str:
+def format_tracked_score(score: float) -> str:
+    return f"{score:.2f}".rstrip("0").rstrip(".")
+
+
+def compact_tracked_reason(evidence: dict[str, dict[str, list[str]]] | None, score: float) -> str:
     if not evidence:
         return ""
     segments: list[str] = []
@@ -553,18 +624,30 @@ def compact_tracked_reason(evidence: dict[str, dict[str, list[str]]] | None, sco
         segments.append(f"{TRACKED_RULE_FIELD_LABELS[field_key]}命中：{'/'.join(deduped_terms[:4])}")
     reason = "；".join(segments[:3])
     if reason:
-        reason = f"{reason}；score={score}"
+        reason = f"{reason}；score={format_tracked_score(score)}"
     return reason[:200]
 
 
-def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool, int, str]:
+def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool, float, str]:
     strong_phrases = rules.get("strong_phrases") or []
     core_terms = rules.get("core_terms") or []
     context_terms = rules.get("context_terms") or []
     exclude_terms = rules.get("exclude_terms") or []
     threshold = int(rules.get("threshold") or TRACKED_RULE_THRESHOLD_DEFAULT)
     if not strong_phrases and not core_terms:
-        return False, 0, ""
+        return False, 0.0, ""
+    field_weights = {
+        "title": float(rules.get("title_weight", TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["title"])),
+        "note": float(rules.get("note_weight", TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["note"])),
+        "summary": float(rules.get("summary_weight", TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["summary"])),
+        "content": float(rules.get("content_weight", TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["content"])),
+    }
+    term_scores = {
+        "strong": float(rules.get("strong_score", TRACKED_RULE_TERM_SCORE_DEFAULTS["strong"])),
+        "core": float(rules.get("core_score", TRACKED_RULE_TERM_SCORE_DEFAULTS["core"])),
+        "context": float(rules.get("context_score", TRACKED_RULE_TERM_SCORE_DEFAULTS["context"])),
+    }
+    exclude_penalty = float(rules.get("exclude_penalty", 0))
 
     text_fields = tracked_text_fields(row)
     normalized_fields = {
@@ -573,14 +656,16 @@ def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool,
         if str(value or "").strip()
     }
     if not normalized_fields:
-        return False, 0, ""
+        return False, 0.0, ""
 
-    for term in exclude_terms:
-        lowered = term.lower()
-        if lowered and any(lowered in field_text for field_text in normalized_fields.values()):
-            return False, 0, ""
+    exclude_hits = 0
+    for field_text in normalized_fields.values():
+        for term in exclude_terms:
+            lowered = term.lower()
+            if lowered and lowered in field_text:
+                exclude_hits += 1
 
-    score = 0
+    score = 0.0
     evidence: dict[str, dict[str, list[str]]] = {}
     strong_hit = False
     non_body_signal = False
@@ -589,6 +674,7 @@ def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool,
 
     for field_key, field_text in normalized_fields.items():
         field_scores = TRACKED_RULE_FIELD_SCORES[field_key]
+        field_weight = field_weights[field_key]
         strong_hits = [term for term in strong_phrases if term.lower() in field_text]
         core_hits = [term for term in core_terms if term.lower() in field_text]
         context_hits = [term for term in context_terms if term.lower() in field_text]
@@ -596,29 +682,32 @@ def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool,
             continue
         field_evidence: dict[str, list[str]] = {}
         if strong_hits:
-            score += field_scores["strong"] * len(strong_hits)
+            score += field_scores["strong"] * term_scores["strong"] * field_weight * len(strong_hits)
             field_evidence["strong"] = strong_hits
             strong_hit = True
         if core_hits:
-            score += field_scores["core"] * len(core_hits)
+            score += field_scores["core"] * term_scores["core"] * field_weight * len(core_hits)
             field_evidence["core"] = core_hits
             core_hit = True
         if context_hits:
-            score += field_scores["context"] * len(context_hits)
+            score += field_scores["context"] * term_scores["context"] * field_weight * len(context_hits)
             field_evidence["context"] = context_hits
             context_hit = True
         evidence[field_key] = field_evidence
         if field_key != "content":
             non_body_signal = True
 
+    score -= exclude_hits * exclude_penalty * TRACKED_RULE_EXCLUDE_PENALTY_BASE
     if not evidence:
-        return False, 0, ""
+        return False, 0.0, ""
     if not non_body_signal:
         return False, 0, ""
+    if score < threshold:
+        return False, score, ""
 
     if strong_hit:
-        return score >= threshold, score, compact_tracked_reason(evidence, score) if score >= threshold else ""
-    if core_hit and context_hit and score >= threshold:
+        return True, score, compact_tracked_reason(evidence, score)
+    if core_hit and context_hit:
         return True, score, compact_tracked_reason(evidence, score)
     return False, score, ""
 
@@ -662,6 +751,14 @@ def parse_tracked_topic_body(body: dict, *, partial: bool = False) -> dict:
             "exclude_terms",
             "threshold",
             "candidate_threshold",
+            "title_weight",
+            "note_weight",
+            "summary_weight",
+            "content_weight",
+            "strong_score",
+            "core_score",
+            "context_score",
+            "exclude_penalty",
             "keywords",
             "exclude_keywords",
         )
@@ -674,6 +771,14 @@ def parse_tracked_topic_body(body: dict, *, partial: bool = False) -> dict:
             "exclude_terms": body.get("exclude_terms", body.get("exclude_keywords")),
             "threshold": body.get("threshold"),
             "candidate_threshold": body.get("candidate_threshold"),
+            "title_weight": body.get("title_weight"),
+            "note_weight": body.get("note_weight"),
+            "summary_weight": body.get("summary_weight"),
+            "content_weight": body.get("content_weight"),
+            "strong_score": body.get("strong_score"),
+            "core_score": body.get("core_score"),
+            "context_score": body.get("context_score"),
+            "exclude_penalty": body.get("exclude_penalty"),
         }
         rules = normalize_tracked_rules(incoming_rules)
         if not rules["strong_phrases"] and not rules["core_terms"]:
@@ -1720,7 +1825,7 @@ def upsert_tracked_topic_match(
     topic_id: int,
     item_row: sqlite3.Row | dict,
     match_method: str,
-    score: int,
+    score: float,
     reason: str,
     manual_added_at: str | None = None,
     clear_hidden: bool = False,
@@ -1758,7 +1863,7 @@ def upsert_tracked_topic_match(
             str(item["id"]),
             item.get("url") or "",
             match_method,
-            int(score),
+            score,
             reason[:200],
             hidden_value,
             manual_added_at,
@@ -1775,14 +1880,18 @@ def run_tracked_topic_match(
     topic: dict,
     candidate_rows: list[sqlite3.Row],
     preserve_last_incremental: bool = False,
+    replace_existing_auto_matches: bool = False,
 ) -> int:
     topic_id = int(topic["id"])
     rules = topic.get("rules") if isinstance(topic.get("rules"), dict) else tracked_rules_from_topic(topic)
     matched = 0
+    matched_ids: set[str] = set()
+    candidate_ids = {str(dict(row)["id"]) for row in candidate_rows}
     for row in candidate_rows:
         ok, score, reason = match_tracked_topic_row(row, rules)
         if not ok:
             continue
+        matched_ids.add(str(dict(row)["id"]))
         if upsert_tracked_topic_match(
             conn,
             topic_id=topic_id,
@@ -1792,12 +1901,28 @@ def run_tracked_topic_match(
             reason=reason,
         ):
             matched += 1
+    if replace_existing_auto_matches and candidate_ids:
+        placeholders = ",".join("?" for _ in candidate_ids)
+        args: list[object] = [topic_id, *candidate_ids]
+        sql = f"""
+            DELETE FROM tracked_topic_items
+            WHERE topic_id = ?
+              AND match_method = 'keyword'
+              AND manual_added_at IS NULL
+              AND hidden_at IS NULL
+              AND item_id IN ({placeholders})
+        """
+        if matched_ids:
+            matched_placeholders = ",".join("?" for _ in matched_ids)
+            sql += f" AND item_id NOT IN ({matched_placeholders})"
+            args.extend(matched_ids)
+        conn.execute(sql, args)
     if not preserve_last_incremental:
         conn.execute(
             "UPDATE tracked_topics SET last_incremental_at=?, updated_at=? WHERE id=?",
             (now_ts(), now_ts(), topic_id),
         )
-    return matched
+    return len(matched_ids) if replace_existing_auto_matches else matched
 
 
 def run_tracked_topics_incremental(conn: sqlite3.Connection) -> int:
@@ -1880,7 +2005,7 @@ def tracked_topic_timeline_items(conn: sqlite3.Connection, topic_id: int) -> lis
     items = serialize_news_rows([dict(row) for row in rows], market_tags_map)
     for item in items:
         item["tracked_match_method"] = item.get("match_method") or "keyword"
-        item["tracked_score"] = int(item.get("score") or 0)
+        item["tracked_score"] = float(item.get("score") or 0)
         item["tracked_reason"] = item.get("reason") or ""
         item["tracked_manual_added_at"] = item.get("manual_added_at") or ""
         item["tracked_updated_at"] = item.get("tracked_updated_at") or ""
@@ -2941,7 +3066,12 @@ def api_tracked_topic_backfill(topic_id: int):
             date_after=date_after,
         )
         with conn:
-            matched = run_tracked_topic_match(conn, topic=topic, candidate_rows=candidate_rows)
+            matched = run_tracked_topic_match(
+                conn,
+                topic=topic,
+                candidate_rows=candidate_rows,
+                replace_existing_auto_matches=True,
+            )
             topic = load_tracked_topic(conn, topic_id)
             items = tracked_topic_timeline_items(conn, topic_id)
     finally:
