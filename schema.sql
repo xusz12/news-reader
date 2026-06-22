@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS tracked_topics (
   description TEXT NOT NULL DEFAULT '',
   keywords_json TEXT NOT NULL DEFAULT '[]',
   exclude_keywords_json TEXT NOT NULL DEFAULT '[]',
+  rules_json TEXT NOT NULL DEFAULT '',
   scope TEXT NOT NULL DEFAULT 'important',
   active INTEGER NOT NULL DEFAULT 1,
   last_incremental_at TEXT,

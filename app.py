@@ -96,6 +96,22 @@ IDEA_TYPE_FILTERS = {"all", "article", "trend"}
 TRACKED_TOPIC_SCOPES = {"important", "all"}
 TRACKED_BACKFILL_MODES = {"recent_important", "all_important"}
 TRACKED_MATCH_METHODS = {"keyword", "manual"}
+TRACKED_RULE_FIELD_SCORES = {
+    "title": {"strong": 8, "core": 4, "context": 2},
+    "note": {"strong": 6, "core": 3, "context": 2},
+    "summary": {"strong": 5, "core": 2, "context": 1},
+    "content": {"strong": 2, "core": 1, "context": 1},
+}
+TRACKED_RULE_FIELD_LABELS = {
+    "title": "标题",
+    "note": "笔记",
+    "summary": "摘要",
+    "content": "正文",
+}
+TRACKED_RULE_THRESHOLD_DEFAULT = 6
+TRACKED_RULE_THRESHOLD_MIN = 1
+TRACKED_RULE_THRESHOLD_MAX = 50
+TRACKED_RULE_CANDIDATE_THRESHOLD_DEFAULT = 4
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -415,51 +431,196 @@ def tracked_backfill_mode_value(value: object) -> str:
     return mode
 
 
-def compact_tracked_reason(keywords: list[str]) -> str:
-    if not keywords:
-        return ""
-    if len(keywords) == 1:
-        return f"命中：{keywords[0]}"
-    return f"命中：{', '.join(keywords[:3])}"
+def parse_tracked_threshold(value: object, *, default: int) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(str(value).strip())
+    except Exception as exc:
+        raise ValueError("invalid_tracked_threshold") from exc
+    if parsed < TRACKED_RULE_THRESHOLD_MIN or parsed > TRACKED_RULE_THRESHOLD_MAX:
+        raise ValueError("invalid_tracked_threshold")
+    return parsed
 
 
-def tracked_text_blob(row: sqlite3.Row | dict) -> str:
-    payload = dict(row)
-    key_points = payload.get("key_points_zh") or ""
+def parse_key_points_text(value: object) -> str:
+    key_points = value or ""
     if isinstance(key_points, str):
         try:
             parsed = json.loads(key_points)
             if isinstance(parsed, list):
-                key_points = " ".join(str(part) for part in parsed if part)
+                return " ".join(str(part) for part in parsed if part)
         except Exception:
-            key_points = key_points
-    fields = [
-        payload.get("title") or "",
+            return key_points
+    if isinstance(key_points, list):
+        return " ".join(str(part) for part in key_points if part)
+    return str(key_points or "")
+
+
+def tracked_default_rules(
+    include_keywords: list[str] | None = None,
+    exclude_keywords: list[str] | None = None,
+) -> dict:
+    return {
+        "strong_phrases": [],
+        "core_terms": list(include_keywords or []),
+        "context_terms": [],
+        "exclude_terms": list(exclude_keywords or []),
+        "threshold": TRACKED_RULE_THRESHOLD_DEFAULT,
+        "candidate_threshold": TRACKED_RULE_CANDIDATE_THRESHOLD_DEFAULT,
+    }
+
+
+def normalize_tracked_rules(raw_rules: object, *, fallback_keywords: list[str] | None = None, fallback_excludes: list[str] | None = None) -> dict:
+    rules = raw_rules if isinstance(raw_rules, dict) else {}
+    strong_phrases = normalize_keyword_list(rules.get("strong_phrases"))
+    core_terms = normalize_keyword_list(rules.get("core_terms"))
+    context_terms = normalize_keyword_list(rules.get("context_terms"))
+    exclude_terms = normalize_keyword_list(rules.get("exclude_terms"))
+
+    if not strong_phrases and not core_terms and fallback_keywords:
+        core_terms = list(fallback_keywords)
+    if not exclude_terms and fallback_excludes:
+        exclude_terms = list(fallback_excludes)
+
+    return {
+        "strong_phrases": strong_phrases,
+        "core_terms": core_terms,
+        "context_terms": context_terms,
+        "exclude_terms": exclude_terms,
+        "threshold": parse_tracked_threshold(rules.get("threshold"), default=TRACKED_RULE_THRESHOLD_DEFAULT),
+        "candidate_threshold": parse_tracked_threshold(
+            rules.get("candidate_threshold"),
+            default=TRACKED_RULE_CANDIDATE_THRESHOLD_DEFAULT,
+        ),
+    }
+
+
+def tracked_rules_from_topic(topic: sqlite3.Row | dict) -> dict:
+    payload = dict(topic)
+    keywords = normalize_keyword_list(payload.get("keywords_json") or "[]")
+    excludes = normalize_keyword_list(payload.get("exclude_keywords_json") or "[]")
+    raw_rules = payload.get("rules_json") or ""
+    parsed_rules: object = {}
+    if isinstance(raw_rules, str) and raw_rules.strip():
+        try:
+            parsed_rules = json.loads(raw_rules)
+        except Exception:
+            parsed_rules = {}
+    elif isinstance(raw_rules, dict):
+        parsed_rules = raw_rules
+    return normalize_tracked_rules(parsed_rules, fallback_keywords=keywords, fallback_excludes=excludes)
+
+
+def tracked_text_fields(row: sqlite3.Row | dict) -> dict[str, str]:
+    payload = dict(row)
+    summary_parts = [
         payload.get("summary") or "",
-        key_points or "",
+        parse_key_points_text(payload.get("key_points_zh")),
         payload.get("conclusion_zh") or "",
-        payload.get("body_zh") or "",
-        payload.get("note") or "",
     ]
-    return "\n".join(str(field) for field in fields if field).lower()
+    return {
+        "title": str(payload.get("title") or ""),
+        "note": str(payload.get("note") or ""),
+        "summary": "\n".join(part for part in summary_parts if part),
+        "content": str(payload.get("body_zh") or ""),
+    }
 
 
-def match_tracked_topic_row(row: sqlite3.Row | dict, include_keywords: list[str], exclude_keywords: list[str]) -> tuple[bool, int, str]:
-    if not include_keywords:
-        return False, 0, ""
-    haystack = tracked_text_blob(row)
-    if not haystack:
+def compact_tracked_reason(evidence: dict[str, dict[str, list[str]]] | None, score: int) -> str:
+    if not evidence:
+        return ""
+    segments: list[str] = []
+    for field_key in ("title", "note", "summary", "content"):
+        field_hits = evidence.get(field_key) or {}
+        terms: list[str] = []
+        if field_hits.get("strong"):
+            terms.extend(field_hits["strong"])
+        if field_hits.get("core"):
+            terms.extend(field_hits["core"])
+        if field_hits.get("context"):
+            terms.extend(field_hits["context"])
+        if not terms:
+            continue
+        deduped_terms: list[str] = []
+        seen: set[str] = set()
+        for term in terms:
+            lowered = term.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            deduped_terms.append(term)
+        segments.append(f"{TRACKED_RULE_FIELD_LABELS[field_key]}命中：{'/'.join(deduped_terms[:4])}")
+    reason = "；".join(segments[:3])
+    if reason:
+        reason = f"{reason}；score={score}"
+    return reason[:200]
+
+
+def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool, int, str]:
+    strong_phrases = rules.get("strong_phrases") or []
+    core_terms = rules.get("core_terms") or []
+    context_terms = rules.get("context_terms") or []
+    exclude_terms = rules.get("exclude_terms") or []
+    threshold = int(rules.get("threshold") or TRACKED_RULE_THRESHOLD_DEFAULT)
+    if not strong_phrases and not core_terms:
         return False, 0, ""
 
-    matched_excludes = [keyword for keyword in exclude_keywords if keyword.lower() in haystack]
-    if matched_excludes:
+    text_fields = tracked_text_fields(row)
+    normalized_fields = {
+        key: value.lower().strip()
+        for key, value in text_fields.items()
+        if str(value or "").strip()
+    }
+    if not normalized_fields:
         return False, 0, ""
 
-    matched_includes = [keyword for keyword in include_keywords if keyword.lower() in haystack]
-    if not matched_includes:
+    for term in exclude_terms:
+        lowered = term.lower()
+        if lowered and any(lowered in field_text for field_text in normalized_fields.values()):
+            return False, 0, ""
+
+    score = 0
+    evidence: dict[str, dict[str, list[str]]] = {}
+    strong_hit = False
+    non_body_signal = False
+    core_hit = False
+    context_hit = False
+
+    for field_key, field_text in normalized_fields.items():
+        field_scores = TRACKED_RULE_FIELD_SCORES[field_key]
+        strong_hits = [term for term in strong_phrases if term.lower() in field_text]
+        core_hits = [term for term in core_terms if term.lower() in field_text]
+        context_hits = [term for term in context_terms if term.lower() in field_text]
+        if not strong_hits and not core_hits and not context_hits:
+            continue
+        field_evidence: dict[str, list[str]] = {}
+        if strong_hits:
+            score += field_scores["strong"] * len(strong_hits)
+            field_evidence["strong"] = strong_hits
+            strong_hit = True
+        if core_hits:
+            score += field_scores["core"] * len(core_hits)
+            field_evidence["core"] = core_hits
+            core_hit = True
+        if context_hits:
+            score += field_scores["context"] * len(context_hits)
+            field_evidence["context"] = context_hits
+            context_hit = True
+        evidence[field_key] = field_evidence
+        if field_key != "content":
+            non_body_signal = True
+
+    if not evidence:
         return False, 0, ""
-    score = len(matched_includes)
-    return True, score, compact_tracked_reason(matched_includes)
+    if not non_body_signal:
+        return False, 0, ""
+
+    if strong_hit:
+        return score >= threshold, score, compact_tracked_reason(evidence, score) if score >= threshold else ""
+    if core_hit and context_hit and score >= threshold:
+        return True, score, compact_tracked_reason(evidence, score)
+    return False, score, ""
 
 
 def serialize_tracked_topic_row(row: sqlite3.Row | dict) -> dict:
@@ -469,6 +630,8 @@ def serialize_tracked_topic_row(row: sqlite3.Row | dict) -> dict:
     topic["active"] = 1 if topic.get("active") else 0
     topic["keywords"] = normalize_keyword_list(topic.get("keywords_json") or "[]")
     topic["exclude_keywords"] = normalize_keyword_list(topic.get("exclude_keywords_json") or "[]")
+    topic["rules"] = tracked_rules_from_topic(topic)
+    topic["rules_json"] = json.dumps(topic["rules"], ensure_ascii=False)
     topic["visible_item_count"] = int(topic.get("visible_item_count") or 0)
     topic["hidden_item_count"] = int(topic.get("hidden_item_count") or 0)
     topic["latest_published_at"] = topic.get("latest_published_at") or ""
@@ -490,13 +653,34 @@ def parse_tracked_topic_body(body: dict, *, partial: bool = False) -> dict:
         if len(description) > 1000:
             raise ValueError("description_too_long")
         payload["description"] = description
-    if not partial or "keywords" in body:
-        keywords = normalize_keyword_list(body.get("keywords"))
-        if not keywords:
-            raise ValueError("empty_keywords")
-        payload["keywords"] = keywords
-    if not partial or "exclude_keywords" in body:
-        payload["exclude_keywords"] = normalize_keyword_list(body.get("exclude_keywords"))
+    rules_touched = any(
+        key in body
+        for key in (
+            "strong_phrases",
+            "core_terms",
+            "context_terms",
+            "exclude_terms",
+            "threshold",
+            "candidate_threshold",
+            "keywords",
+            "exclude_keywords",
+        )
+    )
+    if not partial or rules_touched:
+        incoming_rules = {
+            "strong_phrases": body.get("strong_phrases"),
+            "core_terms": body.get("core_terms", body.get("keywords")),
+            "context_terms": body.get("context_terms"),
+            "exclude_terms": body.get("exclude_terms", body.get("exclude_keywords")),
+            "threshold": body.get("threshold"),
+            "candidate_threshold": body.get("candidate_threshold"),
+        }
+        rules = normalize_tracked_rules(incoming_rules)
+        if not rules["strong_phrases"] and not rules["core_terms"]:
+            raise ValueError("empty_rules")
+        payload["rules"] = rules
+        payload["keywords"] = list(rules["core_terms"])
+        payload["exclude_keywords"] = list(rules["exclude_terms"])
     if not partial or "scope" in body:
         payload["scope"] = tracked_scope_value(body.get("scope"))
     if not partial or "active" in body:
@@ -1593,11 +1777,10 @@ def run_tracked_topic_match(
     preserve_last_incremental: bool = False,
 ) -> int:
     topic_id = int(topic["id"])
-    include_keywords = topic.get("keywords") or normalize_keyword_list(topic.get("keywords_json") or "[]")
-    exclude_keywords = topic.get("exclude_keywords") or normalize_keyword_list(topic.get("exclude_keywords_json") or "[]")
+    rules = topic.get("rules") if isinstance(topic.get("rules"), dict) else tracked_rules_from_topic(topic)
     matched = 0
     for row in candidate_rows:
-        ok, score, reason = match_tracked_topic_row(row, include_keywords, exclude_keywords)
+        ok, score, reason = match_tracked_topic_row(row, rules)
         if not ok:
             continue
         if upsert_tracked_topic_match(
@@ -2629,16 +2812,17 @@ def api_tracked_topics_create():
             cur = conn.execute(
                 """
                 INSERT INTO tracked_topics(
-                  title, description, keywords_json, exclude_keywords_json,
+                  title, description, keywords_json, exclude_keywords_json, rules_json,
                   scope, active, last_incremental_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["title"],
                     payload.get("description") or "",
                     json.dumps(payload["keywords"], ensure_ascii=False),
                     json.dumps(payload["exclude_keywords"], ensure_ascii=False),
+                    json.dumps(payload["rules"], ensure_ascii=False),
                     payload["scope"],
                     1 if payload["active"] else 0,
                     ts,
@@ -2669,6 +2853,7 @@ def api_tracked_topics_update(topic_id: int):
             return jsonify({"ok": False, "error": "topic_not_found"}), 404
         title = payload.get("title", existing["title"])
         description = payload.get("description", existing["description"])
+        rules = payload.get("rules", existing["rules"])
         keywords = payload.get("keywords", existing["keywords"])
         exclude_keywords = payload.get("exclude_keywords", existing["exclude_keywords"])
         scope = payload.get("scope", existing["scope"])
@@ -2682,6 +2867,7 @@ def api_tracked_topics_update(topic_id: int):
                     description=?,
                     keywords_json=?,
                     exclude_keywords_json=?,
+                    rules_json=?,
                     scope=?,
                     active=?,
                     updated_at=?
@@ -2692,6 +2878,7 @@ def api_tracked_topics_update(topic_id: int):
                     description,
                     json.dumps(keywords, ensure_ascii=False),
                     json.dumps(exclude_keywords, ensure_ascii=False),
+                    json.dumps(rules, ensure_ascii=False),
                     scope,
                     1 if active else 0,
                     ts,

@@ -53,6 +53,12 @@ def apply_schema(conn: sqlite3.Connection, schema_path: Path) -> None:
             WHERE bookmarked = 1 AND favorite_at IS NULL
             """
         )
+    tracked_topic_cols = {
+        r[1]
+        for r in conn.execute("PRAGMA table_info(tracked_topics)").fetchall()
+    }
+    if "rules_json" not in tracked_topic_cols:
+        conn.execute("ALTER TABLE tracked_topics ADD COLUMN rules_json TEXT NOT NULL DEFAULT ''")
     conn.commit()
 
 

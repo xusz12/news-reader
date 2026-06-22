@@ -227,8 +227,11 @@
           <section class="detail-note-editor detail-tracked-form-panel">
             <input id="detailTrackedTitleInput" class="detail-tag-create-input" type="text" maxlength="80" placeholder="主题名称，例如：俄乌战争" />
             <textarea id="detailTrackedDescriptionInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="主题摘要 / 关注角度 / 补充说明"></textarea>
-            <textarea id="detailTrackedKeywordsInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="包含关键词，逗号或换行分隔"></textarea>
-            <textarea id="detailTrackedExcludeInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="排除关键词，可留空"></textarea>
+            <textarea id="detailTrackedStrongInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="强匹配短语，逗号或换行分隔"></textarea>
+            <textarea id="detailTrackedCoreInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="核心对象词，逗号或换行分隔"></textarea>
+            <textarea id="detailTrackedContextInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="相关场景词，逗号或换行分隔"></textarea>
+            <textarea id="detailTrackedExcludeInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="排除词，可留空"></textarea>
+            <input id="detailTrackedThresholdInput" class="detail-tag-create-input" type="number" min="1" max="50" step="1" placeholder="最低收录分数，例如 6" />
             <select id="detailTrackedScopeSelect" class="pref-select">
               <option value="important">仅重要新闻增量</option>
               <option value="all">全部新闻增量</option>

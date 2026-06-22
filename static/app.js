@@ -195,8 +195,11 @@ const detailTrackedFormTitle = document.getElementById("detailTrackedFormTitle")
 const detailTrackedFormMeta = document.getElementById("detailTrackedFormMeta");
 const detailTrackedTitleInput = document.getElementById("detailTrackedTitleInput");
 const detailTrackedDescriptionInput = document.getElementById("detailTrackedDescriptionInput");
-const detailTrackedKeywordsInput = document.getElementById("detailTrackedKeywordsInput");
+const detailTrackedStrongInput = document.getElementById("detailTrackedStrongInput");
+const detailTrackedCoreInput = document.getElementById("detailTrackedCoreInput");
+const detailTrackedContextInput = document.getElementById("detailTrackedContextInput");
 const detailTrackedExcludeInput = document.getElementById("detailTrackedExcludeInput");
+const detailTrackedThresholdInput = document.getElementById("detailTrackedThresholdInput");
 const detailTrackedScopeSelect = document.getElementById("detailTrackedScopeSelect");
 const detailTrackedActiveInput = document.getElementById("detailTrackedActiveInput");
 const detailTrackedFormSaveBtn = document.getElementById("detailTrackedFormSaveBtn");
@@ -1888,18 +1891,36 @@ function trackedScopeLabel(topic) {
   return topic?.scope === "all" ? "全部新闻增量" : "重要新闻增量";
 }
 
+function trackedRuleList(value) {
+  return Array.isArray(value) ? value.filter(Boolean) : [];
+}
+
+function trackedRuleSummary(topic) {
+  const rules = topic?.rules || {};
+  const strong = trackedRuleList(rules.strong_phrases);
+  const core = trackedRuleList(rules.core_terms);
+  const context = trackedRuleList(rules.context_terms);
+  const exclude = trackedRuleList(rules.exclude_terms);
+  const bits = [];
+  if (strong.length) bits.push(`强短语：${strong.join(" / ")}`);
+  if (core.length) bits.push(`核心词：${core.join(" / ")}`);
+  if (context.length) bits.push(`场景词：${context.join(" / ")}`);
+  if (exclude.length) bits.push(`排除：${exclude.join(" / ")}`);
+  bits.push(`阈值：${Number(rules.threshold || 0) || 6}`);
+  return bits.join(" · ");
+}
+
 function trackedKeywordSummary(topic) {
-  const include = Array.isArray(topic?.keywords) ? topic.keywords.filter(Boolean) : [];
-  const exclude = Array.isArray(topic?.exclude_keywords) ? topic.exclude_keywords.filter(Boolean) : [];
-  const includeText = include.length ? `包含：${include.join(" / ")}` : "包含：未设置";
-  return exclude.length ? `${includeText} · 排除：${exclude.join(" / ")}` : includeText;
+  return trackedRuleSummary(topic);
 }
 
 function trackedDescriptionSummary(topic) {
   const description = String(topic?.description || "").trim();
   if (description) return description;
-  const include = Array.isArray(topic?.keywords) ? topic.keywords.filter(Boolean) : [];
-  return include.length ? `关键词：${include.join(" / ")}` : "还没有摘要或关键词说明";
+  const strong = trackedRuleList(topic?.rules?.strong_phrases);
+  const core = trackedRuleList(topic?.rules?.core_terms);
+  if (strong.length) return `强短语：${strong.join(" / ")}`;
+  return core.length ? `核心词：${core.join(" / ")}` : "还没有规则说明";
 }
 
 function renderTrackedTopicsList() {
@@ -1962,7 +1983,7 @@ function buildTrackedTimelineRow(item) {
 
   const metaLine = document.createElement("div");
   metaLine.className = "tracked-timeline-meta";
-  const reason = item.tracked_reason || (item.tracked_match_method === "manual" ? "手动加入" : "关键词命中");
+  const reason = item.tracked_reason || (item.tracked_match_method === "manual" ? "手动加入" : "规则命中");
   metaLine.textContent = `${item.published_at || item.date_key || ""} · ${item.source || ""} · ${reason}`;
   main.appendChild(metaLine);
 
@@ -2058,10 +2079,14 @@ async function loadTrackedTopicTimeline(topicId) {
 
 function fillTrackedTopicForm(topic = null) {
   if (!detailTrackedTitleInput) return;
+  const rules = topic?.rules || {};
   detailTrackedTitleInput.value = topic?.title || "";
   detailTrackedDescriptionInput.value = topic?.description || "";
-  detailTrackedKeywordsInput.value = Array.isArray(topic?.keywords) ? topic.keywords.join(", ") : "";
-  detailTrackedExcludeInput.value = Array.isArray(topic?.exclude_keywords) ? topic.exclude_keywords.join(", ") : "";
+  detailTrackedStrongInput.value = trackedRuleList(rules.strong_phrases).join(", ");
+  detailTrackedCoreInput.value = trackedRuleList(rules.core_terms).join(", ");
+  detailTrackedContextInput.value = trackedRuleList(rules.context_terms).join(", ");
+  detailTrackedExcludeInput.value = trackedRuleList(rules.exclude_terms).join(", ");
+  detailTrackedThresholdInput.value = String(Number(rules.threshold || 0) || 6);
   detailTrackedScopeSelect.value = topic?.scope || "important";
   detailTrackedActiveInput.checked = Number(topic?.active ?? 1) === 1;
 }
@@ -2082,7 +2107,7 @@ function openTrackedTopicForm(mode, topic = null) {
   detailTrackedFormBody.classList.remove("hidden");
   detailTrackedFormTitle.textContent = mode === "edit" ? "编辑跟踪主题" : "新建跟踪主题";
   detailTrackedFormMeta.textContent = mode === "edit"
-    ? "修改主题摘要、关键词、增量范围和启用状态。"
+    ? "修改规则、增量范围和启用状态。"
     : "创建后即可在右栏查看时间线，并可从新闻详情手动加入。";
   detailTrackedFormBackBtn.classList.toggle("hidden", mode !== "edit" || !topic);
   fillTrackedTopicForm(topic);
@@ -2094,8 +2119,11 @@ function trackedFormPayload() {
   return {
     title: detailTrackedTitleInput.value.trim(),
     description: detailTrackedDescriptionInput.value.trim(),
-    keywords: detailTrackedKeywordsInput.value.trim(),
-    exclude_keywords: detailTrackedExcludeInput.value.trim(),
+    strong_phrases: detailTrackedStrongInput.value.trim(),
+    core_terms: detailTrackedCoreInput.value.trim(),
+    context_terms: detailTrackedContextInput.value.trim(),
+    exclude_terms: detailTrackedExcludeInput.value.trim(),
+    threshold: detailTrackedThresholdInput.value.trim(),
     scope: detailTrackedScopeSelect.value,
     active: detailTrackedActiveInput.checked,
   };

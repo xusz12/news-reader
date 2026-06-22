@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-06-22 — v1.9.8.1 fix: 跟踪匹配规则降噪
+- **文件**
+  - *schema.sql（+）*、*scanner.py（+）*、*app.py（+）*、*tests/test_api.py（+）*
+    - `tracked_topics` 新增 `rules_json`，旧库启动时自动补 migration；旧主题若只有 `keywords_json / exclude_keywords_json`，会在读取时自动映射成结构化规则
+    - tracked 匹配从“任一关键词命中即收录”升级为“强短语 / 核心词 / 场景词 / 排除词 + 分数字段权重”，并保留手动加入、隐藏后不复活等 override 语义
+    - 新增可解释命中证据：按标题 / 笔记 / 摘要 / 正文字段记录命中词并写入 `tracked_reason`，格式如 `标题命中：乌克兰/袭击；score=8`
+    - 补覆盖：旧库 `rules_json` 建库幂等、单个宽泛词不误收、标题/笔记/摘要/正文权重、content-only 不入主时间线、排除词 veto、手动加入/隐藏不回归
+  - *static/index.html（+）*、*static/app.js（+）*
+    - 跟踪主题右栏表单从旧“包含/排除关键词”改为 `强匹配短语 / 核心对象词 / 相关场景词 / 排除词 / 最低收录分数`
+    - 主题详情摘要同步展示结构化规则与阈值，时间线默认显示新的规则证据文案
+- **影响**：跟踪主题对“俄罗斯 / AI”这类宽词的误命中会明显下降，正文长文单独出现关键词也不会直接进主时间线；但旧主题与回扫入口仍保持兼容。
+
 ### 2026-06-22 — v1.9.8.0 improve: 跟踪页 MVP
 - **文件**
   - *schema.sql（+）*、*app.py（+）*、*tests/test_api.py（+）*

@@ -481,6 +481,11 @@ def test_apply_schema_creates_tracked_topic_tables_and_indexes(tmp_path: Path, m
         }
         assert "tracked_topics" in tables
         assert "tracked_topic_items" in tables
+        tracked_topic_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(tracked_topics)").fetchall()
+        }
+        assert "rules_json" in tracked_topic_cols
 
         indexes = {
             row["name"]
@@ -503,20 +508,40 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
 
     (old_daily / "dailyFreshNews_2025-12-01.md").write_text(
         """## Reuters · World（1条）
-### [俄乌旧战况](https://example.com/ru-old)
+### [乌克兰俄罗斯谈判旧战况](https://example.com/ru-old)
 - 发布时间：2025-12-01 09:00:00
-- 摘要：俄乌冲突进入新阶段
+- 摘要：旧战况整理
 """,
         encoding="utf-8",
     )
     (daily_dir / "dailyFreshNews_2026-06-20.md").write_text(
-        """## Reuters · World（2条）
-### [俄乌最新进展](https://example.com/ru-now)
+        """## Reuters · World（7条）
+### [乌克兰无人机袭击俄军机场](https://example.com/ru-now)
 - 发布时间：2026-06-20 08:00:00
-- 摘要：俄乌谈判继续推进
+- 摘要：俄罗斯多个机场遭袭
+
+### [俄罗斯股市观察](https://example.com/russia-market)
+- 发布时间：2026-06-20 08:30:00
+- 摘要：俄罗斯市场波动
+
+### [俄罗斯方块大赛开幕](https://example.com/tetris)
+- 发布时间：2026-06-20 09:00:00
+- 摘要：体育游戏活动
+
+### [欧洲防务观察](https://example.com/note-match)
+- 发布时间：2026-06-20 09:30:00
+- 摘要：欧洲局势观察
+
+### [欧洲防务观察二](https://example.com/summary-match)
+- 发布时间：2026-06-20 10:00:00
+- 摘要：普通摘要
+
+### [国际局势综述](https://example.com/body-only)
+- 发布时间：2026-06-20 10:30:00
+- 摘要：普通摘要
 
 ### [无关宏观观察](https://example.com/macro)
-- 发布时间：2026-06-20 10:00:00
+- 发布时间：2026-06-20 11:00:00
 - 摘要：美元指数波动
 """,
         encoding="utf-8",
@@ -539,26 +564,101 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
 
     items = client.get("/api/news?per=20").get_json()["items"]
     by_title = {item["title"]: item for item in items}
-    old_item = by_title["俄乌旧战况"]
-    recent_item = by_title["俄乌最新进展"]
+    old_item = by_title["乌克兰俄罗斯谈判旧战况"]
+    recent_item = by_title["乌克兰无人机袭击俄军机场"]
+    broad_item = by_title["俄罗斯股市观察"]
+    exclude_item = by_title["俄罗斯方块大赛开幕"]
+    note_match_item = by_title["欧洲防务观察"]
+    summary_match_item = by_title["欧洲防务观察二"]
+    body_only_item = by_title["国际局势综述"]
     manual_item = by_title["无关宏观观察"]
 
-    assert client.patch(
-        f"/api/news/{old_item['id']}/state",
-        json={"important": True},
-    ).status_code == 200
-    assert client.patch(
-        f"/api/news/{recent_item['id']}/state",
-        json={"important": True},
-    ).status_code == 200
+    for item in (
+        old_item,
+        recent_item,
+        broad_item,
+        exclude_item,
+        note_match_item,
+        summary_match_item,
+        body_only_item,
+    ):
+        assert client.patch(
+            f"/api/news/{item['id']}/state",
+            json={"important": True},
+        ).status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    try:
+        ts = "2026-06-20 12:00:00"
+        conn.execute(
+            """
+            INSERT INTO article_notes(url, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                note_match_item["url"],
+                "乌克兰 无人机 袭击升级",
+                ts,
+                ts,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_notes(url, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                exclude_item["url"],
+                "乌克兰 无人机 袭击升级",
+                ts,
+                ts,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_ai(url, model, key_points_zh, conclusion_zh, body_zh, raw_json, generated_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                summary_match_item["url"],
+                "deepseek-chat",
+                json.dumps(["乌克兰", "俄罗斯", "基辅"], ensure_ascii=False),
+                "袭击升级",
+                "补充正文",
+                "{}",
+                ts,
+                ts,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_ai(url, model, key_points_zh, conclusion_zh, body_zh, raw_json, generated_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                body_only_item["url"],
+                "deepseek-chat",
+                json.dumps([], ensure_ascii=False),
+                "",
+                "乌克兰 俄罗斯 无人机 袭击",
+                "{}",
+                ts,
+                ts,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     create_topic = client.post(
         "/api/tracked-topics",
         json={
             "title": "俄乌战争",
             "description": "长期观察俄乌事件",
-            "keywords": ["俄乌"],
-            "exclude_keywords": [],
+            "core_terms": ["乌克兰", "俄罗斯"],
+            "context_terms": ["无人机", "袭击", "谈判", "机场", "基辅"],
+            "exclude_terms": ["俄罗斯方块", "旅游", "文学", "体育"],
+            "threshold": 6,
             "scope": "all",
             "active": True,
         },
@@ -566,15 +666,8 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     assert create_topic.status_code == 200
     topic = create_topic.get_json()["topic"]
     topic_id = topic["id"]
-
-    recent_backfill = client.post(
-        f"/api/tracked-topics/{topic_id}/backfill",
-        json={"mode": "recent_important"},
-    )
-    assert recent_backfill.status_code == 200
-    recent_payload = recent_backfill.get_json()
-    assert recent_payload["matched_count"] == 1
-    assert [item["title"] for item in recent_payload["items"]] == ["俄乌最新进展"]
+    assert topic["rules"]["core_terms"] == ["乌克兰", "俄罗斯"]
+    assert topic["rules"]["threshold"] == 6
 
     all_backfill = client.post(
         f"/api/tracked-topics/{topic_id}/backfill",
@@ -582,8 +675,17 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     )
     assert all_backfill.status_code == 200
     all_payload = all_backfill.get_json()
-    assert [item["title"] for item in all_payload["items"]] == ["俄乌旧战况", "俄乌最新进展"]
-    assert all_payload["items"][0]["tracked_reason"] == "命中：俄乌"
+    assert [item["title"] for item in all_payload["items"]] == [
+        "乌克兰俄罗斯谈判旧战况",
+        "乌克兰无人机袭击俄军机场",
+        "欧洲防务观察",
+        "欧洲防务观察二",
+    ]
+    assert "标题命中" in all_payload["items"][0]["tracked_reason"]
+    assert "score=" in all_payload["items"][0]["tracked_reason"]
+    assert broad_item["title"] not in [item["title"] for item in all_payload["items"]]
+    assert exclude_item["title"] not in [item["title"] for item in all_payload["items"]]
+    assert body_only_item["title"] not in [item["title"] for item in all_payload["items"]]
 
     hide_recent = client.patch(
         f"/api/tracked-topics/{topic_id}/items/{recent_item['id']}",
@@ -596,7 +698,11 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
         json={"mode": "all_important"},
     )
     assert no_revive.status_code == 200
-    assert [item["title"] for item in no_revive.get_json()["items"]] == ["俄乌旧战况"]
+    assert [item["title"] for item in no_revive.get_json()["items"]] == [
+        "乌克兰俄罗斯谈判旧战况",
+        "欧洲防务观察",
+        "欧洲防务观察二",
+    ]
 
     manual_add = client.post(
         f"/api/tracked-topics/{topic_id}/items",
@@ -606,13 +712,18 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
 
     after_manual = client.get(f"/api/tracked-topics/{topic_id}/items")
     assert after_manual.status_code == 200
-    assert [item["title"] for item in after_manual.get_json()["items"]] == ["俄乌旧战况", "无关宏观观察"]
+    assert [item["title"] for item in after_manual.get_json()["items"]] == [
+        "乌克兰俄罗斯谈判旧战况",
+        "欧洲防务观察",
+        "欧洲防务观察二",
+        "无关宏观观察",
+    ]
 
     (daily_dir / "dailyFreshNews_2026-06-21.md").write_text(
         """## Reuters · World（1条）
-### [俄乌新消息](https://example.com/ru-new)
+### [乌克兰袭击基辅新消息](https://example.com/ru-new)
 - 发布时间：2026-06-21 11:00:00
-- 摘要：俄乌局势再度变化
+- 摘要：俄罗斯方面回应
 """,
         encoding="utf-8",
     )
@@ -621,8 +732,15 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     assert second_reindex.get_json()["tracked_incremental_matches"] == 1
 
     final_timeline = client.get(f"/api/tracked-topics/{topic_id}/items").get_json()
-    assert [item["title"] for item in final_timeline["items"]] == ["俄乌旧战况", "无关宏观观察", "俄乌新消息"]
-    assert final_timeline["items"][1]["tracked_match_method"] == "manual"
+    assert [item["title"] for item in final_timeline["items"]] == [
+        "乌克兰俄罗斯谈判旧战况",
+        "欧洲防务观察",
+        "欧洲防务观察二",
+        "无关宏观观察",
+        "乌克兰袭击基辅新消息",
+    ]
+    assert final_timeline["items"][3]["tracked_match_method"] == "manual"
+    assert "标题命中" in final_timeline["items"][4]["tracked_reason"]
 
     detail = client.get(f"/api/news/{manual_item['id']}/detail")
     assert detail.status_code == 200
