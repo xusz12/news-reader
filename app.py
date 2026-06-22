@@ -94,7 +94,7 @@ ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 
 NEWS_SORT_ORDERS = {"default", "reverse"}
 IDEA_TYPE_FILTERS = {"all", "article", "trend"}
 TRACKED_TOPIC_SCOPES = {"important", "all"}
-TRACKED_BACKFILL_MODES = {"recent_important", "all_important"}
+TRACKED_BACKFILL_MODES = {"recent_important", "all_important", "all_news"}
 TRACKED_MATCH_METHODS = {"keyword", "manual"}
 TRACKED_RULE_FIELD_SCORES = {
     "title": {"strong": 8, "core": 4, "context": 2},
@@ -1708,7 +1708,7 @@ def tracked_topic_candidate_rows(
         LEFT JOIN article_ai aa ON aa.url = items.url
         LEFT JOIN article_notes an ON an.url = items.url
         {where_sql}
-        ORDER BY items.published_at ASC, items.id ASC
+        ORDER BY items.published_at DESC, items.id DESC
         """,
         args,
     ).fetchall()
@@ -1871,7 +1871,7 @@ def tracked_topic_timeline_items(conn: sqlite3.Connection, topic_id: int) -> lis
         LEFT JOIN ai_jobs aj ON aj.url = items.url
         LEFT JOIN article_ai aa ON aa.url = items.url
         WHERE tti.topic_id = ? AND tti.hidden_at IS NULL
-        ORDER BY items.published_at ASC, items.id ASC
+        ORDER BY items.published_at DESC, items.id DESC
         """,
         (topic_id,),
     ).fetchall()
@@ -2932,12 +2932,12 @@ def api_tracked_topic_backfill(topic_id: int):
         topic = load_tracked_topic(conn, topic_id)
         if not topic:
             return jsonify({"ok": False, "error": "topic_not_found"}), 404
-        date_after = None if mode == "all_important" else datetime.now().strftime("%Y-%m-%d")
+        date_after = None if mode in {"all_important", "all_news"} else datetime.now().strftime("%Y-%m-%d")
         if mode == "recent_important":
             date_after = (datetime.now().date().fromordinal(datetime.now().date().toordinal() - 179)).strftime("%Y-%m-%d")
         candidate_rows = tracked_topic_candidate_rows(
             conn,
-            scope="important",
+            scope="all" if mode == "all_news" else "important",
             date_after=date_after,
         )
         with conn:

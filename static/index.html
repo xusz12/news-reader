@@ -208,6 +208,7 @@
             <select id="trackedBackfillModeSelect" class="pref-select">
               <option value="recent_important">近180天重要新闻</option>
               <option value="all_important">全部重要新闻</option>
+              <option value="all_news">全部新闻</option>
             </select>
             <button id="trackedBackfillBtn" class="detail-retry-btn" type="button">回扫历史新闻</button>
             <button id="trackedEditBtn" class="detail-retry-btn" type="button">编辑</button>
@@ -228,10 +229,15 @@
             <input id="detailTrackedTitleInput" class="detail-tag-create-input" type="text" maxlength="80" placeholder="主题名称，例如：俄乌战争" />
             <textarea id="detailTrackedDescriptionInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="主题摘要 / 关注角度 / 补充说明"></textarea>
             <textarea id="detailTrackedStrongInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="强匹配短语，逗号或换行分隔"></textarea>
+            <div class="detail-meta">强匹配短语：完整表达该主题的短语，命中后通常可高分收录，例如 `俄乌战争 / Russia-Ukraine war`。</div>
             <textarea id="detailTrackedCoreInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="核心对象词，逗号或换行分隔"></textarea>
+            <div class="detail-meta">核心对象词：主题核心人、国家、组织、地点；单独命中通常不收录，需要和相关场景词组合。</div>
             <textarea id="detailTrackedContextInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="相关场景词，逗号或换行分隔"></textarea>
+            <div class="detail-meta">相关场景词：动作、事件、子场景、政策动作，用来和核心对象词共同判断主题相关性。</div>
             <textarea id="detailTrackedExcludeInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="排除词，可留空"></textarea>
+            <div class="detail-meta">排除词：常见误伤场景，命中后会优先排除，例如旅游、体育、俄罗斯方块。</div>
             <input id="detailTrackedThresholdInput" class="detail-tag-create-input" type="number" min="1" max="50" step="1" placeholder="最低收录分数，例如 6" />
+            <div class="detail-meta">最低收录分数：标题权重最高，用户想法第二，摘要 / AI 摘要第三，正文最低；强匹配短语或“核心对象词 + 相关场景词”达到该分数才进入时间线。</div>
             <select id="detailTrackedScopeSelect" class="pref-select">
               <option value="important">仅重要新闻增量</option>
               <option value="all">全部新闻增量</option>

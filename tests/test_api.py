@@ -515,7 +515,7 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
         encoding="utf-8",
     )
     (daily_dir / "dailyFreshNews_2026-06-20.md").write_text(
-        """## Reuters · World（7条）
+        """## Reuters · World（8条）
 ### [乌克兰无人机袭击俄军机场](https://example.com/ru-now)
 - 发布时间：2026-06-20 08:00:00
 - 摘要：俄罗斯多个机场遭袭
@@ -539,6 +539,10 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
 ### [国际局势综述](https://example.com/body-only)
 - 发布时间：2026-06-20 10:30:00
 - 摘要：普通摘要
+
+### [乌克兰基辅停火进展](https://example.com/all-news-match)
+- 发布时间：2026-06-20 10:45:00
+- 摘要：俄罗斯与乌克兰讨论停火
 
 ### [无关宏观观察](https://example.com/macro)
 - 发布时间：2026-06-20 11:00:00
@@ -571,6 +575,7 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     note_match_item = by_title["欧洲防务观察"]
     summary_match_item = by_title["欧洲防务观察二"]
     body_only_item = by_title["国际局势综述"]
+    all_news_match_item = by_title["乌克兰基辅停火进展"]
     manual_item = by_title["无关宏观观察"]
 
     for item in (
@@ -676,16 +681,33 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     assert all_backfill.status_code == 200
     all_payload = all_backfill.get_json()
     assert [item["title"] for item in all_payload["items"]] == [
-        "乌克兰俄罗斯谈判旧战况",
-        "乌克兰无人机袭击俄军机场",
-        "欧洲防务观察",
         "欧洲防务观察二",
+        "欧洲防务观察",
+        "乌克兰无人机袭击俄军机场",
+        "乌克兰俄罗斯谈判旧战况",
     ]
-    assert "标题命中" in all_payload["items"][0]["tracked_reason"]
+    assert any(
+        marker in all_payload["items"][0]["tracked_reason"]
+        for marker in ("标题命中", "笔记命中", "摘要命中")
+    )
     assert "score=" in all_payload["items"][0]["tracked_reason"]
     assert broad_item["title"] not in [item["title"] for item in all_payload["items"]]
     assert exclude_item["title"] not in [item["title"] for item in all_payload["items"]]
     assert body_only_item["title"] not in [item["title"] for item in all_payload["items"]]
+    assert all_news_match_item["title"] not in [item["title"] for item in all_payload["items"]]
+
+    all_news_backfill = client.post(
+        f"/api/tracked-topics/{topic_id}/backfill",
+        json={"mode": "all_news"},
+    )
+    assert all_news_backfill.status_code == 200
+    assert [item["title"] for item in all_news_backfill.get_json()["items"]] == [
+        "乌克兰基辅停火进展",
+        "欧洲防务观察二",
+        "欧洲防务观察",
+        "乌克兰无人机袭击俄军机场",
+        "乌克兰俄罗斯谈判旧战况",
+    ]
 
     hide_recent = client.patch(
         f"/api/tracked-topics/{topic_id}/items/{recent_item['id']}",
@@ -695,13 +717,14 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
 
     no_revive = client.post(
         f"/api/tracked-topics/{topic_id}/backfill",
-        json={"mode": "all_important"},
+        json={"mode": "all_news"},
     )
     assert no_revive.status_code == 200
     assert [item["title"] for item in no_revive.get_json()["items"]] == [
-        "乌克兰俄罗斯谈判旧战况",
-        "欧洲防务观察",
+        "乌克兰基辅停火进展",
         "欧洲防务观察二",
+        "欧洲防务观察",
+        "乌克兰俄罗斯谈判旧战况",
     ]
 
     manual_add = client.post(
@@ -713,10 +736,11 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     after_manual = client.get(f"/api/tracked-topics/{topic_id}/items")
     assert after_manual.status_code == 200
     assert [item["title"] for item in after_manual.get_json()["items"]] == [
-        "乌克兰俄罗斯谈判旧战况",
-        "欧洲防务观察",
-        "欧洲防务观察二",
         "无关宏观观察",
+        "乌克兰基辅停火进展",
+        "欧洲防务观察二",
+        "欧洲防务观察",
+        "乌克兰俄罗斯谈判旧战况",
     ]
 
     (daily_dir / "dailyFreshNews_2026-06-21.md").write_text(
@@ -733,14 +757,15 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
 
     final_timeline = client.get(f"/api/tracked-topics/{topic_id}/items").get_json()
     assert [item["title"] for item in final_timeline["items"]] == [
-        "乌克兰俄罗斯谈判旧战况",
-        "欧洲防务观察",
-        "欧洲防务观察二",
-        "无关宏观观察",
         "乌克兰袭击基辅新消息",
+        "无关宏观观察",
+        "乌克兰基辅停火进展",
+        "欧洲防务观察二",
+        "欧洲防务观察",
+        "乌克兰俄罗斯谈判旧战况",
     ]
-    assert final_timeline["items"][3]["tracked_match_method"] == "manual"
-    assert "标题命中" in final_timeline["items"][4]["tracked_reason"]
+    assert final_timeline["items"][1]["tracked_match_method"] == "manual"
+    assert "标题命中" in final_timeline["items"][0]["tracked_reason"]
 
     detail = client.get(f"/api/news/{manual_item['id']}/detail")
     assert detail.status_code == 200

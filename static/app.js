@@ -2055,10 +2055,10 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
   detailTrackedBody.classList.remove("hidden");
   detailTrackedTitle.textContent = topic.title || "未命名主题";
   detailTrackedMeta.textContent = `${trackedScopeLabel(topic)} · 可见 ${Number(topic.visible_item_count || 0)} · 隐藏 ${Number(topic.hidden_item_count || 0)}`;
-  detailTrackedKeywords.textContent = `${String(topic.description || "").trim() ? `${String(topic.description).trim()} · ` : ""}${trackedKeywordSummary(topic)}`;
+  detailTrackedKeywords.textContent = String(topic.description || "").trim();
   if (trackedBackfillModeSelect) trackedBackfillModeSelect.value = state.trackedBackfillMode;
   trackedTimelineHint.textContent = items.length
-    ? `时间线按新闻发布时间旧→新，共 ${items.length} 条`
+    ? `时间线按新闻发布时间新→旧，共 ${items.length} 条`
     : "当前主题还没有命中新闻。可先执行历史回扫，或从新闻详情里手动加入。";
   trackedTimelineList.innerHTML = "";
   items.forEach((item) => trackedTimelineList.appendChild(buildTrackedTimelineRow(item)));
@@ -2107,8 +2107,8 @@ function openTrackedTopicForm(mode, topic = null) {
   detailTrackedFormBody.classList.remove("hidden");
   detailTrackedFormTitle.textContent = mode === "edit" ? "编辑跟踪主题" : "新建跟踪主题";
   detailTrackedFormMeta.textContent = mode === "edit"
-    ? "修改规则、增量范围和启用状态。"
-    : "创建后即可在右栏查看时间线，并可从新闻详情手动加入。";
+    ? "修改规则、增量范围和启用状态；字段说明和打分说明都放在当前编辑页内。"
+    : "创建后即可在右栏查看时间线，并可从新闻详情手动加入；先按当前页说明填写规则，再逐步调分。";
   detailTrackedFormBackBtn.classList.toggle("hidden", mode !== "edit" || !topic);
   fillTrackedTopicForm(topic);
   updateWorkspaceLayout();
