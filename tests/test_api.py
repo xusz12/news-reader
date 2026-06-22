@@ -456,6 +456,179 @@ def test_apply_schema_creates_news_reminders_table_and_indexes(tmp_path: Path, m
         conn.close()
 
 
+def test_apply_schema_creates_tracked_topic_tables_and_indexes(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "news_index.sqlite3"
+    daily_root = tmp_path / "DailyNews"
+    daily_root.mkdir()
+
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_root))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    app_module.ensure_db()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "tracked_topics" in tables
+        assert "tracked_topic_items" in tables
+
+        indexes = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        assert "idx_tracked_topics_active_updated_at" in indexes
+        assert "idx_tracked_topic_items_topic_hidden" in indexes
+        assert "idx_tracked_topic_items_item_id" in indexes
+    finally:
+        conn.close()
+
+
+def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    old_daily = tmp_path / "DailyNews" / "2025年12月"
+    old_daily.mkdir(parents=True)
+
+    (old_daily / "dailyFreshNews_2025-12-01.md").write_text(
+        """## Reuters · World（1条）
+### [俄乌旧战况](https://example.com/ru-old)
+- 发布时间：2025-12-01 09:00:00
+- 摘要：俄乌冲突进入新阶段
+""",
+        encoding="utf-8",
+    )
+    (daily_dir / "dailyFreshNews_2026-06-20.md").write_text(
+        """## Reuters · World（2条）
+### [俄乌最新进展](https://example.com/ru-now)
+- 发布时间：2026-06-20 08:00:00
+- 摘要：俄乌谈判继续推进
+
+### [无关宏观观察](https://example.com/macro)
+- 发布时间：2026-06-20 10:00:00
+- 摘要：美元指数波动
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    first_reindex = client.post("/api/reindex", json={})
+    assert first_reindex.status_code == 200
+    assert first_reindex.get_json()["tracked_incremental_matches"] == 0
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    by_title = {item["title"]: item for item in items}
+    old_item = by_title["俄乌旧战况"]
+    recent_item = by_title["俄乌最新进展"]
+    manual_item = by_title["无关宏观观察"]
+
+    assert client.patch(
+        f"/api/news/{old_item['id']}/state",
+        json={"important": True},
+    ).status_code == 200
+    assert client.patch(
+        f"/api/news/{recent_item['id']}/state",
+        json={"important": True},
+    ).status_code == 200
+
+    create_topic = client.post(
+        "/api/tracked-topics",
+        json={
+            "title": "俄乌战争",
+            "description": "长期观察俄乌事件",
+            "keywords": ["俄乌"],
+            "exclude_keywords": [],
+            "scope": "all",
+            "active": True,
+        },
+    )
+    assert create_topic.status_code == 200
+    topic = create_topic.get_json()["topic"]
+    topic_id = topic["id"]
+
+    recent_backfill = client.post(
+        f"/api/tracked-topics/{topic_id}/backfill",
+        json={"mode": "recent_important"},
+    )
+    assert recent_backfill.status_code == 200
+    recent_payload = recent_backfill.get_json()
+    assert recent_payload["matched_count"] == 1
+    assert [item["title"] for item in recent_payload["items"]] == ["俄乌最新进展"]
+
+    all_backfill = client.post(
+        f"/api/tracked-topics/{topic_id}/backfill",
+        json={"mode": "all_important"},
+    )
+    assert all_backfill.status_code == 200
+    all_payload = all_backfill.get_json()
+    assert [item["title"] for item in all_payload["items"]] == ["俄乌旧战况", "俄乌最新进展"]
+    assert all_payload["items"][0]["tracked_reason"] == "命中：俄乌"
+
+    hide_recent = client.patch(
+        f"/api/tracked-topics/{topic_id}/items/{recent_item['id']}",
+        json={"hidden": True},
+    )
+    assert hide_recent.status_code == 200
+
+    no_revive = client.post(
+        f"/api/tracked-topics/{topic_id}/backfill",
+        json={"mode": "all_important"},
+    )
+    assert no_revive.status_code == 200
+    assert [item["title"] for item in no_revive.get_json()["items"]] == ["俄乌旧战况"]
+
+    manual_add = client.post(
+        f"/api/tracked-topics/{topic_id}/items",
+        json={"item_id": manual_item["id"]},
+    )
+    assert manual_add.status_code == 200
+
+    after_manual = client.get(f"/api/tracked-topics/{topic_id}/items")
+    assert after_manual.status_code == 200
+    assert [item["title"] for item in after_manual.get_json()["items"]] == ["俄乌旧战况", "无关宏观观察"]
+
+    (daily_dir / "dailyFreshNews_2026-06-21.md").write_text(
+        """## Reuters · World（1条）
+### [俄乌新消息](https://example.com/ru-new)
+- 发布时间：2026-06-21 11:00:00
+- 摘要：俄乌局势再度变化
+""",
+        encoding="utf-8",
+    )
+    second_reindex = client.post("/api/reindex", json={})
+    assert second_reindex.status_code == 200
+    assert second_reindex.get_json()["tracked_incremental_matches"] == 1
+
+    final_timeline = client.get(f"/api/tracked-topics/{topic_id}/items").get_json()
+    assert [item["title"] for item in final_timeline["items"]] == ["俄乌旧战况", "无关宏观观察", "俄乌新消息"]
+    assert final_timeline["items"][1]["tracked_match_method"] == "manual"
+
+    detail = client.get(f"/api/news/{manual_item['id']}/detail")
+    assert detail.status_code == 200
+    assert detail.get_json()["tracked_topic_choices"][0]["title"] == "俄乌战争"
+
+
 def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)

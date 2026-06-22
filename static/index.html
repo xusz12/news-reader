@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v1.9.7.5</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.7.5" />
+    <title>News Reader v1.9.8.0</title>
+    <link rel="stylesheet" href="/static/style.css?v=1.9.8.0" />
   </head>
   <body>
     <header class="topbar">
@@ -12,7 +12,7 @@
         <div class="topbar-brand">
           <div class="topbar-title-row">
             <h1>News Reader</h1>
-            <span class="topbar-version">v1.9.7.5</span>
+            <span class="topbar-version">v1.9.8.0</span>
           </div>
           <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
         </div>
@@ -53,6 +53,7 @@
         <button id="navRemindersBtn" class="nav-btn">提醒</button>
         <button id="navFavoritesBtn" class="nav-btn">收藏</button>
         <button id="navNotesBtn" class="nav-btn">想法</button>
+        <button id="navTrackedBtn" class="nav-btn">跟踪</button>
         <button id="navMarketTagsBtn" class="nav-btn">板块</button>
         <button id="navTrendsBtn" class="nav-btn">趋势</button>
 
@@ -65,6 +66,7 @@
           <button id="resumeAnchorBtn" class="icon-btn hidden" type="button"></button>
           <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
           <button id="sortOrderBtn" class="icon-btn hidden" type="button"></button>
+          <button id="trackedCreateInlineBtn" class="detail-retry-btn hidden" type="button">新建跟踪</button>
           <button id="markAllReadBtn" class="icon-btn" type="button"></button>
           <button id="refreshBtn" class="icon-btn" type="button"></button>
           <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
@@ -198,8 +200,52 @@
           </section>
           <div id="detailTagAdminList" class="detail-tag-admin-list"></div>
         </div>
+        <div id="detailTrackedBody" class="detail-trend-body hidden">
+          <h3 id="detailTrackedTitle" class="detail-title"></h3>
+          <div id="detailTrackedMeta" class="detail-meta"></div>
+          <div id="detailTrackedKeywords" class="detail-summary"></div>
+          <div class="detail-actions detail-trend-actions">
+            <select id="trackedBackfillModeSelect" class="pref-select">
+              <option value="recent_important">近180天重要新闻</option>
+              <option value="all_important">全部重要新闻</option>
+            </select>
+            <button id="trackedBackfillBtn" class="detail-retry-btn" type="button">回扫历史新闻</button>
+            <button id="trackedEditBtn" class="detail-retry-btn" type="button">编辑</button>
+            <button id="trackedDeleteBtn" class="detail-retry-btn" type="button">删除</button>
+          </div>
+          <div id="trackedTimelineHint" class="detail-meta"></div>
+          <div id="trackedTimelineList" class="detail-trend-list tracked-timeline-list"></div>
+        </div>
+        <div id="detailTrackedFormBody" class="detail-tag-admin-body hidden">
+          <button id="detailTrackedFormBackBtn" class="detail-return-btn hidden" type="button">返回主题详情</button>
+          <div class="detail-tag-admin-header">
+            <div>
+              <h3 id="detailTrackedFormTitle" class="detail-title">新建跟踪主题</h3>
+              <div id="detailTrackedFormMeta" class="detail-meta">右栏内直接创建或编辑跟踪主题。</div>
+            </div>
+          </div>
+          <section class="detail-note-editor detail-tracked-form-panel">
+            <input id="detailTrackedTitleInput" class="detail-tag-create-input" type="text" maxlength="80" placeholder="主题名称，例如：俄乌战争" />
+            <textarea id="detailTrackedDescriptionInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="主题摘要 / 关注角度 / 补充说明"></textarea>
+            <textarea id="detailTrackedKeywordsInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="包含关键词，逗号或换行分隔"></textarea>
+            <textarea id="detailTrackedExcludeInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="排除关键词，可留空"></textarea>
+            <select id="detailTrackedScopeSelect" class="pref-select">
+              <option value="important">仅重要新闻增量</option>
+              <option value="all">全部新闻增量</option>
+            </select>
+            <label class="detail-inline-checkbox">
+              <input id="detailTrackedActiveInput" type="checkbox" checked />
+              <span>启用后续增量跟踪</span>
+            </label>
+            <div class="detail-note-actions">
+              <button id="detailTrackedFormSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="detailTrackedFormCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+        </div>
         <div id="detailBody" class="detail-body hidden">
           <button id="detailReturnToTrendBtn" class="detail-return-btn hidden" type="button">返回趋势明细</button>
+          <button id="detailReturnToTrackedBtn" class="detail-return-btn hidden" type="button">返回跟踪主题</button>
           <h3 id="detailTitle" class="detail-title"></h3>
           <div id="detailInlineMarketTags" class="detail-inline-market-tags hidden"></div>
           <div id="detailMeta" class="detail-meta"></div>
@@ -213,6 +259,7 @@
             <button id="detailBullishBtn" class="icon-btn" type="button" title="看多板块标记" aria-label="看多板块标记"></button>
             <button id="detailBearishBtn" class="icon-btn" type="button" title="看空板块标记" aria-label="看空板块标记"></button>
             <button id="detailReminderToggleBtn" class="icon-btn" type="button" title="添加提醒" aria-label="添加提醒"></button>
+            <button id="detailTrackBtn" class="icon-btn" type="button" title="加入跟踪主题" aria-label="加入跟踪主题"></button>
             <button id="detailFavoriteBtn" class="icon-btn" type="button"></button>
             <button id="detailImportantBtn" class="icon-btn" type="button"></button>
           </div>
@@ -237,6 +284,15 @@
               <button id="detailReminderSaveBtn" class="detail-retry-btn" type="button">保存</button>
               <button id="detailReminderDeleteBtn" class="detail-retry-btn hidden" type="button">删除</button>
               <button id="detailReminderCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+          <section id="detailTrackEditor" class="detail-note-editor hidden">
+            <div class="detail-note-editor-title">加入跟踪主题</div>
+            <div id="detailTrackEditorMeta" class="detail-meta">选择现有主题，把当前新闻加入时间线。</div>
+            <select id="detailTrackTopicSelect" class="pref-select"></select>
+            <div class="detail-note-actions">
+              <button id="detailTrackSaveBtn" class="detail-retry-btn" type="button">加入</button>
+              <button id="detailTrackCancelBtn" class="detail-retry-btn" type="button">取消</button>
             </div>
           </section>
           <div class="detail-scroll-area">
@@ -381,6 +437,6 @@
       <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.6.12"></script>
+    <script src="/static/app.js?v=1.9.8.0"></script>
   </body>
 </html>

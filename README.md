@@ -4,6 +4,20 @@
 
 ## What's Changed
 
+### 2026-06-22 — v1.9.8.0 improve: 跟踪页 MVP
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*tests/test_api.py（+）*
+    - 新增 `tracked_topics / tracked_topic_items` 两张表与索引，独立保存跟踪主题定义、关键词规则、手动加入/移除 override 与缓存后的匹配关系
+    - 新增 `GET/POST/PATCH/DELETE /api/tracked-topics`、`GET /api/tracked-topics/:id/items`、`POST /api/tracked-topics/:id/backfill`、`POST/PATCH /api/tracked-topics/:id/items`
+    - `POST /api/reindex` 结束后会对 active topics 做增量匹配；历史回扫仅支持 `近180天重要新闻` 与 `全部重要新闻` 两档
+    - 补覆盖：tracked 表/索引建库幂等、回扫范围、增量匹配、手动移除不复活、手动加入长期保留
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 左侧栏和移动端集合面板新增「跟踪」，位置在「想法」之后、「板块」之前
+    - 新增独立跟踪页：主题列表、主题详情时间线、历史回扫按钮与范围选择、删除/编辑、空态提示
+    - 主题时间线按新闻发布时间旧→新展示，点击新闻继续复用现有右侧新闻详情
+    - 新闻右侧详情新增“加入跟踪主题”入口，支持把当前新闻手动加入任意 active 跟踪主题
+- **影响**：News Reader 现在可以把长期事件/主题沉淀成持续更新的时间流；第一版只做确定性规则匹配与人工纠偏，不做 LLM 全史总结、关键转折判断或知识图谱。
+
 ### 2026-06-21 — v1.9.7.5 improve: 趋势想法右侧栏详情与编辑删除
 - **文件**
   - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*

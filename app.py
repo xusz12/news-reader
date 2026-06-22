@@ -93,6 +93,9 @@ items.id DESC
 ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10))"
 NEWS_SORT_ORDERS = {"default", "reverse"}
 IDEA_TYPE_FILTERS = {"all", "article", "trend"}
+TRACKED_TOPIC_SCOPES = {"important", "all"}
+TRACKED_BACKFILL_MODES = {"recent_important", "all_important"}
+TRACKED_MATCH_METHODS = {"keyword", "manual"}
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -362,6 +365,146 @@ def build_note_preview(note_text: str | None, limit: int = 120) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def normalize_keyword_list(value: object) -> list[str]:
+    raw_values: list[str] = []
+    if isinstance(value, list):
+        for entry in value:
+            if isinstance(entry, str):
+                raw_values.append(entry)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list):
+                    for entry in parsed:
+                        if isinstance(entry, str):
+                            raw_values.append(entry)
+                else:
+                    raw_values.extend(re.split(r"[\n,，]+", value))
+            except Exception:
+                raw_values.extend(re.split(r"[\n,，]+", value))
+        else:
+            raw_values.extend(re.split(r"[\n,，]+", value))
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        text = " ".join((raw or "").split()).strip()
+        lowered = text.lower()
+        if not text or lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(text)
+    return normalized
+
+
+def tracked_scope_value(value: object) -> str:
+    scope = str(value or "important").strip().lower()
+    if scope not in TRACKED_TOPIC_SCOPES:
+        raise ValueError("invalid_scope")
+    return scope
+
+
+def tracked_backfill_mode_value(value: object) -> str:
+    mode = str(value or "recent_important").strip().lower()
+    if mode not in TRACKED_BACKFILL_MODES:
+        raise ValueError("invalid_backfill_mode")
+    return mode
+
+
+def compact_tracked_reason(keywords: list[str]) -> str:
+    if not keywords:
+        return ""
+    if len(keywords) == 1:
+        return f"命中：{keywords[0]}"
+    return f"命中：{', '.join(keywords[:3])}"
+
+
+def tracked_text_blob(row: sqlite3.Row | dict) -> str:
+    payload = dict(row)
+    key_points = payload.get("key_points_zh") or ""
+    if isinstance(key_points, str):
+        try:
+            parsed = json.loads(key_points)
+            if isinstance(parsed, list):
+                key_points = " ".join(str(part) for part in parsed if part)
+        except Exception:
+            key_points = key_points
+    fields = [
+        payload.get("title") or "",
+        payload.get("summary") or "",
+        key_points or "",
+        payload.get("conclusion_zh") or "",
+        payload.get("body_zh") or "",
+        payload.get("note") or "",
+    ]
+    return "\n".join(str(field) for field in fields if field).lower()
+
+
+def match_tracked_topic_row(row: sqlite3.Row | dict, include_keywords: list[str], exclude_keywords: list[str]) -> tuple[bool, int, str]:
+    if not include_keywords:
+        return False, 0, ""
+    haystack = tracked_text_blob(row)
+    if not haystack:
+        return False, 0, ""
+
+    matched_excludes = [keyword for keyword in exclude_keywords if keyword.lower() in haystack]
+    if matched_excludes:
+        return False, 0, ""
+
+    matched_includes = [keyword for keyword in include_keywords if keyword.lower() in haystack]
+    if not matched_includes:
+        return False, 0, ""
+    score = len(matched_includes)
+    return True, score, compact_tracked_reason(matched_includes)
+
+
+def serialize_tracked_topic_row(row: sqlite3.Row | dict) -> dict:
+    topic = dict(row)
+    topic["description"] = topic.get("description") or ""
+    topic["scope"] = topic.get("scope") or "important"
+    topic["active"] = 1 if topic.get("active") else 0
+    topic["keywords"] = normalize_keyword_list(topic.get("keywords_json") or "[]")
+    topic["exclude_keywords"] = normalize_keyword_list(topic.get("exclude_keywords_json") or "[]")
+    topic["visible_item_count"] = int(topic.get("visible_item_count") or 0)
+    topic["hidden_item_count"] = int(topic.get("hidden_item_count") or 0)
+    topic["latest_published_at"] = topic.get("latest_published_at") or ""
+    topic["latest_matched_at"] = topic.get("latest_matched_at") or ""
+    return topic
+
+
+def parse_tracked_topic_body(body: dict, *, partial: bool = False) -> dict:
+    payload: dict[str, object] = {}
+    if not partial or "title" in body:
+        title = " ".join(str(body.get("title") or "").split()).strip()
+        if not title:
+            raise ValueError("empty_title")
+        if len(title) > 120:
+            raise ValueError("title_too_long")
+        payload["title"] = title
+    if not partial or "description" in body:
+        description = str(body.get("description") or "").strip()
+        if len(description) > 1000:
+            raise ValueError("description_too_long")
+        payload["description"] = description
+    if not partial or "keywords" in body:
+        keywords = normalize_keyword_list(body.get("keywords"))
+        if not keywords:
+            raise ValueError("empty_keywords")
+        payload["keywords"] = keywords
+    if not partial or "exclude_keywords" in body:
+        payload["exclude_keywords"] = normalize_keyword_list(body.get("exclude_keywords"))
+    if not partial or "scope" in body:
+        payload["scope"] = tracked_scope_value(body.get("scope"))
+    if not partial or "active" in body:
+        active = body.get("active", True)
+        if not isinstance(active, bool):
+            raise ValueError("invalid_active")
+        payload["active"] = active
+    return payload
 
 
 def categorize_release_note(title: str) -> str:
@@ -1254,6 +1397,311 @@ def load_item_reminders(conn: sqlite3.Connection, item_id: str) -> list[dict]:
         (item_id,),
     ).fetchall()
     return serialize_reminder_rows(rows)
+
+
+def load_tracked_topic_choices(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT id, title
+        FROM tracked_topics
+        WHERE active = 1
+        ORDER BY updated_at DESC, id DESC
+        """
+    ).fetchall()
+    return [{"id": row["id"], "title": row["title"]} for row in rows]
+
+
+def load_tracked_topics(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT tt.*,
+               (
+                 SELECT COUNT(*)
+                 FROM tracked_topic_items tti
+                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NULL
+               ) AS visible_item_count,
+               (
+                 SELECT COUNT(*)
+                 FROM tracked_topic_items tti
+                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NOT NULL
+               ) AS hidden_item_count,
+               (
+                 SELECT MAX(items.published_at)
+                 FROM tracked_topic_items tti
+                 JOIN items ON items.id = tti.item_id
+                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NULL
+               ) AS latest_published_at,
+               (
+                 SELECT MAX(tti.updated_at)
+                 FROM tracked_topic_items tti
+                 WHERE tti.topic_id = tt.id
+               ) AS latest_matched_at
+        FROM tracked_topics tt
+        ORDER BY tt.updated_at DESC, tt.id DESC
+        """
+    ).fetchall()
+    return [serialize_tracked_topic_row(row) for row in rows]
+
+
+def load_tracked_topic(conn: sqlite3.Connection, topic_id: int) -> dict | None:
+    row = conn.execute(
+        """
+        SELECT tt.*,
+               (
+                 SELECT COUNT(*)
+                 FROM tracked_topic_items tti
+                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NULL
+               ) AS visible_item_count,
+               (
+                 SELECT COUNT(*)
+                 FROM tracked_topic_items tti
+                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NOT NULL
+               ) AS hidden_item_count,
+               (
+                 SELECT MAX(items.published_at)
+                 FROM tracked_topic_items tti
+                 JOIN items ON items.id = tti.item_id
+                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NULL
+               ) AS latest_published_at,
+               (
+                 SELECT MAX(tti.updated_at)
+                 FROM tracked_topic_items tti
+                 WHERE tti.topic_id = tt.id
+               ) AS latest_matched_at
+        FROM tracked_topics tt
+        WHERE tt.id = ?
+        """,
+        (topic_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return serialize_tracked_topic_row(row)
+
+
+def tracked_topic_item_status(conn: sqlite3.Connection, topic_id: int, item_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT id, hidden_at, manual_added_at, match_method, score, reason
+        FROM tracked_topic_items
+        WHERE topic_id = ? AND item_id = ?
+        """,
+        (topic_id, item_id),
+    ).fetchone()
+
+
+def tracked_topic_candidate_rows(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    created_after: str | None = None,
+    date_after: str | None = None,
+) -> list[sqlite3.Row]:
+    where = []
+    args: list[object] = []
+    if scope == "important":
+        where.append("st.important_at IS NOT NULL")
+    if created_after:
+        where.append("items.created_at >= ?")
+        args.append(created_after)
+    if date_after:
+        where.append(f"{ITEM_DATE_SQL} >= ?")
+        args.append(date_after)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    return conn.execute(
+        f"""
+        SELECT items.id,
+               items.url,
+               items.title,
+               items.summary,
+               items.published_at,
+               items.date,
+               aa.key_points_zh,
+               aa.conclusion_zh,
+               aa.body_zh,
+               an.note
+        FROM items
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN article_ai aa ON aa.url = items.url
+        LEFT JOIN article_notes an ON an.url = items.url
+        {where_sql}
+        ORDER BY items.published_at ASC, items.id ASC
+        """,
+        args,
+    ).fetchall()
+
+
+def upsert_tracked_topic_match(
+    conn: sqlite3.Connection,
+    *,
+    topic_id: int,
+    item_row: sqlite3.Row | dict,
+    match_method: str,
+    score: int,
+    reason: str,
+    manual_added_at: str | None = None,
+    clear_hidden: bool = False,
+) -> bool:
+    ts = now_ts()
+    item = dict(item_row)
+    existing = tracked_topic_item_status(conn, topic_id, str(item["id"]))
+    created_or_restored = not existing
+    if existing and existing["hidden_at"] and not manual_added_at and not clear_hidden:
+        return False
+    if existing and existing["manual_added_at"] and not manual_added_at:
+        return False
+    if existing and existing["hidden_at"] and (manual_added_at or clear_hidden):
+        created_or_restored = True
+
+    hidden_value = None if (manual_added_at or clear_hidden) else (existing["hidden_at"] if existing else None)
+    conn.execute(
+        """
+        INSERT INTO tracked_topic_items(
+          topic_id, item_id, item_url, match_method, score, reason,
+          hidden_at, manual_added_at, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(topic_id, item_id) DO UPDATE SET
+          item_url=excluded.item_url,
+          match_method=excluded.match_method,
+          score=excluded.score,
+          reason=excluded.reason,
+          hidden_at=excluded.hidden_at,
+          manual_added_at=COALESCE(excluded.manual_added_at, tracked_topic_items.manual_added_at),
+          updated_at=excluded.updated_at
+        """,
+        (
+            topic_id,
+            str(item["id"]),
+            item.get("url") or "",
+            match_method,
+            int(score),
+            reason[:200],
+            hidden_value,
+            manual_added_at,
+            ts,
+            ts,
+        ),
+    )
+    return created_or_restored or bool(manual_added_at)
+
+
+def run_tracked_topic_match(
+    conn: sqlite3.Connection,
+    *,
+    topic: dict,
+    candidate_rows: list[sqlite3.Row],
+    preserve_last_incremental: bool = False,
+) -> int:
+    topic_id = int(topic["id"])
+    include_keywords = topic.get("keywords") or normalize_keyword_list(topic.get("keywords_json") or "[]")
+    exclude_keywords = topic.get("exclude_keywords") or normalize_keyword_list(topic.get("exclude_keywords_json") or "[]")
+    matched = 0
+    for row in candidate_rows:
+        ok, score, reason = match_tracked_topic_row(row, include_keywords, exclude_keywords)
+        if not ok:
+            continue
+        if upsert_tracked_topic_match(
+            conn,
+            topic_id=topic_id,
+            item_row=row,
+            match_method="keyword",
+            score=score,
+            reason=reason,
+        ):
+            matched += 1
+    if not preserve_last_incremental:
+        conn.execute(
+            "UPDATE tracked_topics SET last_incremental_at=?, updated_at=? WHERE id=?",
+            (now_ts(), now_ts(), topic_id),
+        )
+    return matched
+
+
+def run_tracked_topics_incremental(conn: sqlite3.Connection) -> int:
+    topics = [topic for topic in load_tracked_topics(conn) if topic["active"]]
+    total_matched = 0
+    for topic in topics:
+        candidate_rows = tracked_topic_candidate_rows(
+            conn,
+            scope=topic["scope"],
+            created_after=topic.get("last_incremental_at") or topic.get("created_at"),
+        )
+        total_matched += run_tracked_topic_match(conn, topic=topic, candidate_rows=candidate_rows)
+    return total_matched
+
+
+def tracked_topic_timeline_items(conn: sqlite3.Connection, topic_id: int) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT items.id,
+               items.source_file,
+               items.item_order,
+               items.published_at,
+               items.date,
+               items.time,
+               items.source,
+               items.source_type,
+               items.source_name,
+               items.title,
+               items.summary,
+               items.url,
+               st.read_at,
+               st.important_at,
+               st.read_later_at,
+               st.favorite_at,
+               dj.status AS detail_status,
+               dj.last_error AS detail_error,
+               CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+               an.note AS note_preview_source,
+               CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
+               aj.status AS ai_status,
+               aj.last_error AS ai_error,
+               CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
+               (
+                 SELECT COUNT(*)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id AND nr.status = 'active'
+               ) AS active_reminder_count,
+               (
+                 SELECT COUNT(*)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id
+                   AND nr.status = 'active'
+                   AND nr.remind_at <= datetime('now', 'localtime')
+               ) AS due_reminder_count,
+               (
+                 SELECT MIN(nr.remind_at)
+                 FROM news_reminders nr
+                 WHERE nr.item_id = items.id AND nr.status = 'active'
+               ) AS next_remind_at,
+               tti.match_method,
+               tti.score,
+               tti.reason,
+               tti.manual_added_at,
+               tti.updated_at AS tracked_updated_at
+        FROM tracked_topic_items tti
+        JOIN items ON items.id = tti.item_id
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN detail_jobs dj ON dj.url = items.url
+        LEFT JOIN article_details ad ON ad.url = items.url
+        LEFT JOIN article_notes an ON an.url = items.url
+        LEFT JOIN ai_jobs aj ON aj.url = items.url
+        LEFT JOIN article_ai aa ON aa.url = items.url
+        WHERE tti.topic_id = ? AND tti.hidden_at IS NULL
+        ORDER BY items.published_at ASC, items.id ASC
+        """,
+        (topic_id,),
+    ).fetchall()
+    urls = [row["url"] for row in rows if row["url"]]
+    market_tags_map = load_market_tags_map(conn, urls)
+    items = serialize_news_rows([dict(row) for row in rows], market_tags_map)
+    for item in items:
+        item["tracked_match_method"] = item.get("match_method") or "keyword"
+        item["tracked_score"] = int(item.get("score") or 0)
+        item["tracked_reason"] = item.get("reason") or ""
+        item["tracked_manual_added_at"] = item.get("manual_added_at") or ""
+        item["tracked_updated_at"] = item.get("tracked_updated_at") or ""
+    return items
 
 
 def load_market_tag_definitions(conn: sqlite3.Connection, active_only: bool = False) -> list[dict]:
@@ -2156,6 +2604,234 @@ def api_news_status():
     return jsonify({"ok": True, "items": [dict(r) for r in rows]})
 
 
+@app.get("/api/tracked-topics")
+def api_tracked_topics():
+    conn = db_conn()
+    try:
+        topics = load_tracked_topics(conn)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "items": topics})
+
+
+@app.post("/api/tracked-topics")
+def api_tracked_topics_create():
+    body = request.get_json(silent=True) or {}
+    try:
+        payload = parse_tracked_topic_body(body, partial=False)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    ts = now_ts()
+    conn = db_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                """
+                INSERT INTO tracked_topics(
+                  title, description, keywords_json, exclude_keywords_json,
+                  scope, active, last_incremental_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["title"],
+                    payload.get("description") or "",
+                    json.dumps(payload["keywords"], ensure_ascii=False),
+                    json.dumps(payload["exclude_keywords"], ensure_ascii=False),
+                    payload["scope"],
+                    1 if payload["active"] else 0,
+                    ts,
+                    ts,
+                    ts,
+                ),
+            )
+            topic = load_tracked_topic(conn, int(cur.lastrowid))
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "topic": topic})
+
+
+@app.patch("/api/tracked-topics/<int:topic_id>")
+def api_tracked_topics_update(topic_id: int):
+    body = request.get_json(silent=True) or {}
+    try:
+        payload = parse_tracked_topic_body(body, partial=True)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not payload:
+        return jsonify({"ok": False, "error": "empty_patch"}), 400
+
+    conn = db_conn()
+    try:
+        existing = load_tracked_topic(conn, topic_id)
+        if not existing:
+            return jsonify({"ok": False, "error": "topic_not_found"}), 404
+        title = payload.get("title", existing["title"])
+        description = payload.get("description", existing["description"])
+        keywords = payload.get("keywords", existing["keywords"])
+        exclude_keywords = payload.get("exclude_keywords", existing["exclude_keywords"])
+        scope = payload.get("scope", existing["scope"])
+        active = payload.get("active", bool(existing["active"]))
+        ts = now_ts()
+        with conn:
+            conn.execute(
+                """
+                UPDATE tracked_topics
+                SET title=?,
+                    description=?,
+                    keywords_json=?,
+                    exclude_keywords_json=?,
+                    scope=?,
+                    active=?,
+                    updated_at=?
+                WHERE id=?
+                """,
+                (
+                    title,
+                    description,
+                    json.dumps(keywords, ensure_ascii=False),
+                    json.dumps(exclude_keywords, ensure_ascii=False),
+                    scope,
+                    1 if active else 0,
+                    ts,
+                    topic_id,
+                ),
+            )
+            topic = load_tracked_topic(conn, topic_id)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "topic": topic})
+
+
+@app.delete("/api/tracked-topics/<int:topic_id>")
+def api_tracked_topics_delete(topic_id: int):
+    conn = db_conn()
+    try:
+        existing = load_tracked_topic(conn, topic_id)
+        if not existing:
+            return jsonify({"ok": False, "error": "topic_not_found"}), 404
+        with conn:
+            conn.execute("DELETE FROM tracked_topic_items WHERE topic_id=?", (topic_id,))
+            conn.execute("DELETE FROM tracked_topics WHERE id=?", (topic_id,))
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "deleted_id": topic_id})
+
+
+@app.get("/api/tracked-topics/<int:topic_id>/items")
+def api_tracked_topic_items(topic_id: int):
+    conn = db_conn()
+    try:
+        topic = load_tracked_topic(conn, topic_id)
+        if not topic:
+            return jsonify({"ok": False, "error": "topic_not_found"}), 404
+        items = tracked_topic_timeline_items(conn, topic_id)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "topic": topic, "items": items, "total": len(items)})
+
+
+@app.post("/api/tracked-topics/<int:topic_id>/backfill")
+def api_tracked_topic_backfill(topic_id: int):
+    body = request.get_json(silent=True) or {}
+    try:
+        mode = tracked_backfill_mode_value(body.get("mode"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    conn = db_conn()
+    try:
+        topic = load_tracked_topic(conn, topic_id)
+        if not topic:
+            return jsonify({"ok": False, "error": "topic_not_found"}), 404
+        date_after = None if mode == "all_important" else datetime.now().strftime("%Y-%m-%d")
+        if mode == "recent_important":
+            date_after = (datetime.now().date().fromordinal(datetime.now().date().toordinal() - 179)).strftime("%Y-%m-%d")
+        candidate_rows = tracked_topic_candidate_rows(
+            conn,
+            scope="important",
+            date_after=date_after,
+        )
+        with conn:
+            matched = run_tracked_topic_match(conn, topic=topic, candidate_rows=candidate_rows)
+            topic = load_tracked_topic(conn, topic_id)
+            items = tracked_topic_timeline_items(conn, topic_id)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "topic": topic, "items": items, "matched_count": matched, "mode": mode})
+
+
+@app.post("/api/tracked-topics/<int:topic_id>/items")
+def api_tracked_topic_item_create(topic_id: int):
+    body = request.get_json(silent=True) or {}
+    item_id = str(body.get("item_id") or "").strip()
+    if not item_id:
+        return jsonify({"ok": False, "error": "missing_item_id"}), 400
+
+    conn = db_conn()
+    try:
+        topic = load_tracked_topic(conn, topic_id)
+        if not topic:
+            return jsonify({"ok": False, "error": "topic_not_found"}), 404
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        with conn:
+            upsert_tracked_topic_match(
+                conn,
+                topic_id=topic_id,
+                item_row=item,
+                match_method="manual",
+                score=0,
+                reason="手动加入",
+                manual_added_at=now_ts(),
+                clear_hidden=True,
+            )
+            conn.execute(
+                "UPDATE tracked_topics SET updated_at=? WHERE id=?",
+                (now_ts(), topic_id),
+            )
+            topic = load_tracked_topic(conn, topic_id)
+        item_row = tracked_topic_item_status(conn, topic_id, item_id)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "topic": topic, "item_id": item_id, "tracked_item": dict(item_row) if item_row else None})
+
+
+@app.patch("/api/tracked-topics/<int:topic_id>/items/<item_id>")
+def api_tracked_topic_item_update(topic_id: int, item_id: str):
+    body = request.get_json(silent=True) or {}
+    hidden = body.get("hidden")
+    if not isinstance(hidden, bool):
+        return jsonify({"ok": False, "error": "invalid_hidden"}), 400
+
+    conn = db_conn()
+    try:
+        topic = load_tracked_topic(conn, topic_id)
+        if not topic:
+            return jsonify({"ok": False, "error": "topic_not_found"}), 404
+        existing = tracked_topic_item_status(conn, topic_id, item_id)
+        if not existing:
+            return jsonify({"ok": False, "error": "tracked_item_not_found"}), 404
+        ts = now_ts()
+        with conn:
+            conn.execute(
+                """
+                UPDATE tracked_topic_items
+                SET hidden_at=?,
+                    updated_at=?
+                WHERE topic_id=? AND item_id=?
+                """,
+                (ts if hidden else None, ts, topic_id, item_id),
+            )
+            conn.execute("UPDATE tracked_topics SET updated_at=? WHERE id=?", (ts, topic_id))
+        tracked_item = tracked_topic_item_status(conn, topic_id, item_id)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "tracked_item": dict(tracked_item) if tracked_item else None})
+
+
 @app.get("/api/reminders")
 def api_reminders():
     status = (request.args.get("status") or "active").strip().lower()
@@ -3028,6 +3704,8 @@ def api_reindex():
     conn = db_conn()
     try:
         stats = reindex(conn, DAILY_NEWS_DIR, full=full)
+        tracked_incremental_matches = run_tracked_topics_incremental(conn)
+        conn.commit()
     finally:
         conn.close()
     return jsonify(
@@ -3037,6 +3715,7 @@ def api_reindex():
             "changed_files": stats.changed_files,
             "upserted": stats.upserted,
             "deleted_stale": stats.deleted_stale,
+            "tracked_incremental_matches": tracked_incremental_matches,
         }
     )
 
@@ -3145,6 +3824,7 @@ def api_news_detail(item_id: str):
         ai = None
         note_row = None
         market_tags: list[dict] = []
+        tracked_topic_choices: list[dict] = []
         reminders: list[dict] = []
         reminder_summary = {
             "active_total": 0,
@@ -3158,6 +3838,7 @@ def api_news_detail(item_id: str):
             (item_id,),
         ).fetchone()
         market_tag_choices = load_market_tag_definitions(conn, active_only=True)
+        tracked_topic_choices = load_tracked_topic_choices(conn)
         reminders = load_item_reminders(conn, item_id)
         reminder_summary = {
             "total": len(reminders),
@@ -3211,6 +3892,7 @@ def api_news_detail(item_id: str):
             "market_tags": market_tags,
             "has_market_tags": 1 if market_tags else 0,
             "market_tag_choices": market_tag_choices,
+            "tracked_topic_choices": tracked_topic_choices,
             "reminders": reminders,
             "reminder_summary": reminder_summary,
             "chat_providers": chat_provider_catalog(),

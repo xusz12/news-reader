@@ -6,7 +6,7 @@ let state = {
   readFilter: "unread", // all | unread
   feedReadFilter: "unread", // 仅新闻流记忆 all | unread
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
-  collection: "feed", // search | feed | favorites | reminders | important | read_later | notes | market_tags | trends
+  collection: "feed", // search | feed | favorites | reminders | important | read_later | notes | tracked | market_tags | trends
   total: 0,
   loading: false,
   hasMore: true,
@@ -14,10 +14,14 @@ let state = {
   selectedIdeaId: "",
   selectedReminderId: null,
   selectedReminderDraftId: null,
+  selectedTrackedTopicId: null,
   reminderFilter: "active", // active | done | all
   ideaFilter: "all", // all | article | trend
   itemsById: new Map(),
   reminderItems: [],
+  trackedTopics: [],
+  trackedTimelineItems: [],
+  trackedBackfillMode: "recent_important",
   reminderSummary: {
     total: 0,
     active_total: 0,
@@ -41,10 +45,12 @@ let state = {
   dateCounts: new Map(),
   lastNewsCollectionBeforeTrends: "feed",
   detailReturnToTrend: false,
+  detailReturnToTrackedTopicId: null,
   searchRange: "all",
   searchTime: "all",
   feedUnreadCursor: null,
   detailView: "detail",
+  trackedFormMode: "create",
   detailChatMessages: [],
   detailChatSessionId: "",
   detailChatModel: "",
@@ -75,6 +81,7 @@ const refreshBtn = document.getElementById("refreshBtn");
 const resumeAnchorBtn = document.getElementById("resumeAnchorBtn");
 const readFilterToggleBtn = document.getElementById("readFilterToggleBtn");
 const sortOrderBtn = document.getElementById("sortOrderBtn");
+const trackedCreateInlineBtn = document.getElementById("trackedCreateInlineBtn");
 const markAllReadBtn = document.getElementById("markAllReadBtn");
 const manageMarketTagsBtn = document.getElementById("manageMarketTagsBtn");
 
@@ -85,6 +92,7 @@ const navRemindersBtn = document.getElementById("navRemindersBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
+const navTrackedBtn = document.getElementById("navTrackedBtn");
 const navMarketTagsBtn = document.getElementById("navMarketTagsBtn");
 const navTrendsBtn = document.getElementById("navTrendsBtn");
 const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
@@ -128,6 +136,13 @@ const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 const workspace = document.getElementById("workspace");
 const trendsView = document.getElementById("trendsView");
 const trendsTable = document.getElementById("trendsTable");
+const trackedView = document.getElementById("trackedView");
+const trackedBackfillModeSelect = document.getElementById("trackedBackfillModeSelect");
+const trackedBackfillBtn = document.getElementById("trackedBackfillBtn");
+const trackedEditBtn = document.getElementById("trackedEditBtn");
+const trackedDeleteBtn = document.getElementById("trackedDeleteBtn");
+const trackedTimelineHint = document.getElementById("trackedTimelineHint");
+const trackedTimelineList = document.getElementById("trackedTimelineList");
 
 const detailPanel = document.getElementById("detailPanel");
 const detailEmpty = document.getElementById("detailEmpty");
@@ -170,6 +185,22 @@ const detailTagAdminBody = document.getElementById("detailTagAdminBody");
 const detailTagCreateInput = document.getElementById("detailTagCreateInput");
 const detailTagCreateBtn = document.getElementById("detailTagCreateBtn");
 const detailTagAdminList = document.getElementById("detailTagAdminList");
+const detailTrackedBody = document.getElementById("detailTrackedBody");
+const detailTrackedTitle = document.getElementById("detailTrackedTitle");
+const detailTrackedMeta = document.getElementById("detailTrackedMeta");
+const detailTrackedKeywords = document.getElementById("detailTrackedKeywords");
+const detailTrackedFormBody = document.getElementById("detailTrackedFormBody");
+const detailTrackedFormBackBtn = document.getElementById("detailTrackedFormBackBtn");
+const detailTrackedFormTitle = document.getElementById("detailTrackedFormTitle");
+const detailTrackedFormMeta = document.getElementById("detailTrackedFormMeta");
+const detailTrackedTitleInput = document.getElementById("detailTrackedTitleInput");
+const detailTrackedDescriptionInput = document.getElementById("detailTrackedDescriptionInput");
+const detailTrackedKeywordsInput = document.getElementById("detailTrackedKeywordsInput");
+const detailTrackedExcludeInput = document.getElementById("detailTrackedExcludeInput");
+const detailTrackedScopeSelect = document.getElementById("detailTrackedScopeSelect");
+const detailTrackedActiveInput = document.getElementById("detailTrackedActiveInput");
+const detailTrackedFormSaveBtn = document.getElementById("detailTrackedFormSaveBtn");
+const detailTrackedFormCancelBtn = document.getElementById("detailTrackedFormCancelBtn");
 const detailBody = document.getElementById("detailBody");
 const detailChatBody = document.getElementById("detailChatBody");
 const detailAskBtn = document.getElementById("detailAskBtn");
@@ -215,9 +246,11 @@ const detailNoteInput = document.getElementById("detailNoteInput");
 const detailNoteSaveBtn = document.getElementById("detailNoteSaveBtn");
 const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
 const detailReturnToTrendBtn = document.getElementById("detailReturnToTrendBtn");
+const detailReturnToTrackedBtn = document.getElementById("detailReturnToTrackedBtn");
 const detailBullishBtn = document.getElementById("detailBullishBtn");
 const detailBearishBtn = document.getElementById("detailBearishBtn");
 const detailReminderToggleBtn = document.getElementById("detailReminderToggleBtn");
+const detailTrackBtn = document.getElementById("detailTrackBtn");
 const detailFavoriteBtn = document.getElementById("detailFavoriteBtn");
 const detailInlineMarketTags = document.getElementById("detailInlineMarketTags");
 const detailMarketPicker = document.getElementById("detailMarketPicker");
@@ -234,6 +267,11 @@ const detailReminderCancelBtn = document.getElementById("detailReminderCancelBtn
 const detailReminderCard = document.getElementById("detailReminderCard");
 const detailReminderSummary = document.getElementById("detailReminderSummary");
 const detailReminderList = document.getElementById("detailReminderList");
+const detailTrackEditor = document.getElementById("detailTrackEditor");
+const detailTrackEditorMeta = document.getElementById("detailTrackEditorMeta");
+const detailTrackTopicSelect = document.getElementById("detailTrackTopicSelect");
+const detailTrackSaveBtn = document.getElementById("detailTrackSaveBtn");
+const detailTrackCancelBtn = document.getElementById("detailTrackCancelBtn");
 
 let readObserver = null;
 let loadObserver = null;
@@ -459,7 +497,14 @@ async function openErrorStatsPanel() {
 
 function showTrendsView(show) {
   trendsView.classList.toggle("hidden", !show);
+  if (trackedView) trackedView.classList.toggle("hidden", true);
   newsList.classList.toggle("hidden", !!show);
+}
+
+function showTrackedView(show) {
+  if (trackedView) trackedView.classList.toggle("hidden", true);
+  trendsView.classList.toggle("hidden", true);
+  newsList.classList.toggle("hidden", false);
 }
 
 function updateWorkspaceLayout() {
@@ -471,7 +516,7 @@ function updateWorkspaceLayout() {
 }
 
 function updateSourceFilterVisibility() {
-  const visible = state.collection !== "trends" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes";
+  const visible = state.collection !== "trends" && state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes";
   document.querySelectorAll(".sources-title, #sourceFilters").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
@@ -1652,6 +1697,11 @@ function updateBatchActionButton() {
   }
 }
 
+function updateTrackedCreateButton() {
+  if (!trackedCreateInlineBtn) return;
+  trackedCreateInlineBtn.classList.toggle("hidden", state.collection !== "tracked");
+}
+
 function updateCollectionButtons() {
   if (navSearchBtn) navSearchBtn.classList.toggle("active", state.collection === "search");
   navFeedBtn.classList.toggle("active", state.collection === "feed");
@@ -1660,6 +1710,7 @@ function updateCollectionButtons() {
   navImportantBtn.classList.toggle("active", state.collection === "important");
   navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
   if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
+  if (navTrackedBtn) navTrackedBtn.classList.toggle("active", state.collection === "tracked");
   if (navMarketTagsBtn) navMarketTagsBtn.classList.toggle("active", state.collection === "market_tags");
   if (navTrendsBtn) navTrendsBtn.classList.toggle("active", state.collection === "trends");
   if (mobileCollectionTriggerBtn) {
@@ -1672,6 +1723,7 @@ function updateCollectionButtons() {
       important: "重要",
       read_later: "稍后",
       notes: "想法",
+      tracked: "跟踪",
       market_tags: "板块",
       trends: "趋势",
     };
@@ -1684,7 +1736,7 @@ function updateCollectionButtons() {
     mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
   }
   if (mobileTabFilterBtn) {
-    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search" || state.collection === "reminders" || state.collection === "notes");
+    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search" || state.collection === "reminders" || state.collection === "notes" || state.collection === "tracked");
   }
   if (manageMarketTagsBtn) {
     manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends");
@@ -1697,6 +1749,7 @@ function updateCollectionButtons() {
   }
   updateIdeaFilterBar();
   updateReminderFilterBar();
+  updateTrackedCreateButton();
 }
 
 function updateMobileFilterCollectionText() {
@@ -1709,6 +1762,7 @@ function updateMobileFilterCollectionText() {
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
+    tracked: "跟踪",
     market_tags: "板块",
     trends: "趋势",
   };
@@ -1738,6 +1792,7 @@ function renderMobileCollectionOptions() {
     { key: "reminders", label: reminderNavLabel() },
     { key: "favorites", label: "收藏" },
     { key: "notes", label: "想法" },
+    { key: "tracked", label: "跟踪" },
     { key: "market_tags", label: "板块" },
   ];
   for (const option of options) {
@@ -1763,7 +1818,7 @@ function openMobileCollectionSheet() {
 }
 
 function openMobileFilterSheet() {
-  if (!mobileFilterSheet || state.collection === "search" || state.collection === "reminders" || state.collection === "notes") return;
+  if (!mobileFilterSheet || state.collection === "search" || state.collection === "reminders" || state.collection === "notes" || state.collection === "tracked") return;
   closeMobileCollectionSheet();
   updateMobileFilterCollectionText();
   renderSourceFilters(latestSourceOptions);
@@ -1825,6 +1880,232 @@ function renderSourceFilters(options) {
   updateMobileFilterCollectionText();
 }
 
+function selectedTrackedTopic() {
+  return state.trackedTopics.find((topic) => String(topic.id) === String(state.selectedTrackedTopicId)) || null;
+}
+
+function trackedScopeLabel(topic) {
+  return topic?.scope === "all" ? "全部新闻增量" : "重要新闻增量";
+}
+
+function trackedKeywordSummary(topic) {
+  const include = Array.isArray(topic?.keywords) ? topic.keywords.filter(Boolean) : [];
+  const exclude = Array.isArray(topic?.exclude_keywords) ? topic.exclude_keywords.filter(Boolean) : [];
+  const includeText = include.length ? `包含：${include.join(" / ")}` : "包含：未设置";
+  return exclude.length ? `${includeText} · 排除：${exclude.join(" / ")}` : includeText;
+}
+
+function trackedDescriptionSummary(topic) {
+  const description = String(topic?.description || "").trim();
+  if (description) return description;
+  const include = Array.isArray(topic?.keywords) ? topic.keywords.filter(Boolean) : [];
+  return include.length ? `关键词：${include.join(" / ")}` : "还没有摘要或关键词说明";
+}
+
+function renderTrackedTopicsList() {
+  newsList.querySelectorAll(".news-item, .date-section").forEach((node) => node.remove());
+  lastRenderedDateKey = null;
+  state.trackedTopics.forEach((topic) => {
+    const row = document.createElement("li");
+    row.className = "news-item tracked-list-item";
+    row.dataset.topicId = String(topic.id);
+    if (String(topic.id) === String(state.selectedTrackedTopicId)) row.classList.add("selected");
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "row-top";
+
+    const title = document.createElement("div");
+    title.className = "row-title";
+    title.textContent = topic.title || "未命名主题";
+    titleRow.appendChild(title);
+
+    const badge = document.createElement("span");
+    badge.className = `tracked-topic-badge ${Number(topic.active || 0) === 1 ? "active" : "muted"}`;
+    badge.textContent = Number(topic.active || 0) === 1 ? "启用中" : "已停用";
+    titleRow.appendChild(badge);
+    row.appendChild(titleRow);
+
+    const summary = document.createElement("div");
+    summary.className = "row-summary";
+    summary.textContent = trackedDescriptionSummary(topic);
+    row.appendChild(summary);
+
+    const metaLine = document.createElement("div");
+    metaLine.className = "row-meta";
+    const updatedAt = topic.updated_at ? String(topic.updated_at).replace("T", " ").slice(0, 16) : "未知";
+    metaLine.textContent = `${trackedScopeLabel(topic)} · 命中 ${Number(topic.visible_item_count || 0)} · 更新 ${updatedAt}`;
+    row.appendChild(metaLine);
+
+    row.addEventListener("click", async () => {
+      await openTrackedTopicDetailById(topic.id);
+    });
+    if (listHint && listHint.parentElement === newsList) {
+      newsList.insertBefore(row, listHint);
+    } else {
+      newsList.appendChild(row);
+    }
+  });
+}
+
+function buildTrackedTimelineRow(item) {
+  const row = document.createElement("div");
+  row.className = "tracked-timeline-row";
+
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "tracked-timeline-main";
+
+  const title = document.createElement("div");
+  title.className = "tracked-timeline-title";
+  title.textContent = item.title || "未命名新闻";
+  main.appendChild(title);
+
+  const metaLine = document.createElement("div");
+  metaLine.className = "tracked-timeline-meta";
+  const reason = item.tracked_reason || (item.tracked_match_method === "manual" ? "手动加入" : "关键词命中");
+  metaLine.textContent = `${item.published_at || item.date_key || ""} · ${item.source || ""} · ${reason}`;
+  main.appendChild(metaLine);
+
+  if (item.summary) {
+    const summary = document.createElement("div");
+    summary.className = "tracked-timeline-summary";
+    summary.textContent = item.summary;
+    main.appendChild(summary);
+  }
+
+  main.addEventListener("click", async () => {
+    await openItemDetail(item, { fromTrackedTopicId: state.selectedTrackedTopicId });
+  });
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "detail-retry-btn";
+  removeBtn.textContent = "移除";
+  removeBtn.addEventListener("click", async () => {
+    const topic = selectedTrackedTopic();
+    if (!topic) return;
+    const ok = window.confirm(`从“${topic.title}”移除这条新闻？`);
+    if (!ok) return;
+    await setTrackedTopicItemHidden(topic.id, item.id, true);
+    await loadTrackedTopicTimeline(topic.id);
+    setHint("已从当前跟踪主题移除");
+  });
+
+  row.appendChild(main);
+  row.appendChild(removeBtn);
+  return row;
+}
+
+function renderTrackedTopicEmpty(message = "选择一个跟踪主题，右栏会展示详情、回扫和时间线。") {
+  closeTagAdminView();
+  clearTrendIdeaDetailState();
+  closeTrendComposerView();
+  closeTrendNoteEditor();
+  closeReminderEditor();
+  closeDetailTrackEditor();
+  if (detailTrendBody) detailTrendBody.classList.add("hidden");
+  if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+  if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  if (detailBody) detailBody.classList.add("hidden");
+  if (detailChatBody) detailChatBody.classList.add("hidden");
+  detailEmpty.classList.remove("hidden");
+  detailEmpty.textContent = message;
+  updateWorkspaceLayout();
+}
+
+function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
+  if (!detailTrackedBody || !trackedTimelineList) return;
+  if (!topic) {
+    renderTrackedTopicEmpty();
+    return;
+  }
+
+  closeTagAdminView();
+  clearTrendIdeaDetailState();
+  closeTrendComposerView();
+  closeTrendNoteEditor();
+  closeReminderEditor();
+  closeDetailTrackEditor();
+  detailEmpty.classList.add("hidden");
+  if (detailTrendBody) detailTrendBody.classList.add("hidden");
+  if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  if (detailBody) detailBody.classList.add("hidden");
+  if (detailChatBody) detailChatBody.classList.add("hidden");
+  detailTrackedBody.classList.remove("hidden");
+  detailTrackedTitle.textContent = topic.title || "未命名主题";
+  detailTrackedMeta.textContent = `${trackedScopeLabel(topic)} · 可见 ${Number(topic.visible_item_count || 0)} · 隐藏 ${Number(topic.hidden_item_count || 0)}`;
+  detailTrackedKeywords.textContent = `${String(topic.description || "").trim() ? `${String(topic.description).trim()} · ` : ""}${trackedKeywordSummary(topic)}`;
+  if (trackedBackfillModeSelect) trackedBackfillModeSelect.value = state.trackedBackfillMode;
+  trackedTimelineHint.textContent = items.length
+    ? `时间线按新闻发布时间旧→新，共 ${items.length} 条`
+    : "当前主题还没有命中新闻。可先执行历史回扫，或从新闻详情里手动加入。";
+  trackedTimelineList.innerHTML = "";
+  items.forEach((item) => trackedTimelineList.appendChild(buildTrackedTimelineRow(item)));
+  updateWorkspaceLayout();
+  openDetailOnMobile();
+}
+
+async function loadTrackedTopicTimeline(topicId) {
+  const data = await fetchTrackedTopicItems(topicId);
+  state.trackedTimelineItems = Array.isArray(data.items) ? data.items : [];
+  if (data.topic) {
+    state.trackedTopics = state.trackedTopics.map((topic) => String(topic.id) === String(data.topic.id) ? data.topic : topic);
+  }
+  renderTrackedTopicsList();
+  renderTrackedTopicDetail(data.topic, state.trackedTimelineItems);
+  renderMeta();
+}
+
+function fillTrackedTopicForm(topic = null) {
+  if (!detailTrackedTitleInput) return;
+  detailTrackedTitleInput.value = topic?.title || "";
+  detailTrackedDescriptionInput.value = topic?.description || "";
+  detailTrackedKeywordsInput.value = Array.isArray(topic?.keywords) ? topic.keywords.join(", ") : "";
+  detailTrackedExcludeInput.value = Array.isArray(topic?.exclude_keywords) ? topic.exclude_keywords.join(", ") : "";
+  detailTrackedScopeSelect.value = topic?.scope || "important";
+  detailTrackedActiveInput.checked = Number(topic?.active ?? 1) === 1;
+}
+
+function openTrackedTopicForm(mode, topic = null) {
+  state.trackedFormMode = mode;
+  closeTagAdminView();
+  clearTrendIdeaDetailState();
+  closeTrendComposerView();
+  closeTrendNoteEditor();
+  closeReminderEditor();
+  closeDetailTrackEditor();
+  detailEmpty.classList.add("hidden");
+  if (detailTrendBody) detailTrendBody.classList.add("hidden");
+  if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+  if (detailBody) detailBody.classList.add("hidden");
+  if (detailChatBody) detailChatBody.classList.add("hidden");
+  detailTrackedFormBody.classList.remove("hidden");
+  detailTrackedFormTitle.textContent = mode === "edit" ? "编辑跟踪主题" : "新建跟踪主题";
+  detailTrackedFormMeta.textContent = mode === "edit"
+    ? "修改主题摘要、关键词、增量范围和启用状态。"
+    : "创建后即可在右栏查看时间线，并可从新闻详情手动加入。";
+  detailTrackedFormBackBtn.classList.toggle("hidden", mode !== "edit" || !topic);
+  fillTrackedTopicForm(topic);
+  updateWorkspaceLayout();
+  openDetailOnMobile();
+}
+
+function trackedFormPayload() {
+  return {
+    title: detailTrackedTitleInput.value.trim(),
+    description: detailTrackedDescriptionInput.value.trim(),
+    keywords: detailTrackedKeywordsInput.value.trim(),
+    exclude_keywords: detailTrackedExcludeInput.value.trim(),
+    scope: detailTrackedScopeSelect.value,
+    active: detailTrackedActiveInput.checked,
+  };
+}
+
+async function openTrackedTopicDetailById(topicId) {
+  state.selectedTrackedTopicId = topicId;
+  await loadTrackedTopicTimeline(topicId);
+}
+
 async function fetchSources() {
   const params = new URLSearchParams({
     q: "",
@@ -1868,6 +2149,7 @@ function renderMeta() {
     important: "重要新闻",
     read_later: "稍后再看",
     notes: "想法",
+    tracked: "跟踪",
     market_tags: "板块",
     trends: "趋势",
   };
@@ -1889,6 +2171,14 @@ function renderMeta() {
     };
     meta.textContent = `想法 · ${ideaNames[state.ideaFilter] || "全部"} · 共 ${state.total} 条`;
     pageInfo.textContent = `${state.page} / ${state.pages}`;
+    return;
+  }
+  if (state.collection === "tracked") {
+    const topic = selectedTrackedTopic();
+    meta.textContent = topic
+      ? `跟踪 · ${topic.title} · 共 ${state.trackedTimelineItems.length} 条`
+      : `跟踪 · ${state.trackedTopics.length} 个主题`;
+    pageInfo.textContent = "- / -";
     return;
   }
   const readNames = {
@@ -2956,7 +3246,11 @@ function handleDetailTouchEnd() {
 }
 
 function setDetailNoteEditorOpen(open) {
-  if (open) closeMarketPicker();
+  if (open) {
+    closeMarketPicker();
+    closeReminderEditor();
+    closeDetailTrackEditor();
+  }
   detailNoteEditor.classList.toggle("hidden", !open);
 }
 
@@ -2964,9 +3258,16 @@ function canReturnToTrendDetail() {
   return !!(state.detailReturnToTrend && state.trendSelection?.detailPayload);
 }
 
+function canReturnToTrackedTopic() {
+  return !!state.detailReturnToTrackedTopicId;
+}
+
 function syncDetailReturnButton() {
   if (!detailReturnToTrendBtn) return;
   detailReturnToTrendBtn.classList.toggle("hidden", !canReturnToTrendDetail());
+  if (detailReturnToTrackedBtn) {
+    detailReturnToTrackedBtn.classList.toggle("hidden", !canReturnToTrackedTopic());
+  }
 }
 
 function restoreTrendDetailFromDetail() {
@@ -2978,12 +3279,22 @@ function restoreTrendDetailFromDetail() {
   openDetailOnMobile();
 }
 
-function openItemDetail(item, { fromTrend = false } = {}) {
+async function restoreTrackedTopicFromDetail() {
+  if (!canReturnToTrackedTopic()) return;
+  const topicId = state.detailReturnToTrackedTopicId;
+  state.selectedId = null;
+  state.detailReturnToTrackedTopicId = null;
+  stopDetailPolling();
+  await openTrackedTopicDetailById(topicId);
+}
+
+async function openItemDetail(item, { fromTrend = false, fromTrackedTopicId = null } = {}) {
   if (!item) return;
   if (state.selectedId !== item.id) resetDetailChatState();
   state.itemsById.set(item.id, item);
   state.selectedId = item.id;
   state.detailReturnToTrend = fromTrend;
+  state.detailReturnToTrackedTopicId = fromTrackedTopicId || null;
   renderDetail(state.itemsById.get(item.id) || item);
   if (!item.snapshotOnly) {
     loadDetail(item.id);
@@ -3488,6 +3799,7 @@ function openReminderEditor(item, reminder = null) {
   if (!detailReminderEditor || !item) return;
   setDetailNoteEditorOpen(false);
   closeMarketPicker();
+  closeDetailTrackEditor();
   state.selectedReminderDraftId = reminder?.id || null;
   if (detailReminderEditorTitle) {
     detailReminderEditorTitle.textContent = reminder ? "编辑提醒" : "添加提醒";
@@ -3593,6 +3905,63 @@ function refreshDetailReminderUI(item) {
     detailReminderList.appendChild(card);
   });
   detailReminderCard.classList.remove("hidden");
+}
+
+function closeDetailTrackEditor() {
+  if (detailTrackEditor) detailTrackEditor.classList.add("hidden");
+  if (detailTrackTopicSelect) detailTrackTopicSelect.innerHTML = "";
+  if (detailTrackEditorMeta) {
+    detailTrackEditorMeta.textContent = "选择现有主题，把当前新闻加入时间线。";
+  }
+}
+
+async function currentDetailTrackedTopicChoices(item) {
+  if (!item || item.snapshotOnly || !item.id) return [];
+  const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
+  if (Array.isArray(cached?.tracked_topic_choices)) return cached.tracked_topic_choices;
+  const payload = await fetchDetail(item.id);
+  if (!payload?.ok) return [];
+  if (item.url) {
+    const nextCached = { ...(state.detailCacheByUrl.get(item.url) || {}) };
+    nextCached.tracked_topic_choices = Array.isArray(payload.tracked_topic_choices) ? payload.tracked_topic_choices : [];
+    state.detailCacheByUrl.set(item.url, nextCached);
+  }
+  return Array.isArray(payload.tracked_topic_choices) ? payload.tracked_topic_choices : [];
+}
+
+async function openDetailTrackEditor(item) {
+  if (!detailTrackEditor || !detailTrackTopicSelect || !item) return;
+  setDetailNoteEditorOpen(false);
+  closeMarketPicker();
+  closeReminderEditor();
+  const choices = await currentDetailTrackedTopicChoices(item);
+  detailTrackTopicSelect.innerHTML = "";
+  if (!choices.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用跟踪主题";
+    detailTrackTopicSelect.appendChild(option);
+    detailTrackTopicSelect.disabled = true;
+    detailTrackSaveBtn.disabled = true;
+    if (detailTrackEditorMeta) {
+      detailTrackEditorMeta.textContent = "还没有可加入的主题。先进入“跟踪”集合，点击“新建跟踪”创建一个。";
+    }
+  } else {
+    detailTrackTopicSelect.disabled = false;
+    detailTrackSaveBtn.disabled = false;
+    choices.forEach((topic) => {
+      const option = document.createElement("option");
+      option.value = String(topic.id);
+      option.textContent = topic.title || `主题 ${topic.id}`;
+      detailTrackTopicSelect.appendChild(option);
+    });
+    const selected = choices.find((topic) => String(topic.id) === String(state.selectedTrackedTopicId));
+    if (selected) detailTrackTopicSelect.value = String(selected.id);
+    if (detailTrackEditorMeta) {
+      detailTrackEditorMeta.textContent = "选择现有主题，把当前新闻加入时间线。";
+    }
+  }
+  detailTrackEditor.classList.remove("hidden");
 }
 
 async function saveReminderDraft(item, reminderId = null, overridePayload = null) {
@@ -3708,12 +4077,16 @@ function renderDetail(item) {
   if (!item) {
     resetDetailChatState({ keepProvider: true });
     state.detailReturnToTrend = false;
+    state.detailReturnToTrackedTopicId = null;
     stopDetailPolling();
     closeMarketPicker();
     closeReminderEditor();
+    closeDetailTrackEditor();
     if (detailReminderCard) detailReminderCard.classList.add("hidden");
     syncDetailReturnButton();
     detailTrendBody.classList.add("hidden");
+    if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+    if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
     detailBody.classList.add("hidden");
     detailChatBody.classList.add("hidden");
     detailEmpty.classList.remove("hidden");
@@ -3722,6 +4095,8 @@ function renderDetail(item) {
     return;
   }
   detailTrendBody.classList.add("hidden");
+  if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+  if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   detailEmpty.classList.add("hidden");
   detailBody.classList.remove("hidden");
   syncDetailReturnButton();
@@ -3783,6 +4158,7 @@ function renderDetail(item) {
   setDetailNoteEditorOpen(false);
   detailNoteInput.value = "";
   closeReminderEditor();
+  closeDetailTrackEditor();
 
   if (item.snapshotOnly) {
     statusEl.textContent = "原新闻已不在当前索引中，仅保留提醒快照。";
@@ -3922,12 +4298,17 @@ function renderDetail(item) {
     tone: Number(item.due_reminder_count || 0) > 0 ? "danger" : (Number(item.active_reminder_count || 0) > 0 ? "warning" : "default"),
     label: Number(item.active_reminder_count || 0) > 0 ? "查看或新增提醒" : "添加提醒",
   });
+  applyIcon(detailTrackBtn, "crosshair", {
+    label: "加入跟踪主题",
+    tone: "default",
+  });
   detailNoteToggleBtn.disabled = snapshotOnly || !item.url;
   detailBullishBtn.disabled = snapshotOnly;
   detailBearishBtn.disabled = snapshotOnly;
   detailFavoriteBtn.disabled = snapshotOnly;
   importantBtn.disabled = snapshotOnly;
   detailReminderToggleBtn.disabled = snapshotOnly;
+  detailTrackBtn.disabled = snapshotOnly || !item.id;
   refreshDetailNoteUI(item);
   refreshDetailMarketTagsUI(item);
   refreshDetailReminderUI(item);
@@ -4389,6 +4770,84 @@ async function fetchIdeasPage(page) {
   return res.json();
 }
 
+async function fetchTrackedTopics() {
+  const res = await fetch("/api/tracked-topics");
+  if (!res.ok) throw new Error("tracked_topics_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "tracked_topics_fetch_failed");
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+async function fetchTrackedTopicItems(topicId) {
+  const res = await fetch(`/api/tracked-topics/${encodeURIComponent(topicId)}/items`);
+  if (!res.ok) throw new Error("tracked_topic_items_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "tracked_topic_items_fetch_failed");
+  return data;
+}
+
+async function createTrackedTopic(payload) {
+  const res = await fetch("/api/tracked-topics", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_topic_create_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "tracked_topic_create_failed");
+  return data;
+}
+
+async function updateTrackedTopic(topicId, payload) {
+  const res = await fetch(`/api/tracked-topics/${encodeURIComponent(topicId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_topic_update_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "tracked_topic_update_failed");
+  return data;
+}
+
+async function deleteTrackedTopic(topicId) {
+  const res = await fetch(`/api/tracked-topics/${encodeURIComponent(topicId)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_topic_delete_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "tracked_topic_delete_failed");
+  return data;
+}
+
+async function backfillTrackedTopic(topicId, mode) {
+  const res = await fetch(`/api/tracked-topics/${encodeURIComponent(topicId)}/backfill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_topic_backfill_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "tracked_topic_backfill_failed");
+  return data;
+}
+
+async function addItemToTrackedTopic(topicId, itemId) {
+  const res = await fetch(`/api/tracked-topics/${encodeURIComponent(topicId)}/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item_id: itemId }),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_topic_item_create_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "tracked_topic_item_create_failed");
+  return data;
+}
+
+async function setTrackedTopicItemHidden(topicId, itemId, hidden) {
+  const res = await fetch(`/api/tracked-topics/${encodeURIComponent(topicId)}/items/${encodeURIComponent(itemId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hidden }),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_topic_item_update_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "tracked_topic_item_update_failed");
+  return data;
+}
+
 async function fetchSearchPage(page) {
   const params = new URLSearchParams({
     page: String(page),
@@ -4417,6 +4876,7 @@ function resetList() {
   state.selectedReminderId = null;
   state.selectedReminderDraftId = null;
   state.reminderItems = [];
+  state.trackedTimelineItems = [];
   stopDetailPolling();
   stopRowStatusPolling();
   clearFeedEndAutoReadTimer();
@@ -4433,6 +4893,7 @@ function resetList() {
   state.feedUnreadCursor = null;
   resetDetailChatState();
   showTrendsView(false);
+  showTrackedView(false);
   syncSearchPageControls();
   closeDetailOnMobile();
   renderDetail(null);
@@ -4536,6 +4997,34 @@ async function loadFirstPage() {
       renderTrendDetail(null);
       renderMeta();
       setHint(state.trendRows.length ? "点击单元格查看趋势明细" : "暂无板块趋势数据");
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      stopRowStatusPolling();
+      return;
+    }
+
+    if (state.collection === "tracked") {
+      state.trackedTopics = await fetchTrackedTopics();
+      if (state.selectedTrackedTopicId && !state.trackedTopics.some((topic) => String(topic.id) === String(state.selectedTrackedTopicId))) {
+        state.selectedTrackedTopicId = null;
+      }
+      state.total = state.trackedTopics.length;
+      state.pages = 1;
+      state.page = 1;
+      state.hasMore = false;
+      state.dateCounts = new Map();
+      showTrackedView(true);
+      renderTrackedTopicsList();
+      if (state.selectedTrackedTopicId) {
+        await loadTrackedTopicTimeline(state.selectedTrackedTopicId);
+        setHint(state.trackedTimelineItems.length ? "中列仅保留主题列表；右栏展示当前主题时间线。" : "当前主题还没有命中新闻，可在右栏执行历史回扫。");
+      } else {
+        renderTrackedTopicEmpty(state.trackedTopics.length ? "选择一个跟踪主题，右栏会显示详情与时间线。" : "还没有跟踪主题，点击“新建跟踪”开始。");
+        setHint(state.trackedTopics.length ? "点击中列主题打开右栏详情。" : "还没有跟踪主题，点击“新建跟踪”开始。");
+      }
+      renderMeta();
       if (readObserver) {
         readObserver.disconnect();
         readObserver = null;
@@ -4853,6 +5342,11 @@ if (navNotesBtn) {
     await switchCollection("notes");
   });
 }
+if (navTrackedBtn) {
+  navTrackedBtn.addEventListener("click", async () => {
+    await switchCollection("tracked");
+  });
+}
 if (navMarketTagsBtn) {
   navMarketTagsBtn.addEventListener("click", async () => {
     await switchCollection("market_tags");
@@ -4884,6 +5378,57 @@ if (mobileTabFilterBtn) {
 if (mobileTrendsTabBtn) {
   mobileTrendsTabBtn.addEventListener("click", async () => {
     await switchCollection("trends");
+  });
+}
+
+if (trackedCreateInlineBtn) {
+  trackedCreateInlineBtn.addEventListener("click", () => {
+    openTrackedTopicForm("create");
+  });
+}
+
+if (trackedEditBtn) {
+  trackedEditBtn.addEventListener("click", () => {
+    const topic = selectedTrackedTopic();
+    if (!topic) return;
+    openTrackedTopicForm("edit", topic);
+  });
+}
+
+if (trackedDeleteBtn) {
+  trackedDeleteBtn.addEventListener("click", async () => {
+    const topic = selectedTrackedTopic();
+    if (!topic) return;
+    const ok = window.confirm(`删除跟踪主题“${topic.title}”？这会清理该主题下的全部关系数据。`);
+    if (!ok) return;
+    await deleteTrackedTopic(topic.id);
+    state.trackedTopics = await fetchTrackedTopics();
+    state.selectedTrackedTopicId = null;
+    state.trackedTimelineItems = [];
+    renderTrackedTopicsList();
+    renderTrackedTopicEmpty(state.trackedTopics.length ? "主题已删除。请选择其他主题。" : "跟踪主题已删除，点击“新建跟踪”开始新的主题。");
+    renderMeta();
+    setHint("跟踪主题已删除");
+  });
+}
+
+if (trackedBackfillModeSelect) {
+  trackedBackfillModeSelect.addEventListener("change", () => {
+    state.trackedBackfillMode = trackedBackfillModeSelect.value;
+  });
+}
+
+if (trackedBackfillBtn) {
+  trackedBackfillBtn.addEventListener("click", async () => {
+    const topic = selectedTrackedTopic();
+    if (!topic) return;
+    const data = await backfillTrackedTopic(topic.id, state.trackedBackfillMode);
+    state.trackedTopics = await fetchTrackedTopics();
+    state.trackedTimelineItems = Array.isArray(data.items) ? data.items : [];
+    renderTrackedTopicsList();
+    renderTrackedTopicDetail(data.topic || selectedTrackedTopic(), state.trackedTimelineItems);
+    renderMeta();
+    setHint(data.matched_count > 0 ? `历史回扫完成，新增 ${data.matched_count} 条命中` : "历史回扫完成，没有新增命中");
   });
 }
 
@@ -5022,6 +5567,7 @@ markAllReadBtn.addEventListener("click", async () => {
     state.collection === "reminders" ||
     state.collection === "important" ||
     state.collection === "notes" ||
+    state.collection === "tracked" ||
     state.collection === "market_tags" ||
     state.collection === "trends"
   ) return;
@@ -5077,11 +5623,20 @@ detailCloseBtn.addEventListener("click", () => {
     restoreTrendDetailFromDetail();
     return;
   }
+  if (canReturnToTrackedTopic()) {
+    restoreTrackedTopicFromDetail().catch(() => {});
+    return;
+  }
   closeDetailOnMobile();
   stopDetailPolling();
 });
 if (detailReturnToTrendBtn) {
   detailReturnToTrendBtn.addEventListener("click", restoreTrendDetailFromDetail);
+}
+if (detailReturnToTrackedBtn) {
+  detailReturnToTrackedBtn.addEventListener("click", () => {
+    restoreTrackedTopicFromDetail().catch(() => {});
+  });
 }
 if (errorStatsBtn) {
   errorStatsBtn.addEventListener("click", async (event) => {
@@ -5147,6 +5702,19 @@ if (detailReminderToggleBtn) {
   });
 }
 
+if (detailTrackBtn) {
+  detailTrackBtn.addEventListener("click", async () => {
+    if (!state.selectedId) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (!item || item.snapshotOnly) return;
+    if (!detailTrackEditor.classList.contains("hidden")) {
+      closeDetailTrackEditor();
+      return;
+    }
+    await openDetailTrackEditor(item);
+  });
+}
+
 if (detailReminderSaveBtn) {
   detailReminderSaveBtn.addEventListener("click", async () => {
     if (!state.selectedId) return;
@@ -5168,6 +5736,84 @@ if (detailReminderDeleteBtn) {
 
 if (detailReminderCancelBtn) {
   detailReminderCancelBtn.addEventListener("click", closeReminderEditor);
+}
+
+if (detailTrackSaveBtn) {
+  detailTrackSaveBtn.addEventListener("click", async () => {
+    if (!state.selectedId) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (!item || !detailTrackTopicSelect?.value) return;
+    const topicId = Number(detailTrackTopicSelect.value);
+    await addItemToTrackedTopic(topicId, item.id);
+    closeDetailTrackEditor();
+    state.trackedTopics = await fetchTrackedTopics();
+    if (state.collection === "tracked" && String(state.selectedTrackedTopicId) === String(topicId)) {
+      await loadTrackedTopicTimeline(topicId);
+    } else if (state.collection === "tracked") {
+      renderTrackedTopicsList();
+      renderMeta();
+    }
+    const topic = state.trackedTopics.find((row) => String(row.id) === String(topicId));
+    setHint(`已加入跟踪主题：${topic?.title || topicId}`);
+  });
+}
+
+if (detailTrackCancelBtn) {
+  detailTrackCancelBtn.addEventListener("click", closeDetailTrackEditor);
+}
+
+if (detailTrackedFormBackBtn) {
+  detailTrackedFormBackBtn.addEventListener("click", async () => {
+    const topic = selectedTrackedTopic();
+    if (!topic) {
+      renderTrackedTopicEmpty();
+      return;
+    }
+    await openTrackedTopicDetailById(topic.id);
+  });
+}
+
+if (detailTrackedFormCancelBtn) {
+  detailTrackedFormCancelBtn.addEventListener("click", async () => {
+    const topic = selectedTrackedTopic();
+    if (topic) {
+      await openTrackedTopicDetailById(topic.id);
+      return;
+    }
+    renderTrackedTopicEmpty(state.trackedTopics.length ? "创建已取消。选择一个主题继续查看。" : "创建已取消。点击“新建跟踪”重新开始。");
+  });
+}
+
+if (detailTrackedFormSaveBtn) {
+  detailTrackedFormSaveBtn.addEventListener("click", async () => {
+    const payload = trackedFormPayload();
+    if (!payload.title) {
+      setHint("请先填写跟踪主题名称");
+      detailTrackedTitleInput?.focus();
+      return;
+    }
+    detailTrackedFormSaveBtn.disabled = true;
+    try {
+      let topicId = state.selectedTrackedTopicId;
+      if (state.trackedFormMode === "edit" && topicId) {
+        await updateTrackedTopic(topicId, payload);
+      } else {
+        const result = await createTrackedTopic(payload);
+        topicId = result.topic?.id || topicId;
+      }
+      state.trackedTopics = await fetchTrackedTopics();
+      state.selectedTrackedTopicId = topicId || null;
+      renderTrackedTopicsList();
+      if (state.selectedTrackedTopicId) {
+        await loadTrackedTopicTimeline(state.selectedTrackedTopicId);
+      } else {
+        renderTrackedTopicEmpty();
+      }
+      setHint(state.trackedFormMode === "edit" ? "跟踪主题已更新" : "跟踪主题已创建");
+    } finally {
+      detailTrackedFormSaveBtn.disabled = false;
+    }
+  });
 }
 
 if (detailTagCreateBtn) {

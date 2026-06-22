@@ -160,3 +160,40 @@ ON news_reminders(status, remind_at);
 
 CREATE INDEX IF NOT EXISTS idx_news_reminders_item_id
 ON news_reminders(item_id);
+
+CREATE TABLE IF NOT EXISTS tracked_topics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  keywords_json TEXT NOT NULL DEFAULT '[]',
+  exclude_keywords_json TEXT NOT NULL DEFAULT '[]',
+  scope TEXT NOT NULL DEFAULT 'important',
+  active INTEGER NOT NULL DEFAULT 1,
+  last_incremental_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_topics_active_updated_at
+ON tracked_topics(active, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS tracked_topic_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  topic_id INTEGER NOT NULL,
+  item_id TEXT NOT NULL,
+  item_url TEXT,
+  match_method TEXT NOT NULL DEFAULT 'keyword',
+  score INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  hidden_at TEXT,
+  manual_added_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(topic_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_topic_items_topic_hidden
+ON tracked_topic_items(topic_id, hidden_at, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_topic_items_item_id
+ON tracked_topic_items(item_id);
