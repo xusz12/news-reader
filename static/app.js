@@ -1988,6 +1988,13 @@ function buildTrackedTimelineRow(item) {
   const title = document.createElement("div");
   title.className = "tracked-timeline-title";
   title.textContent = item.title || "未命名新闻";
+  if (Number(item.detail_ready || 0) === 1) {
+    const badge = document.createElement("span");
+    badge.className = "tracked-detail-badge";
+    badge.textContent = "正文";
+    title.appendChild(document.createTextNode(" "));
+    title.appendChild(badge);
+  }
   main.appendChild(title);
 
   const metaLine = document.createElement("div");
@@ -2119,7 +2126,16 @@ function buildTrackedTimeflowRow(day) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "tracked-timeflow-item";
-    button.textContent = `${item.published_at || ""} · ${item.title || "未命名新闻"}`;
+    const itemTitle = document.createElement("span");
+    itemTitle.className = "tracked-timeflow-item-title";
+    itemTitle.textContent = `${item.published_at || ""} · ${item.title || "未命名新闻"}`;
+    button.appendChild(itemTitle);
+    if (item.has_detail) {
+      const badge = document.createElement("span");
+      badge.className = "tracked-detail-badge";
+      badge.textContent = "正文";
+      button.appendChild(badge);
+    }
     button.addEventListener("click", async () => {
       const matched = state.trackedTimelineItems.find((row) => String(row.id) === String(item.id));
       if (matched) {

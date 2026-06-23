@@ -1622,9 +1622,9 @@ button.active {
 }
 
 .tracked-sidebar {
-  border: 1px solid var(--border-color, #d7dce5);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--panel-bg, #fff);
+  background: var(--panel);
   padding: 12px;
 }
 
@@ -1642,7 +1642,7 @@ button.active {
 }
 
 .tracked-sidebar-subtitle {
-  color: var(--muted-text, #6b7280);
+  color: var(--muted);
   font-size: 12px;
   margin-top: 2px;
 }
@@ -1658,15 +1658,16 @@ button.active {
 .tracked-topic-row {
   width: 100%;
   text-align: left;
-  border: 1px solid var(--border-color, #d7dce5);
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: transparent;
   padding: 10px 12px;
   cursor: pointer;
+  color: var(--text);
 }
 
 .tracked-topic-row.active {
-  border-color: var(--accent-color, #2563eb);
+  border-color: var(--accent);
   background: rgba(37, 99, 235, 0.08);
 }
 
@@ -1680,18 +1681,26 @@ button.active {
   font-weight: 700;
 }
 
+.tracked-timeline-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text);
+}
+
 .tracked-topic-row-meta,
 .tracked-timeline-meta,
 .tracked-timeline-summary {
   margin-top: 4px;
   font-size: 13px;
-  color: var(--muted-text, #6b7280);
+  color: var(--muted);
 }
 
 .tracked-main {
-  border: 1px solid var(--border-color, #d7dce5);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--panel-bg, #fff);
+  background: var(--panel);
   padding: 14px;
 }
 
@@ -1783,7 +1792,7 @@ button.active {
   right: 9px;
   bottom: -10px;
   width: 1px;
-  background: var(--border-color, #d7dce5);
+  background: var(--border);
 }
 
 .tracked-timeflow-row:last-child .tracked-timeflow-axis::after {
@@ -1793,7 +1802,7 @@ button.active {
 .tracked-timeflow-date {
   font-size: 12px;
   font-weight: 700;
-  color: var(--muted-text, #6b7280);
+  color: var(--muted);
 }
 
 .tracked-timeflow-dot {
@@ -1803,27 +1812,29 @@ button.active {
   width: 11px;
   height: 11px;
   border-radius: 999px;
-  background: var(--panel-bg, #fff);
-  border: 2px solid var(--accent-color, #2563eb);
+  background: var(--panel);
+  border: 2px solid var(--accent);
 }
 
 .tracked-timeflow-body {
-  border: 1px solid var(--border-color, #d7dce5);
+  border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px 14px;
-  background: color-mix(in srgb, var(--panel-bg, #fff) 92%, var(--accent-color, #2563eb) 8%);
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+  color: var(--text);
 }
 
 .tracked-timeflow-meta,
 .tracked-timeflow-error {
   font-size: 12px;
-  color: var(--muted-text, #6b7280);
+  color: var(--muted);
 }
 
 .tracked-timeflow-summary {
   margin-top: 6px;
   white-space: pre-wrap;
   line-height: 1.6;
+  color: var(--text);
 }
 
 .tracked-timeflow-actions {
@@ -1836,7 +1847,7 @@ button.active {
 
 .tracked-timeflow-details summary {
   cursor: pointer;
-  color: var(--muted-text, #6b7280);
+  color: var(--muted);
 }
 
 .tracked-timeflow-items {
@@ -1847,16 +1858,36 @@ button.active {
 }
 
 .tracked-timeflow-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   text-align: left;
   border: 0;
   background: transparent;
-  color: inherit;
+  color: var(--text);
   padding: 0;
   cursor: pointer;
 }
 
+.tracked-timeflow-item-title {
+  min-width: 0;
+}
+
 .tracked-timeflow-item:hover {
-  color: var(--accent-color, #2563eb);
+  color: var(--accent);
+}
+
+.tracked-detail-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--note-badge-border);
+  background: var(--note-badge-bg);
+  color: var(--note-badge-text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .row-actions {

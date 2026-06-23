@@ -950,10 +950,13 @@ def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkey
     days = listing.get_json()["days"]
     assert [day["date"] for day in days] == ["2026-06-21", "2026-06-20"]
     assert days[0]["status"] == "missing"
+    assert days[0]["items"][0]["has_detail"] is False
     assert [item["title"] for item in days[1]["items"]] == [
         "俄乌战争：乌克兰回应",
         "俄乌战争：俄罗斯表态",
     ]
+    assert days[1]["max_summary_chars"] == 120
+    assert all(item["has_detail"] is True for item in days[1]["items"])
 
     def fail_summary(**kwargs):
         raise app_module.LLMClientError("DEEPSEEK_CALL_FAILED: unavailable")
@@ -967,13 +970,15 @@ def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkey
     failed_day = next(day for day in failed_listing if day["date"] == "2026-06-20")
     assert failed_day["status"] == "failed"
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     def ok_summary(**kwargs):
         captured["materials"] = kwargs["materials"]
+        captured["max_summary_chars"] = kwargs["max_summary_chars"]
+        captured["news_count"] = kwargs["news_count"]
         return {
             "model": "deepseek-chat",
-            "summary_text": "先发生乌克兰回应，随后俄罗斯发布声明。",
+            "summary_text": "甲" * 130,
             "raw_json": "{}",
         }
 
@@ -982,10 +987,24 @@ def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkey
     assert generated.status_code == 200
     generated_day = generated.get_json()["day"]
     assert generated_day["status"] == "success"
-    assert generated_day["summary_text"] == "先发生乌克兰回应，随后俄罗斯发布声明。"
+    assert generated_day["max_summary_chars"] == 120
+    assert captured["max_summary_chars"] == 120
+    assert captured["news_count"] == 2
+    assert len(generated_day["summary_text"]) <= 120
+    assert generated_day["summary_text"].endswith("…")
     assert captured["materials"].index("标题：俄乌战争：乌克兰回应") < captured["materials"].index("标题：俄乌战争：俄罗斯表态")
     assert "正文：Full local body 1" in captured["materials"]
     assert "正文：Full local body 2" in captured["materials"]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE tracked_topic_daily_summaries SET item_ids_hash=? WHERE topic_id=? AND date=?",
+            ("legacy-v1.9.8.4-hash", topic_id, "2026-06-20"),
+        )
+        conn.commit()
+    stale_from_version = client.get(f"/api/tracked-topics/{topic_id}/daily-summaries").get_json()["days"]
+    stale_version_day = next(day for day in stale_from_version if day["date"] == "2026-06-20")
+    assert stale_version_day["status"] == "stale"
 
     manual_add = client.post(
         f"/api/tracked-topics/{topic_id}/items",
@@ -997,6 +1016,25 @@ def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkey
     stale_day = next(day for day in stale_listing if day["date"] == "2026-06-20")
     assert stale_day["status"] == "stale"
     assert stale_day["item_count"] == 3
+
+
+def test_tracked_daily_summary_limits_and_truncation_helpers(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    assert app_module.tracked_daily_summary_char_limit(1) == 120
+    assert app_module.tracked_daily_summary_char_limit(3) == 150
+    assert app_module.tracked_daily_summary_char_limit(10) == 500
+    assert app_module.tracked_daily_summary_char_limit(20) == 600
+    assert app_module.enforce_daily_summary_char_limit("第一句。第二句。第三句。", 6) == "第一句。…"
+    assert app_module.enforce_daily_summary_char_limit("abcdefghijklmnopqrstuvwxyz", 8) == "abcdefg…"
 
 
 def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):

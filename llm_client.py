@@ -103,7 +103,14 @@ def _build_messages(*, title: str, source: str, content: str) -> list[dict[str, 
     ]
 
 
-def _build_tracked_daily_summary_messages(*, topic_title: str, summary_date: str, materials: str) -> list[dict[str, str]]:
+def _build_tracked_daily_summary_messages(
+    *,
+    topic_title: str,
+    summary_date: str,
+    materials: str,
+    news_count: int,
+    max_summary_chars: int,
+) -> list[dict[str, str]]:
     system = (
         "你是专业新闻编辑。"
         "你必须调用给定函数并严格提供结构化参数。"
@@ -114,6 +121,7 @@ def _build_tracked_daily_summary_messages(*, topic_title: str, summary_date: str
         "输出必须是连续叙述式总结，像把当天发生的事吃透后重新讲给读者听。"
         "不要按 1/2/3/4 或首先/其次/再次 逐条列点，不要把原始新闻一条条改写后顺序拼接。"
         "要把重复信息合并，把前后进展串起来，让读者读完像听完一段当天事件经过。"
+        f"本日共有 {max(0, int(news_count or 0))} 条新闻，最终摘要不得超过 {max(1, int(max_summary_chars or 1))} 个中文字符或等价可见字符。"
     )
     user = (
         f"跟踪主题：{topic_title or '未命名主题'}\n"
@@ -205,6 +213,8 @@ def generate_tracked_topic_daily_summary(
     topic_title: str,
     summary_date: str,
     materials: str,
+    news_count: int,
+    max_summary_chars: int,
     model: str | None = None,
 ) -> dict[str, Any]:
     api_key = _resolve_api_key("DEEPSEEK_API_KEY")
@@ -248,6 +258,8 @@ def generate_tracked_topic_daily_summary(
                 topic_title=topic_title,
                 summary_date=summary_date,
                 materials=compiled_materials,
+                news_count=news_count,
+                max_summary_chars=max_summary_chars,
             ),
             tools=tools,
             tool_choice={"type": "function", "function": {"name": "save_daily_summary"}},

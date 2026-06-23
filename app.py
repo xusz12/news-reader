@@ -99,6 +99,7 @@ TRACKED_TOPIC_SCOPES = {"important", "all"}
 TRACKED_BACKFILL_MODES = {"recent_important", "all_important", "all_news"}
 TRACKED_MATCH_METHODS = {"keyword", "manual"}
 TRACKED_DAILY_SUMMARY_STATUSES = {"success", "failed"}
+TRACKED_DAILY_SUMMARY_VERSION = "v1.9.8.5"
 TRACKED_RULE_FIELD_SCORES = {
     "title": {"strong": 8, "core": 4, "context": 2},
     "note": {"strong": 6, "core": 3, "context": 2},
@@ -135,6 +136,8 @@ TRACKED_DAILY_SUMMARY_CONTENT_LIMIT = 4000
 TRACKED_DAILY_SUMMARY_AI_BODY_LIMIT = 2000
 TRACKED_DAILY_SUMMARY_NOTE_LIMIT = 800
 TRACKED_DAILY_SUMMARY_SUMMARY_LIMIT = 800
+TRACKED_DAILY_SUMMARY_MIN_CHARS = 120
+TRACKED_DAILY_SUMMARY_MAX_CHARS = 600
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -2048,6 +2051,7 @@ def tracked_daily_summary_source_rows(conn: sqlite3.Connection, topic_id: int, *
                aa.conclusion_zh,
                aa.body_zh,
                ad.content,
+               CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS has_detail,
                items.updated_at AS item_updated_at,
                tti.updated_at AS tracked_updated_at,
                COALESCE(an.updated_at, '') AS note_updated_at,
@@ -2083,8 +2087,36 @@ def truncate_daily_summary_text(value: object, limit: int) -> str:
     return text[: max(0, limit - 1)].rstrip() + "…"
 
 
+def tracked_daily_summary_char_limit(news_count: int) -> int:
+    safe_count = max(0, int(news_count or 0))
+    return min(TRACKED_DAILY_SUMMARY_MAX_CHARS, max(TRACKED_DAILY_SUMMARY_MIN_CHARS, safe_count * 50))
+
+
+def enforce_daily_summary_char_limit(value: object, limit: int) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if not text or len(text) <= limit:
+        return text
+    natural_limit = max(1, limit - 1)
+    window = text[:natural_limit]
+    cut_at = -1
+    for marker in ("。", "；", ";", "\n", "！", "？", "……", "，", ",", "、", "：", ":"):
+        pos = window.rfind(marker)
+        if pos > cut_at:
+            cut_at = pos
+    if cut_at >= 0:
+        clipped = window[: cut_at + 1].rstrip()
+    else:
+        clipped = window.rstrip()
+    if not clipped:
+        clipped = window.rstrip()
+    return clipped + "…"
+
+
 def build_tracked_daily_summary_hash(rows: list[dict]) -> str:
     basis = []
+    budget = tracked_daily_summary_char_limit(len(rows))
+    basis.append(f"version={TRACKED_DAILY_SUMMARY_VERSION}")
+    basis.append(f"max_summary_chars={budget}")
     for row in rows:
         basis.append(
             "||".join(
@@ -2143,6 +2175,7 @@ def build_tracked_daily_summary_materials(topic: dict, date: str, rows: list[dic
 
 def serialize_tracked_daily_summary_group(topic: dict, date: str, rows: list[dict], summary_row: sqlite3.Row | None) -> dict:
     current_hash = build_tracked_daily_summary_hash(rows)
+    max_summary_chars = tracked_daily_summary_char_limit(len(rows))
     saved_hash = (summary_row["item_ids_hash"] if summary_row else "") or ""
     saved_status = (summary_row["status"] if summary_row else "") or ""
     if not summary_row:
@@ -2164,6 +2197,7 @@ def serialize_tracked_daily_summary_group(topic: dict, date: str, rows: list[dic
                 "published_at": row.get("published_at") or "",
                 "source": row.get("source_name") or row.get("source") or "",
                 "summary": row.get("summary") or "",
+                "has_detail": bool(row.get("has_detail")),
             }
         )
 
@@ -2171,6 +2205,7 @@ def serialize_tracked_daily_summary_group(topic: dict, date: str, rows: list[dic
         "date": date,
         "item_count": len(items),
         "item_ids_hash": current_hash,
+        "max_summary_chars": max_summary_chars,
         "status": status,
         "summary_text": (summary_row["summary_text"] if summary_row else "") or "",
         "error": (summary_row["error"] if summary_row else "") or "",
@@ -3311,6 +3346,8 @@ def api_tracked_topic_daily_summary_generate(topic_id: int, summary_date: str):
                 topic_title=(topic.get("title") or "").strip(),
                 summary_date=normalized_date,
                 materials=materials,
+                news_count=len(rows),
+                max_summary_chars=tracked_daily_summary_char_limit(len(rows)),
                 model=model_name,
             )
         except LLMClientError as exc:
@@ -3344,7 +3381,10 @@ def api_tracked_topic_daily_summary_generate(topic_id: int, summary_date: str):
                 date=normalized_date,
                 item_ids_hash=item_ids_hash,
                 status="success",
-                summary_text=payload.get("summary_text", ""),
+                summary_text=enforce_daily_summary_char_limit(
+                    payload.get("summary_text", ""),
+                    tracked_daily_summary_char_limit(len(rows)),
+                ),
                 error="",
                 model=payload.get("model", model_name or "deepseek-chat"),
                 raw_json=payload.get("raw_json", "{}"),
