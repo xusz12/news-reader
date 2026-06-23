@@ -4,6 +4,21 @@
 
 ## What's Changed
 
+### 2026-06-23 — v1.9.8.7 feat: 默认匹配参数与必要关键词
+- **文件**
+  - *settings.py（+）*、*app.py（+）*、*tests/test_api.py（+）*
+    - `app_settings.json` 扩展 `tracked.default_rule_params`，持久化保存新建跟踪主题使用的默认数字参数
+    - 新增 `PUT /api/settings/tracked-default-rule-params`，只更新 tracked 默认参数；`GET /api/settings` 也会返回当前默认值
+    - `tracked_topics.rules_json` 新增 `required_terms`，匹配顺序改为：先排除词，再必要关键词，再进入原有 strong/core/context 评分
+    - 历史回扫在 `required_terms` 变化后会重算旧自动命中；手动加入保留、手动隐藏不复活；`reason` 补充必要词命中证据
+    - 补覆盖：默认参数 roundtrip、新建主题继承默认数值、necessary gate / exclude 优先级、required_terms 变更后的 backfill 仍保留 manual/hidden override
+  - *static/index.html（+）*、*static/app.js（+）*
+    - 跟踪页新增独立 `默认参数` 入口，右栏可维护标题 / 想法 / 摘要 / 正文倍率、规则得分与最低收录分数，并支持 `恢复系统默认`
+    - 跟踪主题编辑页新增 `保存当前参数为默认` 快捷动作，但只写全局默认参数，不改其它主题
+    - 新建 / 编辑跟踪主题表单新增 `必要关键词` 输入区；新建表单数字优先读取全局默认参数
+    - `一键填写` 继续只生成关键词草稿，不再覆盖阈值等数字默认值
+- **影响**：用户现在可以长期维护一套“新建跟踪主题默认数字口径”，同时用必要关键词给宽主题增加硬门槛，减少误收且不影响已有主题参数。
+
 ### 2026-06-23 — v1.9.8.6 feat: LLM 辅助生成跟踪主题规则
 - **文件**
   - *llm_client.py（+）*、*app.py（+）*、*tests/test_api.py（+）*、*tests/test_llm_client.py（+）*

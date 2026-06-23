@@ -849,6 +849,118 @@ def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monke
     assert detail.get_json()["tracked_topic_choices"][0]["title"] == "俄乌战争"
 
 
+def test_tracked_required_terms_gate_and_backfill_preserves_manual_hidden(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-20.md").write_text(
+        """## Reuters · World（4条）
+### [霍尔木兹海峡美伊战争升级](https://example.com/hormuz)
+- 发布时间：2026-06-20 08:00:00
+- 摘要：局势升级
+
+### [德黑兰美伊战争升级](https://example.com/tehran)
+- 发布时间：2026-06-20 08:30:00
+- 摘要：局势升级
+
+### [波斯湾美伊战争观察](https://example.com/gulf)
+- 发布时间：2026-06-20 09:00:00
+- 摘要：局势观察
+
+### [霍尔木兹海峡美伊演习升级](https://example.com/drill)
+- 发布时间：2026-06-20 09:30:00
+- 摘要：演习升级
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    by_title = {item["title"]: item for item in items}
+    hormuz_item = by_title["霍尔木兹海峡美伊战争升级"]
+    tehran_item = by_title["德黑兰美伊战争升级"]
+    gulf_item = by_title["波斯湾美伊战争观察"]
+    drill_item = by_title["霍尔木兹海峡美伊演习升级"]
+
+    for item in (hormuz_item, tehran_item, gulf_item, drill_item):
+        assert client.patch(f"/api/news/{item['id']}/state", json={"important": True}).status_code == 200
+
+    create_topic = client.post(
+        "/api/tracked-topics",
+        json={
+            "title": "美伊战争",
+            "core_terms": ["美伊"],
+            "context_terms": ["战争", "升级"],
+            "exclude_terms": ["演习"],
+            "required_terms": ["霍尔木兹"],
+            "threshold": 6,
+            "scope": "all",
+            "active": True,
+        },
+    )
+    assert create_topic.status_code == 200
+    topic_id = create_topic.get_json()["topic"]["id"]
+
+    first_backfill = client.post(
+        f"/api/tracked-topics/{topic_id}/backfill",
+        json={"mode": "all_important"},
+    )
+    assert first_backfill.status_code == 200
+    first_items = first_backfill.get_json()["items"]
+    assert [item["title"] for item in first_items] == ["霍尔木兹海峡美伊战争升级"]
+    assert "必要词命中：霍尔木兹" in first_items[0]["tracked_reason"]
+
+    hide_hormuz = client.patch(
+        f"/api/tracked-topics/{topic_id}/items/{hormuz_item['id']}",
+        json={"hidden": True},
+    )
+    assert hide_hormuz.status_code == 200
+
+    manual_add = client.post(
+        f"/api/tracked-topics/{topic_id}/items",
+        json={"item_id": gulf_item["id"]},
+    )
+    assert manual_add.status_code == 200
+
+    update_topic = client.patch(
+        f"/api/tracked-topics/{topic_id}",
+        json={
+            "title": "美伊战争",
+            "core_terms": ["美伊"],
+            "context_terms": ["战争", "升级"],
+            "exclude_terms": ["演习"],
+            "required_terms": ["霍尔木兹", "德黑兰"],
+            "threshold": 6,
+            "scope": "all",
+            "active": True,
+        },
+    )
+    assert update_topic.status_code == 200
+
+    second_backfill = client.post(
+        f"/api/tracked-topics/{topic_id}/backfill",
+        json={"mode": "all_important"},
+    )
+    assert second_backfill.status_code == 200
+    second_items = second_backfill.get_json()["items"]
+    assert [item["title"] for item in second_items] == [
+        "波斯湾美伊战争观察",
+        "德黑兰美伊战争升级",
+    ]
+    assert second_items[0]["tracked_match_method"] == "manual"
+    assert "必要词命中：德黑兰" in second_items[1]["tracked_reason"]
+    assert hormuz_item["title"] not in [item["title"] for item in second_items]
+    assert drill_item["title"] not in [item["title"] for item in second_items]
+
+
 def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -3790,6 +3902,8 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     assert data["model_catalogs"]["translation"]["default_label"] == "deepseek-chat"
     assert data["model_catalogs"]["translation"]["options"][0]["value"] == "deepseek-v4-flash"
     assert data["model_catalogs"]["codex_chat"]["source"] == "codex_debug"
+    assert data["tracked"]["default_rule_params"]["threshold"] == 6
+    assert data["tracked"]["default_rule_params"]["title_weight"] == 1
     assert data["model_catalogs"]["codex_chat"]["options"][0] == {
         "value": "gpt-5.5",
         "label": "gpt-5.5",
@@ -3818,6 +3932,74 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved_file["llm"]["translation"]["model"] == "deepseek-reasoner"
     assert saved_file["llm"]["codex_chat"]["model"] == "gpt-5-codex"
+
+
+def test_settings_tracked_default_rule_params_roundtrip_and_new_topic_defaults(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    save_res = client.put(
+        "/api/settings/tracked-default-rule-params",
+        json={
+            "default_rule_params": {
+                "title_weight": 1.8,
+                "note_weight": 1.2,
+                "summary_weight": 0.9,
+                "content_weight": 0.5,
+                "strong_score": 1.4,
+                "core_score": 1.1,
+                "context_score": 0.8,
+                "exclude_penalty": 1.6,
+                "threshold": 9,
+            }
+        },
+    )
+    assert save_res.status_code == 200
+    saved = save_res.get_json()
+    assert saved["tracked"]["default_rule_params"]["threshold"] == 9
+    assert saved["tracked"]["default_rule_params"]["title_weight"] == 1.8
+    saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert saved_file["tracked"]["default_rule_params"]["exclude_penalty"] == 1.6
+
+    created = client.post(
+        "/api/tracked-topics",
+        json={
+            "title": "默认参数测试",
+            "core_terms": ["苹果"],
+            "context_terms": ["财报"],
+            "scope": "important",
+            "active": True,
+        },
+    )
+    assert created.status_code == 200
+    rules = created.get_json()["topic"]["rules"]
+    assert rules["threshold"] == 9
+    assert rules["title_weight"] == 1.8
+    assert rules["note_weight"] == 1.2
+    assert rules["summary_weight"] == 0.9
+    assert rules["content_weight"] == 0.5
+    assert rules["strong_score"] == 1.4
+    assert rules["core_score"] == 1.1
+    assert rules["context_score"] == 0.8
+    assert rules["exclude_penalty"] == 1.6
+
+    reset_res = client.put(
+        "/api/settings/tracked-default-rule-params",
+        json={"default_rule_params": {"threshold": 6}},
+    )
+    assert reset_res.status_code == 200
+    assert reset_res.get_json()["tracked"]["default_rule_params"]["threshold"] == 6
 
 
 def test_settings_translation_resolved_default_model_respects_env(tmp_path: Path, monkeypatch):

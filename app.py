@@ -120,6 +120,17 @@ TRACKED_RULE_TERM_SCORE_DEFAULTS = {
     "context": 1.0,
     "exclude": 1.0,
 }
+TRACKED_DEFAULT_RULE_PARAM_KEYS = (
+    "title_weight",
+    "note_weight",
+    "summary_weight",
+    "content_weight",
+    "strong_score",
+    "core_score",
+    "context_score",
+    "exclude_penalty",
+    "threshold",
+)
 TRACKED_RULE_FIELD_LABELS = {
     "title": "标题",
     "note": "笔记",
@@ -571,23 +582,73 @@ def parse_key_points_text(value: object) -> str:
 def tracked_default_rules(
     include_keywords: list[str] | None = None,
     exclude_keywords: list[str] | None = None,
+    default_rule_params: dict | None = None,
 ) -> dict:
+    base_params = tracked_default_rule_params(default_rule_params)
     return {
         "strong_phrases": [],
         "core_terms": list(include_keywords or []),
         "context_terms": [],
         "exclude_terms": list(exclude_keywords or []),
-        "threshold": TRACKED_RULE_THRESHOLD_DEFAULT,
+        "required_terms": [],
+        "threshold": base_params["threshold"],
         "candidate_threshold": TRACKED_RULE_CANDIDATE_THRESHOLD_DEFAULT,
-        "title_weight": TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["title"],
-        "note_weight": TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["note"],
-        "summary_weight": TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["summary"],
-        "content_weight": TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["content"],
-        "strong_score": TRACKED_RULE_TERM_SCORE_DEFAULTS["strong"],
-        "core_score": TRACKED_RULE_TERM_SCORE_DEFAULTS["core"],
-        "context_score": TRACKED_RULE_TERM_SCORE_DEFAULTS["context"],
-        "exclude_penalty": TRACKED_RULE_TERM_SCORE_DEFAULTS["exclude"],
+        "title_weight": base_params["title_weight"],
+        "note_weight": base_params["note_weight"],
+        "summary_weight": base_params["summary_weight"],
+        "content_weight": base_params["content_weight"],
+        "strong_score": base_params["strong_score"],
+        "core_score": base_params["core_score"],
+        "context_score": base_params["context_score"],
+        "exclude_penalty": base_params["exclude_penalty"],
     }
+
+
+def tracked_default_rule_params(raw_params: object = None) -> dict:
+    params = raw_params if isinstance(raw_params, dict) else {}
+    return {
+        "title_weight": parse_tracked_weight(
+            params.get("title_weight"),
+            default=TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["title"],
+        ),
+        "note_weight": parse_tracked_weight(
+            params.get("note_weight"),
+            default=TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["note"],
+        ),
+        "summary_weight": parse_tracked_weight(
+            params.get("summary_weight"),
+            default=TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["summary"],
+        ),
+        "content_weight": parse_tracked_weight(
+            params.get("content_weight"),
+            default=TRACKED_RULE_FIELD_WEIGHT_DEFAULTS["content"],
+        ),
+        "strong_score": parse_tracked_weight(
+            params.get("strong_score"),
+            default=TRACKED_RULE_TERM_SCORE_DEFAULTS["strong"],
+        ),
+        "core_score": parse_tracked_weight(
+            params.get("core_score"),
+            default=TRACKED_RULE_TERM_SCORE_DEFAULTS["core"],
+        ),
+        "context_score": parse_tracked_weight(
+            params.get("context_score"),
+            default=TRACKED_RULE_TERM_SCORE_DEFAULTS["context"],
+        ),
+        "exclude_penalty": parse_tracked_weight(
+            params.get("exclude_penalty"),
+            default=TRACKED_RULE_TERM_SCORE_DEFAULTS["exclude"],
+        ),
+        "threshold": parse_tracked_threshold(
+            params.get("threshold"),
+            default=TRACKED_RULE_THRESHOLD_DEFAULT,
+        ),
+    }
+
+
+def tracked_default_rule_params_from_rules(raw_rules: object) -> dict:
+    rules = normalize_tracked_rules(raw_rules)
+    return {key: rules[key] for key in TRACKED_DEFAULT_RULE_PARAM_KEYS}
 
 
 def normalize_tracked_rules(raw_rules: object, *, fallback_keywords: list[str] | None = None, fallback_excludes: list[str] | None = None) -> dict:
@@ -596,6 +657,7 @@ def normalize_tracked_rules(raw_rules: object, *, fallback_keywords: list[str] |
     core_terms = normalize_keyword_list(rules.get("core_terms"))
     context_terms = normalize_keyword_list(rules.get("context_terms"))
     exclude_terms = normalize_keyword_list(rules.get("exclude_terms"))
+    required_terms = normalize_keyword_list(rules.get("required_terms"))
 
     if not strong_phrases and not core_terms and fallback_keywords:
         core_terms = list(fallback_keywords)
@@ -607,6 +669,7 @@ def normalize_tracked_rules(raw_rules: object, *, fallback_keywords: list[str] |
         "core_terms": core_terms,
         "context_terms": context_terms,
         "exclude_terms": exclude_terms,
+        "required_terms": required_terms,
         "threshold": parse_tracked_threshold(rules.get("threshold"), default=TRACKED_RULE_THRESHOLD_DEFAULT),
         "candidate_threshold": parse_tracked_threshold(
             rules.get("candidate_threshold"),
@@ -682,10 +745,17 @@ def format_tracked_score(score: float) -> str:
     return f"{score:.2f}".rstrip("0").rstrip(".")
 
 
-def compact_tracked_reason(evidence: dict[str, dict[str, list[str]]] | None, score: float) -> str:
+def compact_tracked_reason(
+    evidence: dict[str, dict[str, list[str]]] | None,
+    score: float,
+    *,
+    required_hits: list[str] | None = None,
+) -> str:
     if not evidence:
         return ""
     segments: list[str] = []
+    if required_hits:
+        segments.append(f"必要词命中：{'/'.join(required_hits[:4])}")
     for field_key in ("title", "note", "summary", "content"):
         field_hits = evidence.get(field_key) or {}
         terms: list[str] = []
@@ -717,6 +787,7 @@ def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool,
     core_terms = rules.get("core_terms") or []
     context_terms = rules.get("context_terms") or []
     exclude_terms = rules.get("exclude_terms") or []
+    required_terms = rules.get("required_terms") or []
     threshold = int(rules.get("threshold") or TRACKED_RULE_THRESHOLD_DEFAULT)
     if not strong_phrases and not core_terms:
         return False, 0.0, ""
@@ -731,7 +802,6 @@ def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool,
         "core": float(rules.get("core_score", TRACKED_RULE_TERM_SCORE_DEFAULTS["core"])),
         "context": float(rules.get("context_score", TRACKED_RULE_TERM_SCORE_DEFAULTS["context"])),
     }
-    exclude_penalty = float(rules.get("exclude_penalty", 0))
 
     text_fields = tracked_text_fields(row)
     normalized_fields = {
@@ -742,12 +812,26 @@ def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool,
     if not normalized_fields:
         return False, 0.0, ""
 
-    exclude_hits = 0
+    exclude_hits: list[str] = []
     for field_text in normalized_fields.values():
         for term in exclude_terms:
             lowered = term.lower()
             if lowered and lowered in field_text:
-                exclude_hits += 1
+                exclude_hits.append(term)
+    if exclude_hits:
+        return False, 0.0, ""
+
+    required_hits: list[str] = []
+    if required_terms:
+        seen_required: set[str] = set()
+        for field_text in normalized_fields.values():
+            for term in required_terms:
+                lowered = term.lower()
+                if lowered and lowered in field_text and lowered not in seen_required:
+                    seen_required.add(lowered)
+                    required_hits.append(term)
+        if not required_hits:
+            return False, 0.0, ""
 
     score = 0.0
     evidence: dict[str, dict[str, list[str]]] = {}
@@ -781,7 +865,6 @@ def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool,
         if field_key != "content":
             non_body_signal = True
 
-    score -= exclude_hits * exclude_penalty * TRACKED_RULE_EXCLUDE_PENALTY_BASE
     if not evidence:
         return False, 0.0, ""
     if not non_body_signal:
@@ -790,9 +873,9 @@ def match_tracked_topic_row(row: sqlite3.Row | dict, rules: dict) -> tuple[bool,
         return False, score, ""
 
     if strong_hit:
-        return True, score, compact_tracked_reason(evidence, score)
+        return True, score, compact_tracked_reason(evidence, score, required_hits=required_hits)
     if core_hit and context_hit:
-        return True, score, compact_tracked_reason(evidence, score)
+        return True, score, compact_tracked_reason(evidence, score, required_hits=required_hits)
     return False, score, ""
 
 
@@ -833,6 +916,7 @@ def parse_tracked_topic_body(body: dict, *, partial: bool = False) -> dict:
             "core_terms",
             "context_terms",
             "exclude_terms",
+            "required_terms",
             "threshold",
             "candidate_threshold",
             "title_weight",
@@ -848,22 +932,27 @@ def parse_tracked_topic_body(body: dict, *, partial: bool = False) -> dict:
         )
     )
     if not partial or rules_touched:
-        incoming_rules = {
-            "strong_phrases": body.get("strong_phrases"),
-            "core_terms": body.get("core_terms", body.get("keywords")),
-            "context_terms": body.get("context_terms"),
-            "exclude_terms": body.get("exclude_terms", body.get("exclude_keywords")),
-            "threshold": body.get("threshold"),
-            "candidate_threshold": body.get("candidate_threshold"),
-            "title_weight": body.get("title_weight"),
-            "note_weight": body.get("note_weight"),
-            "summary_weight": body.get("summary_weight"),
-            "content_weight": body.get("content_weight"),
-            "strong_score": body.get("strong_score"),
-            "core_score": body.get("core_score"),
-            "context_score": body.get("context_score"),
-            "exclude_penalty": body.get("exclude_penalty"),
-        }
+        default_rule_params = None if partial else current_runtime_settings()["tracked"]["default_rule_params"]
+        incoming_rules: dict[str, object] = {**(default_rule_params or {})}
+        incoming_rules["strong_phrases"] = body.get("strong_phrases")
+        incoming_rules["core_terms"] = body.get("core_terms", body.get("keywords"))
+        incoming_rules["context_terms"] = body.get("context_terms")
+        incoming_rules["exclude_terms"] = body.get("exclude_terms", body.get("exclude_keywords"))
+        incoming_rules["required_terms"] = body.get("required_terms")
+        for key in (
+            "threshold",
+            "candidate_threshold",
+            "title_weight",
+            "note_weight",
+            "summary_weight",
+            "content_weight",
+            "strong_score",
+            "core_score",
+            "context_score",
+            "exclude_penalty",
+        ):
+            if key in body:
+                incoming_rules[key] = body.get(key)
         rules = normalize_tracked_rules(incoming_rules)
         if not rules["strong_phrases"] and not rules["core_terms"]:
             raise ValueError("empty_rules")
@@ -952,6 +1041,11 @@ def current_runtime_settings() -> dict:
             model = codex_chat.get("model")
             if isinstance(model, str):
                 merged["llm"]["codex_chat"]["model"] = model.strip()
+    tracked = raw.get("tracked") if isinstance(raw, dict) else {}
+    if isinstance(tracked, dict):
+        merged["tracked"]["default_rule_params"] = tracked_default_rule_params(
+            tracked.get("default_rule_params")
+        )
     return merged
 
 
@@ -1260,6 +1354,7 @@ def serialize_runtime_settings() -> dict:
             "codex_chat": codex_snapshot["catalog"],
         },
         "llm": settings["llm"],
+        "tracked": settings["tracked"],
         "restart_notice": "翻译 / 总结与 Codex chat 的新请求通常立即生效；涉及 app.py 本版改动，终验前请重启 Flask。",
     }
 
@@ -1295,7 +1390,8 @@ def validate_runtime_settings(payload: object) -> dict:
             "codex_chat": {
                 "model": codex_chat_model,
             },
-        }
+        },
+        "tracked": current_runtime_settings()["tracked"],
     }
     return normalized
 
@@ -3851,6 +3947,18 @@ def api_settings_update():
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     save_app_settings(normalized)
+    return jsonify({"ok": True, **serialize_runtime_settings()})
+
+
+@app.put("/api/settings/tracked-default-rule-params")
+def api_settings_tracked_default_rule_params_update():
+    body = request.get_json(silent=True) or {}
+    params = body.get("default_rule_params")
+    if not isinstance(params, dict):
+        return jsonify({"ok": False, "error": "invalid_default_rule_params"}), 400
+    settings = current_runtime_settings()
+    settings["tracked"]["default_rule_params"] = tracked_default_rule_params(params)
+    save_app_settings(settings)
     return jsonify({"ok": True, **serialize_runtime_settings()})
 
 

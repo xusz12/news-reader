@@ -78,12 +78,24 @@ const mediaIconMap = {
   "Ars Technica": "/static/source-icons/arstechnica.ico",
 };
 const SETTINGS_CUSTOM_MODEL_VALUE = "__custom__";
+const TRACKED_SYSTEM_DEFAULT_RULE_PARAMS = {
+  title_weight: 1,
+  note_weight: 1,
+  summary_weight: 1,
+  content_weight: 1,
+  strong_score: 1,
+  core_score: 1,
+  context_score: 1,
+  exclude_penalty: 1,
+  threshold: 6,
+};
 
 const refreshBtn = document.getElementById("refreshBtn");
 const resumeAnchorBtn = document.getElementById("resumeAnchorBtn");
 const readFilterToggleBtn = document.getElementById("readFilterToggleBtn");
 const sortOrderBtn = document.getElementById("sortOrderBtn");
 const trackedCreateInlineBtn = document.getElementById("trackedCreateInlineBtn");
+const trackedDefaultsInlineBtn = document.getElementById("trackedDefaultsInlineBtn");
 const markAllReadBtn = document.getElementById("markAllReadBtn");
 const manageMarketTagsBtn = document.getElementById("manageMarketTagsBtn");
 
@@ -203,6 +215,7 @@ const detailTrackedStrongInput = document.getElementById("detailTrackedStrongInp
 const detailTrackedCoreInput = document.getElementById("detailTrackedCoreInput");
 const detailTrackedContextInput = document.getElementById("detailTrackedContextInput");
 const detailTrackedExcludeInput = document.getElementById("detailTrackedExcludeInput");
+const detailTrackedRequiredInput = document.getElementById("detailTrackedRequiredInput");
 const detailTrackedThresholdInput = document.getElementById("detailTrackedThresholdInput");
 const detailTrackedTitleWeightInput = document.getElementById("detailTrackedTitleWeightInput");
 const detailTrackedNoteWeightInput = document.getElementById("detailTrackedNoteWeightInput");
@@ -214,8 +227,21 @@ const detailTrackedContextScoreInput = document.getElementById("detailTrackedCon
 const detailTrackedExcludePenaltyInput = document.getElementById("detailTrackedExcludePenaltyInput");
 const detailTrackedScopeSelect = document.getElementById("detailTrackedScopeSelect");
 const detailTrackedActiveInput = document.getElementById("detailTrackedActiveInput");
+const detailTrackedSaveDefaultsBtn = document.getElementById("detailTrackedSaveDefaultsBtn");
 const detailTrackedFormSaveBtn = document.getElementById("detailTrackedFormSaveBtn");
 const detailTrackedFormCancelBtn = document.getElementById("detailTrackedFormCancelBtn");
+const detailTrackedDefaultsBody = document.getElementById("detailTrackedDefaultsBody");
+const trackedDefaultsThresholdInput = document.getElementById("trackedDefaultsThresholdInput");
+const trackedDefaultsTitleWeightInput = document.getElementById("trackedDefaultsTitleWeightInput");
+const trackedDefaultsNoteWeightInput = document.getElementById("trackedDefaultsNoteWeightInput");
+const trackedDefaultsSummaryWeightInput = document.getElementById("trackedDefaultsSummaryWeightInput");
+const trackedDefaultsContentWeightInput = document.getElementById("trackedDefaultsContentWeightInput");
+const trackedDefaultsStrongScoreInput = document.getElementById("trackedDefaultsStrongScoreInput");
+const trackedDefaultsCoreScoreInput = document.getElementById("trackedDefaultsCoreScoreInput");
+const trackedDefaultsContextScoreInput = document.getElementById("trackedDefaultsContextScoreInput");
+const trackedDefaultsExcludePenaltyInput = document.getElementById("trackedDefaultsExcludePenaltyInput");
+const trackedDefaultsSaveBtn = document.getElementById("trackedDefaultsSaveBtn");
+const trackedDefaultsRestoreBtn = document.getElementById("trackedDefaultsRestoreBtn");
 const detailBody = document.getElementById("detailBody");
 const detailChatBody = document.getElementById("detailChatBody");
 const detailAskBtn = document.getElementById("detailAskBtn");
@@ -1713,8 +1739,8 @@ function updateBatchActionButton() {
 }
 
 function updateTrackedCreateButton() {
-  if (!trackedCreateInlineBtn) return;
-  trackedCreateInlineBtn.classList.toggle("hidden", state.collection !== "tracked");
+  if (trackedCreateInlineBtn) trackedCreateInlineBtn.classList.toggle("hidden", state.collection !== "tracked");
+  if (trackedDefaultsInlineBtn) trackedDefaultsInlineBtn.classList.toggle("hidden", state.collection !== "tracked");
 }
 
 function updateCollectionButtons() {
@@ -1907,17 +1933,54 @@ function trackedRuleList(value) {
   return Array.isArray(value) ? value.filter(Boolean) : [];
 }
 
+function trackedRuleNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getTrackedDefaultRuleParams() {
+  const saved = state.runtimeSettings?.tracked?.default_rule_params || {};
+  return {
+    title_weight: trackedRuleNumber(saved.title_weight, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.title_weight),
+    note_weight: trackedRuleNumber(saved.note_weight, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.note_weight),
+    summary_weight: trackedRuleNumber(saved.summary_weight, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.summary_weight),
+    content_weight: trackedRuleNumber(saved.content_weight, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.content_weight),
+    strong_score: trackedRuleNumber(saved.strong_score, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.strong_score),
+    core_score: trackedRuleNumber(saved.core_score, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.core_score),
+    context_score: trackedRuleNumber(saved.context_score, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.context_score),
+    exclude_penalty: trackedRuleNumber(saved.exclude_penalty, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.exclude_penalty),
+    threshold: trackedRuleNumber(saved.threshold, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.threshold),
+  };
+}
+
+function trackedDefaultParamsPayloadFromInputs(inputs) {
+  const fallback = getTrackedDefaultRuleParams();
+  return {
+    title_weight: trackedRuleNumber(inputs.title_weight?.value, fallback.title_weight),
+    note_weight: trackedRuleNumber(inputs.note_weight?.value, fallback.note_weight),
+    summary_weight: trackedRuleNumber(inputs.summary_weight?.value, fallback.summary_weight),
+    content_weight: trackedRuleNumber(inputs.content_weight?.value, fallback.content_weight),
+    strong_score: trackedRuleNumber(inputs.strong_score?.value, fallback.strong_score),
+    core_score: trackedRuleNumber(inputs.core_score?.value, fallback.core_score),
+    context_score: trackedRuleNumber(inputs.context_score?.value, fallback.context_score),
+    exclude_penalty: trackedRuleNumber(inputs.exclude_penalty?.value, fallback.exclude_penalty),
+    threshold: trackedRuleNumber(inputs.threshold?.value, fallback.threshold),
+  };
+}
+
 function trackedRuleSummary(topic) {
   const rules = topic?.rules || {};
   const strong = trackedRuleList(rules.strong_phrases);
   const core = trackedRuleList(rules.core_terms);
   const context = trackedRuleList(rules.context_terms);
   const exclude = trackedRuleList(rules.exclude_terms);
+  const required = trackedRuleList(rules.required_terms);
   const bits = [];
   if (strong.length) bits.push(`强短语：${strong.join(" / ")}`);
   if (core.length) bits.push(`核心词：${core.join(" / ")}`);
   if (context.length) bits.push(`场景词：${context.join(" / ")}`);
   if (exclude.length) bits.push(`排除：${exclude.join(" / ")}`);
+  if (required.length) bits.push(`必要：${required.join(" / ")}`);
   bits.push(`阈值：${Number(rules.threshold || 0) || 6}`);
   return bits.join(" · ");
 }
@@ -1929,6 +1992,8 @@ function trackedKeywordSummary(topic) {
 function trackedDescriptionSummary(topic) {
   const strong = trackedRuleList(topic?.rules?.strong_phrases);
   const core = trackedRuleList(topic?.rules?.core_terms);
+  const required = trackedRuleList(topic?.rules?.required_terms);
+  if (required.length) return `必要词：${required.join(" / ")}`;
   if (strong.length) return `强短语：${strong.join(" / ")}`;
   return core.length ? `核心词：${core.join(" / ")}` : "还没有规则说明";
 }
@@ -2163,6 +2228,7 @@ function renderTrackedTopicEmpty(message = "选择一个跟踪主题，右栏会
   if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
   if (detailChatBody) detailChatBody.classList.add("hidden");
   detailEmpty.classList.remove("hidden");
@@ -2186,6 +2252,7 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
   detailEmpty.classList.add("hidden");
   if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
   if (detailChatBody) detailChatBody.classList.add("hidden");
   detailTrackedBody.classList.remove("hidden");
@@ -2244,27 +2311,56 @@ async function loadTrackedTopicDailySummaries(topicId) {
 
 function fillTrackedTopicForm(topic = null) {
   if (!detailTrackedTitleInput) return;
-  const rules = topic?.rules || {};
-  const ruleNumber = (value, fallback) => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  };
+  const fallbackRules = getTrackedDefaultRuleParams();
+  const rules = topic?.rules || fallbackRules;
   detailTrackedTitleInput.value = topic?.title || "";
   detailTrackedStrongInput.value = trackedRuleList(rules.strong_phrases).join(", ");
   detailTrackedCoreInput.value = trackedRuleList(rules.core_terms).join(", ");
   detailTrackedContextInput.value = trackedRuleList(rules.context_terms).join(", ");
   detailTrackedExcludeInput.value = trackedRuleList(rules.exclude_terms).join(", ");
-  detailTrackedThresholdInput.value = String(ruleNumber(rules.threshold, 6));
-  detailTrackedTitleWeightInput.value = String(ruleNumber(rules.title_weight, 1));
-  detailTrackedNoteWeightInput.value = String(ruleNumber(rules.note_weight, 1));
-  detailTrackedSummaryWeightInput.value = String(ruleNumber(rules.summary_weight, 1));
-  detailTrackedContentWeightInput.value = String(ruleNumber(rules.content_weight, 1));
-  detailTrackedStrongScoreInput.value = String(ruleNumber(rules.strong_score, 1));
-  detailTrackedCoreScoreInput.value = String(ruleNumber(rules.core_score, 1));
-  detailTrackedContextScoreInput.value = String(ruleNumber(rules.context_score, 1));
-  detailTrackedExcludePenaltyInput.value = String(ruleNumber(rules.exclude_penalty, 1));
+  detailTrackedRequiredInput.value = trackedRuleList(rules.required_terms).join(", ");
+  detailTrackedThresholdInput.value = String(trackedRuleNumber(rules.threshold, fallbackRules.threshold));
+  detailTrackedTitleWeightInput.value = String(trackedRuleNumber(rules.title_weight, fallbackRules.title_weight));
+  detailTrackedNoteWeightInput.value = String(trackedRuleNumber(rules.note_weight, fallbackRules.note_weight));
+  detailTrackedSummaryWeightInput.value = String(trackedRuleNumber(rules.summary_weight, fallbackRules.summary_weight));
+  detailTrackedContentWeightInput.value = String(trackedRuleNumber(rules.content_weight, fallbackRules.content_weight));
+  detailTrackedStrongScoreInput.value = String(trackedRuleNumber(rules.strong_score, fallbackRules.strong_score));
+  detailTrackedCoreScoreInput.value = String(trackedRuleNumber(rules.core_score, fallbackRules.core_score));
+  detailTrackedContextScoreInput.value = String(trackedRuleNumber(rules.context_score, fallbackRules.context_score));
+  detailTrackedExcludePenaltyInput.value = String(trackedRuleNumber(rules.exclude_penalty, fallbackRules.exclude_penalty));
   detailTrackedScopeSelect.value = topic?.scope || "important";
   detailTrackedActiveInput.checked = Number(topic?.active ?? 1) === 1;
+}
+
+function fillTrackedDefaultsForm(params = getTrackedDefaultRuleParams()) {
+  trackedDefaultsThresholdInput.value = String(trackedRuleNumber(params.threshold, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.threshold));
+  trackedDefaultsTitleWeightInput.value = String(trackedRuleNumber(params.title_weight, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.title_weight));
+  trackedDefaultsNoteWeightInput.value = String(trackedRuleNumber(params.note_weight, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.note_weight));
+  trackedDefaultsSummaryWeightInput.value = String(trackedRuleNumber(params.summary_weight, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.summary_weight));
+  trackedDefaultsContentWeightInput.value = String(trackedRuleNumber(params.content_weight, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.content_weight));
+  trackedDefaultsStrongScoreInput.value = String(trackedRuleNumber(params.strong_score, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.strong_score));
+  trackedDefaultsCoreScoreInput.value = String(trackedRuleNumber(params.core_score, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.core_score));
+  trackedDefaultsContextScoreInput.value = String(trackedRuleNumber(params.context_score, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.context_score));
+  trackedDefaultsExcludePenaltyInput.value = String(trackedRuleNumber(params.exclude_penalty, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.exclude_penalty));
+}
+
+function openTrackedDefaultsPanel() {
+  closeTagAdminView();
+  clearTrendIdeaDetailState();
+  closeTrendComposerView();
+  closeTrendNoteEditor();
+  closeReminderEditor();
+  closeDetailTrackEditor();
+  detailEmpty.classList.add("hidden");
+  if (detailTrendBody) detailTrendBody.classList.add("hidden");
+  if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+  if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  if (detailBody) detailBody.classList.add("hidden");
+  if (detailChatBody) detailChatBody.classList.add("hidden");
+  detailTrackedDefaultsBody.classList.remove("hidden");
+  fillTrackedDefaultsForm(getTrackedDefaultRuleParams());
+  updateWorkspaceLayout();
+  openDetailOnMobile();
 }
 
 function openTrackedTopicForm(mode, topic = null) {
@@ -2278,6 +2374,7 @@ function openTrackedTopicForm(mode, topic = null) {
   detailEmpty.classList.add("hidden");
   if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+  if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
   if (detailChatBody) detailChatBody.classList.add("hidden");
   detailTrackedFormBody.classList.remove("hidden");
@@ -2291,6 +2388,9 @@ function openTrackedTopicForm(mode, topic = null) {
     detailTrackedDraftBtn.disabled = false;
     detailTrackedDraftBtn.textContent = "一键填写";
   }
+  if (detailTrackedSaveDefaultsBtn) {
+    detailTrackedSaveDefaultsBtn.classList.toggle("hidden", mode !== "edit");
+  }
   fillTrackedTopicForm(topic);
   updateWorkspaceLayout();
   openDetailOnMobile();
@@ -2303,6 +2403,7 @@ function trackedFormPayload() {
     core_terms: detailTrackedCoreInput.value.trim(),
     context_terms: detailTrackedContextInput.value.trim(),
     exclude_terms: detailTrackedExcludeInput.value.trim(),
+    required_terms: detailTrackedRequiredInput.value.trim(),
     threshold: detailTrackedThresholdInput.value.trim(),
     title_weight: detailTrackedTitleWeightInput.value.trim(),
     note_weight: detailTrackedNoteWeightInput.value.trim(),
@@ -2323,7 +2424,7 @@ function trackedFormHasRuleContent() {
     detailTrackedCoreInput,
     detailTrackedContextInput,
     detailTrackedExcludeInput,
-    detailTrackedThresholdInput,
+    detailTrackedRequiredInput,
   ].some((input) => (input?.value || "").trim());
 }
 
@@ -2333,7 +2434,6 @@ function applyTrackedRuleDraft(draft) {
   detailTrackedCoreInput.value = Array.isArray(draft.core_terms) ? draft.core_terms.join(", ") : "";
   detailTrackedContextInput.value = Array.isArray(draft.context_terms) ? draft.context_terms.join(", ") : "";
   detailTrackedExcludeInput.value = Array.isArray(draft.exclude_terms) ? draft.exclude_terms.join(", ") : "";
-  detailTrackedThresholdInput.value = String(Number(draft.threshold || 6) || 6);
 }
 
 async function openTrackedTopicDetailById(topicId) {
@@ -5055,6 +5155,17 @@ async function generateTrackedTopicRuleDraft(payload) {
   return data;
 }
 
+async function saveTrackedDefaultRuleParams(defaultRuleParams) {
+  const res = await fetch("/api/settings/tracked-default-rule-params", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ default_rule_params: defaultRuleParams }),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_default_rule_params_save_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "tracked_default_rule_params_save_failed");
+  return data;
+}
+
 async function createTrackedTopic(payload) {
   const res = await fetch("/api/tracked-topics", {
     method: "POST",
@@ -5656,6 +5767,12 @@ if (trackedCreateInlineBtn) {
   });
 }
 
+if (trackedDefaultsInlineBtn) {
+  trackedDefaultsInlineBtn.addEventListener("click", () => {
+    openTrackedDefaultsPanel();
+  });
+}
+
 if (trackedEditBtn) {
   trackedEditBtn.addEventListener("click", () => {
     const topic = selectedTrackedTopic();
@@ -6101,6 +6218,31 @@ if (detailTrackedFormCancelBtn) {
   });
 }
 
+if (detailTrackedSaveDefaultsBtn) {
+  detailTrackedSaveDefaultsBtn.addEventListener("click", async () => {
+    const payload = trackedDefaultParamsPayloadFromInputs({
+      threshold: detailTrackedThresholdInput,
+      title_weight: detailTrackedTitleWeightInput,
+      note_weight: detailTrackedNoteWeightInput,
+      summary_weight: detailTrackedSummaryWeightInput,
+      content_weight: detailTrackedContentWeightInput,
+      strong_score: detailTrackedStrongScoreInput,
+      core_score: detailTrackedCoreScoreInput,
+      context_score: detailTrackedContextScoreInput,
+      exclude_penalty: detailTrackedExcludePenaltyInput,
+    });
+    detailTrackedSaveDefaultsBtn.disabled = true;
+    try {
+      state.runtimeSettings = await saveTrackedDefaultRuleParams(payload);
+      setHint("已把当前数字参数保存为默认值；只影响后续新建主题");
+    } catch (error) {
+      setHint(`保存默认参数失败：${error?.message || error}`);
+    } finally {
+      detailTrackedSaveDefaultsBtn.disabled = false;
+    }
+  });
+}
+
 if (detailTrackedDraftBtn) {
   detailTrackedDraftBtn.addEventListener("click", async () => {
     const title = detailTrackedTitleInput?.value.trim() || "";
@@ -6124,6 +6266,47 @@ if (detailTrackedDraftBtn) {
     } finally {
       detailTrackedDraftBtn.disabled = false;
       detailTrackedDraftBtn.textContent = "一键填写";
+    }
+  });
+}
+
+if (trackedDefaultsSaveBtn) {
+  trackedDefaultsSaveBtn.addEventListener("click", async () => {
+    const payload = trackedDefaultParamsPayloadFromInputs({
+      threshold: trackedDefaultsThresholdInput,
+      title_weight: trackedDefaultsTitleWeightInput,
+      note_weight: trackedDefaultsNoteWeightInput,
+      summary_weight: trackedDefaultsSummaryWeightInput,
+      content_weight: trackedDefaultsContentWeightInput,
+      strong_score: trackedDefaultsStrongScoreInput,
+      core_score: trackedDefaultsCoreScoreInput,
+      context_score: trackedDefaultsContextScoreInput,
+      exclude_penalty: trackedDefaultsExcludePenaltyInput,
+    });
+    trackedDefaultsSaveBtn.disabled = true;
+    try {
+      state.runtimeSettings = await saveTrackedDefaultRuleParams(payload);
+      fillTrackedDefaultsForm(getTrackedDefaultRuleParams());
+      setHint("默认匹配参数已保存，新建主题会自动带入");
+    } catch (error) {
+      setHint(`保存默认参数失败：${error?.message || error}`);
+    } finally {
+      trackedDefaultsSaveBtn.disabled = false;
+    }
+  });
+}
+
+if (trackedDefaultsRestoreBtn) {
+  trackedDefaultsRestoreBtn.addEventListener("click", async () => {
+    trackedDefaultsRestoreBtn.disabled = true;
+    try {
+      state.runtimeSettings = await saveTrackedDefaultRuleParams(TRACKED_SYSTEM_DEFAULT_RULE_PARAMS);
+      fillTrackedDefaultsForm(getTrackedDefaultRuleParams());
+      setHint("已恢复系统默认参数");
+    } catch (error) {
+      setHint(`恢复系统默认失败：${error?.message || error}`);
+    } finally {
+      trackedDefaultsRestoreBtn.disabled = false;
     }
   });
 }

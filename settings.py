@@ -20,7 +20,20 @@ DEFAULT_APP_SETTINGS = {
         "codex_chat": {
             "model": "",
         },
-    }
+    },
+    "tracked": {
+        "default_rule_params": {
+            "title_weight": 1,
+            "note_weight": 1,
+            "summary_weight": 1,
+            "content_weight": 1,
+            "strong_score": 1,
+            "core_score": 1,
+            "context_score": 1,
+            "exclude_penalty": 1,
+            "threshold": 6,
+        },
+    },
 }
 
 
@@ -71,6 +84,15 @@ def load_app_settings() -> dict:
         model = codex_chat.get("model")
         if isinstance(model, str):
             base["llm"]["codex_chat"]["model"] = model.strip()
+
+    tracked = payload.get("tracked") if isinstance(payload, dict) else None
+    if isinstance(tracked, dict):
+        default_rule_params = tracked.get("default_rule_params")
+        if isinstance(default_rule_params, dict):
+            for key in base["tracked"]["default_rule_params"].keys():
+                value = default_rule_params.get(key)
+                if isinstance(value, (int, float)):
+                    base["tracked"]["default_rule_params"][key] = value
 
     return base
 

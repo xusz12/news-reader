@@ -67,6 +67,7 @@
           <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
           <button id="sortOrderBtn" class="icon-btn hidden" type="button"></button>
           <button id="trackedCreateInlineBtn" class="detail-retry-btn hidden" type="button">新建跟踪</button>
+          <button id="trackedDefaultsInlineBtn" class="detail-retry-btn hidden" type="button">默认参数</button>
           <button id="markAllReadBtn" class="icon-btn" type="button"></button>
           <button id="refreshBtn" class="icon-btn" type="button"></button>
           <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
@@ -242,6 +243,8 @@
             <div class="detail-meta">相关场景词：动作、事件、子场景、政策动作，用来和核心对象词共同判断主题相关性。</div>
             <textarea id="detailTrackedExcludeInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="排除词，可留空"></textarea>
             <div class="detail-meta">排除词：常见误伤场景，命中后会优先排除，例如旅游、体育、俄罗斯方块。</div>
+            <textarea id="detailTrackedRequiredInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="必要关键词，可留空"></textarea>
+            <div class="detail-meta">必要关键词：若填写，新闻必须命中其中至少一个词/短语，才会进入后续评分。</div>
             <div class="detail-note-editor-title">最低收录分数</div>
             <input id="detailTrackedThresholdInput" class="detail-tag-create-input" type="number" min="1" max="50" step="1" placeholder="例如 6" />
             <div class="detail-meta">最低收录分数：标题权重最高，用户想法第二，摘要 / AI 摘要第三，正文最低；强匹配短语或“核心对象词 + 相关场景词”达到该分数才进入时间线。</div>
@@ -270,8 +273,40 @@
               <span>启用后续增量跟踪</span>
             </label>
             <div class="detail-note-actions">
+              <button id="detailTrackedSaveDefaultsBtn" class="detail-retry-btn hidden" type="button">保存当前参数为默认</button>
               <button id="detailTrackedFormSaveBtn" class="detail-retry-btn" type="button">保存</button>
               <button id="detailTrackedFormCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+        </div>
+        <div id="detailTrackedDefaultsBody" class="detail-tag-admin-body hidden">
+          <div class="detail-tag-admin-header">
+            <div>
+              <h3 class="detail-title">默认匹配参数</h3>
+              <div class="detail-meta">只影响新建跟踪主题的数字默认值；不会回写已有主题。</div>
+            </div>
+          </div>
+          <section class="detail-note-editor detail-tracked-form-panel">
+            <div class="detail-note-editor-title">最低收录分数</div>
+            <input id="trackedDefaultsThresholdInput" class="detail-tag-create-input" type="number" min="1" max="50" step="1" placeholder="例如 6" />
+            <div class="detail-meta">这里维护新建主题的默认数字口径；关键词与必要关键词不会保存为全局默认。</div>
+            <div class="detail-note-editor-title">字段倍率</div>
+            <div class="detail-reminder-grid">
+              <label class="detail-inline-checkbox"><span>标题倍率</span><input id="trackedDefaultsTitleWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+              <label class="detail-inline-checkbox"><span>想法倍率</span><input id="trackedDefaultsNoteWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+              <label class="detail-inline-checkbox"><span>摘要 / AI 倍率</span><input id="trackedDefaultsSummaryWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+              <label class="detail-inline-checkbox"><span>正文倍率</span><input id="trackedDefaultsContentWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+            </div>
+            <div class="detail-note-editor-title">规则得分</div>
+            <div class="detail-reminder-grid">
+              <label class="detail-inline-checkbox"><span>强匹配短语得分</span><input id="trackedDefaultsStrongScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+              <label class="detail-inline-checkbox"><span>核心对象词得分</span><input id="trackedDefaultsCoreScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+              <label class="detail-inline-checkbox"><span>相关场景词得分</span><input id="trackedDefaultsContextScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+              <label class="detail-inline-checkbox"><span>排除词惩罚</span><input id="trackedDefaultsExcludePenaltyInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+            </div>
+            <div class="detail-note-actions">
+              <button id="trackedDefaultsSaveBtn" class="detail-retry-btn" type="button">保存默认参数</button>
+              <button id="trackedDefaultsRestoreBtn" class="detail-retry-btn" type="button">恢复系统默认</button>
             </div>
           </section>
         </div>
