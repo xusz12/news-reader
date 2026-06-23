@@ -1037,6 +1037,88 @@ def test_tracked_daily_summary_limits_and_truncation_helpers(tmp_path: Path, mon
     assert app_module.enforce_daily_summary_char_limit("abcdefghijklmnopqrstuvwxyz", 8) == "abcdefg…"
 
 
+def test_tracked_topic_rule_draft_generate_and_save(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-20.md").write_text("", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    empty = client.post("/api/tracked-topics/rule-draft", json={"title": ""})
+    assert empty.status_code == 400
+    assert empty.get_json()["error"] == "empty_title"
+
+    def fake_generate_rule_draft(**kwargs):
+        assert kwargs["title"] == "美伊战争"
+        return {
+            "model": "deepseek-chat",
+            "title": "美伊战争",
+            "strong_phrases": ["美伊战争", "美伊战争", "", "美国伊朗战争"],
+            "core_terms": ["美国", "伊朗", "特朗普", "X" * 60],
+            "context_terms": ["空袭", "导弹", "报复", "空袭"],
+            "exclude_terms": ["电影", "游戏", "", "旅游"],
+            "threshold": 99,
+            "raw_json": "{}",
+        }
+
+    monkeypatch.setattr(app_module, "generate_tracked_topic_rule_draft", fake_generate_rule_draft)
+    res = client.post("/api/tracked-topics/rule-draft", json={"title": "美伊战争"})
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert payload["version"] == "v1.9.8.6"
+    assert payload["draft"]["title"] == "美伊战争"
+    assert payload["draft"]["strong_phrases"] == ["美伊战争", "美国伊朗战争"]
+    assert payload["draft"]["core_terms"] == ["美国", "伊朗", "特朗普"]
+    assert payload["draft"]["context_terms"] == ["空袭", "导弹", "报复"]
+    assert payload["draft"]["exclude_terms"] == ["电影", "游戏", "旅游"]
+    assert payload["draft"]["threshold"] == 20
+
+    listed = client.get("/api/tracked-topics").get_json()
+    assert listed["items"] == []
+
+    create_res = client.post(
+        "/api/tracked-topics",
+        json={
+            "title": payload["draft"]["title"],
+            "strong_phrases": ", ".join(payload["draft"]["strong_phrases"]),
+            "core_terms": ", ".join(payload["draft"]["core_terms"]),
+            "context_terms": ", ".join(payload["draft"]["context_terms"]),
+            "exclude_terms": ", ".join(payload["draft"]["exclude_terms"]),
+            "threshold": payload["draft"]["threshold"],
+            "scope": "important",
+            "active": True,
+        },
+    )
+    assert create_res.status_code == 200
+    topic = create_res.get_json()["topic"]
+    assert topic["title"] == "美伊战争"
+    assert topic["rules"]["strong_phrases"] == ["美伊战争", "美国伊朗战争"]
+    assert topic["rules"]["core_terms"] == ["美国", "伊朗", "特朗普"]
+    assert topic["rules"]["threshold"] == 20
+
+    invalid_calls = []
+
+    def fake_invalid_rule_draft(**kwargs):
+        invalid_calls.append(kwargs["title"])
+        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: broken")
+
+    monkeypatch.setattr(app_module, "generate_tracked_topic_rule_draft", fake_invalid_rule_draft)
+    bad = client.post("/api/tracked-topics/rule-draft", json={"title": "AI 发展"})
+    assert bad.status_code == 502
+    assert bad.get_json()["error"] == "tracked_rule_draft_generate_failed"
+    assert invalid_calls == ["AI 发展"]
+
+
 def test_feed_and_non_feed_sorting_split(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)

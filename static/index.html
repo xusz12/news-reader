@@ -230,7 +230,10 @@
             </div>
           </div>
           <section class="detail-note-editor detail-tracked-form-panel">
-            <input id="detailTrackedTitleInput" class="detail-tag-create-input" type="text" maxlength="80" placeholder="主题名称，例如：俄乌战争" />
+            <div class="detail-inline-actions">
+              <input id="detailTrackedTitleInput" class="detail-tag-create-input" type="text" maxlength="80" placeholder="主题名称，例如：俄乌战争" />
+              <button id="detailTrackedDraftBtn" class="detail-retry-btn" type="button">一键填写</button>
+            </div>
             <textarea id="detailTrackedStrongInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="强匹配短语，逗号或换行分隔"></textarea>
             <div class="detail-meta">强匹配短语：完整表达该主题的短语，命中后通常可高分收录，例如 `俄乌战争 / Russia-Ukraine war`。</div>
             <textarea id="detailTrackedCoreInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="核心对象词，逗号或换行分隔"></textarea>

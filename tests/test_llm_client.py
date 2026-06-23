@@ -237,6 +237,63 @@ def test_build_tracked_daily_summary_messages_require_story_style(monkeypatch):
     assert "不得超过 150 个中文字符" in system
 
 
+def test_generate_tracked_topic_rule_draft_success(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
+    arguments = json.dumps(
+        {
+            "title": "美伊战争",
+            "strong_phrases": ["美伊战争", "美国伊朗战争"],
+            "core_terms": ["美国", "伊朗", "特朗普"],
+            "context_terms": ["空袭", "导弹", "报复"],
+            "exclude_terms": ["电影", "游戏", "旅游"],
+            "threshold": 6,
+        },
+        ensure_ascii=False,
+    )
+
+    called = {}
+
+    def create_impl(**kwargs):
+        called.update(kwargs)
+        tool_call = types.SimpleNamespace(
+            function=types.SimpleNamespace(arguments=arguments)
+        )
+        msg = types.SimpleNamespace(tool_calls=[tool_call])
+        choice = types.SimpleNamespace(message=msg)
+        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+
+    _install_fake_openai(monkeypatch, create_impl)
+    import llm_client
+
+    importlib.reload(llm_client)
+    out = llm_client.generate_tracked_topic_rule_draft(title="美伊战争")
+    assert out["model"] == "deepseek-chat"
+    assert out["title"] == "美伊战争"
+    assert out["strong_phrases"] == ["美伊战争", "美国伊朗战争"]
+    assert out["threshold"] == 6
+    assert called["tool_choice"]["function"]["name"] == "save_tracked_rule_draft"
+
+
+def test_generate_tracked_topic_rule_draft_invalid_payload(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
+
+    def create_impl(**kwargs):
+        tool_call = types.SimpleNamespace(
+            function=types.SimpleNamespace(arguments='{"title":"AI","threshold":"x"}')
+        )
+        msg = types.SimpleNamespace(tool_calls=[tool_call])
+        choice = types.SimpleNamespace(message=msg)
+        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+
+    _install_fake_openai(monkeypatch, create_impl)
+    import llm_client
+
+    importlib.reload(llm_client)
+    with pytest.raises(llm_client.LLMClientError) as exc:
+        llm_client.generate_tracked_topic_rule_draft(title="AI 发展")
+    assert "INVALID_RULE_DRAFT_STRONG_PHRASES" in str(exc.value)
+
+
 def test_generate_codex_fallback_translation_uses_codex_exec(monkeypatch, tmp_path):
     commands = []
 

@@ -4,6 +4,19 @@
 
 ## What's Changed
 
+### 2026-06-23 — v1.9.8.6 feat: LLM 辅助生成跟踪主题规则
+- **文件**
+  - *llm_client.py（+）*、*app.py（+）*、*tests/test_api.py（+）*、*tests/test_llm_client.py（+）*
+    - 新增 DeepSeek 结构化 `tracked rule draft` 生成链路，返回 `title / strong_phrases / core_terms / context_terms / exclude_terms / threshold`
+    - 新增 `POST /api/tracked-topics/rule-draft` 非持久化接口：只生成草稿，不创建主题、不回扫、不写 `tracked_topic_items`
+    - 后端对 LLM 返回执行本地清洗：trim、去重、去空、过滤超长词、限制条目数量、将 threshold 约束到合理范围
+    - 补覆盖：空标题错误、草稿生成不持久化、脏词/重复词清洗、草稿可继续走现有 `POST /api/tracked-topics` 保存、LLM 非法结构报错
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 新建跟踪主题表单的主题名称输入框旁新增 `一键填写` 按钮
+    - 主题名称为空时不给调用；已有规则内容时先确认是否覆盖；生成失败不会清空已有输入
+    - 草稿生成成功后按当前表单接受的逗号分隔格式直接预填规则字段，用户仍需手动检查后再保存
+- **影响**：用户现在可以先输入主题名称，再用 LLM 快速生成一版跟踪规则草稿，减少手工搭模板成本，同时保留人工审核和修改权。
+
 ### 2026-06-23 — v1.9.8.5 fix: 跟踪时间流字数约束与深色可读性
 - **文件**
   - *app.py（+）*、*llm_client.py（+）*、*tests/test_api.py（+）*、*tests/test_llm_client.py（+）*

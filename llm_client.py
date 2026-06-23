@@ -54,6 +54,43 @@ def _validate_structured_translation_payload(parsed: object) -> dict[str, Any]:
     }
 
 
+def _validate_tracked_rule_draft_payload(parsed: object) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        raise LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: payload_not_object")
+
+    title = parsed.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise LLMClientError("INVALID_RULE_DRAFT_TITLE")
+
+    normalized: dict[str, Any] = {"title": title.strip()}
+    for key in ("strong_phrases", "core_terms", "context_terms", "exclude_terms"):
+        value = parsed.get(key)
+        if not isinstance(value, list):
+            raise LLMClientError(f"INVALID_RULE_DRAFT_{key.upper()}")
+        cleaned = []
+        for item in value:
+            if not isinstance(item, str):
+                raise LLMClientError(f"INVALID_RULE_DRAFT_{key.upper()}_ITEM")
+            text = item.strip()
+            if text:
+                cleaned.append(text)
+        normalized[key] = cleaned
+
+    threshold = parsed.get("threshold")
+    if isinstance(threshold, bool):
+        raise LLMClientError("INVALID_RULE_DRAFT_THRESHOLD")
+    if isinstance(threshold, (int, float)):
+        normalized["threshold"] = int(threshold)
+    elif isinstance(threshold, str) and threshold.strip():
+        try:
+            normalized["threshold"] = int(float(threshold.strip()))
+        except Exception as exc:
+            raise LLMClientError("INVALID_RULE_DRAFT_THRESHOLD") from exc
+    else:
+        raise LLMClientError("INVALID_RULE_DRAFT_THRESHOLD")
+    return normalized
+
+
 def _contains_cjk(text: str) -> bool:
     for char in text:
         code = ord(char)
@@ -135,6 +172,31 @@ def _build_tracked_daily_summary_messages(
     ]
 
 
+def _build_tracked_rule_draft_messages(*, topic_title: str, description: str = "") -> list[dict[str, str]]:
+    system = (
+        "你是专业新闻编辑，正在为本地新闻阅读器生成跟踪主题规则草稿。"
+        "你必须调用给定函数并严格提供结构化参数。"
+        "目标是为当前 v1.9.8.x 跟踪规则结构生成可人工审核的第一版草稿，而不是自动保存主题。"
+        "字段含义："
+        "强匹配短语=几乎单独就能证明主题相关的完整表达、常见别名或固定短语；"
+        "核心对象词=主题核心国家、组织、公司、人物、地点、资产或产品；"
+        "相关场景词=动作、事件、军事/外交/产业/市场语境，用来和核心对象词组合；"
+        "排除词=最常见误伤场景，例如历史回顾、电影、游戏、旅游、文学、普通市场评论。"
+        "宁可少给高信息量词，也不要给过宽泛的万能词，如国际形势、热点新闻、市场。"
+        "threshold 默认保守给 6，除非主题明显需要不同阈值。"
+        "输出必须是 JSON / function 参数，不要输出自然语言说明。"
+    )
+    user = (
+        f"主题名称：{topic_title.strip()}\n"
+        f"补充描述：{(description or '').strip() or '无'}\n\n"
+        "请生成跟踪主题规则草稿。可以参考“中东局势 / 美伊战争”这类模板风格，但必须按当前主题定制，不要把示例词原样套用到无关主题。"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
 def generate_article_ai(*, title: str, source: str, content: str, model: str | None = None) -> dict[str, Any]:
     api_key = _resolve_api_key("DEEPSEEK_API_KEY")
     if not api_key:
@@ -201,6 +263,95 @@ def generate_article_ai(*, title: str, source: str, content: str, model: str | N
 
     normalized = _validate_structured_translation_payload(parsed)
 
+    return {
+        "model": getattr(resp, "model", None) or model_name,
+        **normalized,
+        "raw_json": json.dumps(parsed, ensure_ascii=False),
+    }
+
+
+def generate_tracked_topic_rule_draft(
+    *,
+    title: str,
+    description: str = "",
+    model: str | None = None,
+) -> dict[str, Any]:
+    api_key = _resolve_api_key("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
+
+    normalized_title = (title or "").strip()
+    if not normalized_title:
+        raise LLMClientError("EMPTY_RULE_DRAFT_TITLE")
+
+    try:
+        from openai import OpenAI
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
+
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
+    model_name = (model or "").strip() or _configured_model()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "save_tracked_rule_draft",
+                "description": "保存跟踪主题规则草稿",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "strong_phrases": {"type": "array", "items": {"type": "string"}},
+                        "core_terms": {"type": "array", "items": {"type": "string"}},
+                        "context_terms": {"type": "array", "items": {"type": "string"}},
+                        "exclude_terms": {"type": "array", "items": {"type": "string"}},
+                        "threshold": {"type": "integer"},
+                    },
+                    "required": [
+                        "title",
+                        "strong_phrases",
+                        "core_terms",
+                        "context_terms",
+                        "exclude_terms",
+                        "threshold",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=_build_tracked_rule_draft_messages(
+                topic_title=normalized_title,
+                description=description,
+            ),
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "save_tracked_rule_draft"}},
+            temperature=0.2,
+            timeout=180,
+        )
+    except Exception as exc:
+        raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
+
+    choices = getattr(resp, "choices", None) or []
+    if not choices:
+        raise LLMClientError("EMPTY_CHOICES")
+    msg = choices[0].message
+    tool_calls = getattr(msg, "tool_calls", None) or []
+    if not tool_calls:
+        raise LLMClientError("NO_TOOL_CALL")
+
+    args_text = getattr(tool_calls[0].function, "arguments", "") or ""
+    try:
+        parsed = json.loads(args_text)
+    except Exception as exc:
+        raise LLMClientError(f"INVALID_TOOL_ARGUMENTS_JSON: {exc}") from exc
+
+    normalized = _validate_tracked_rule_draft_payload(parsed)
     return {
         "model": getattr(resp, "model", None) or model_name,
         **normalized,

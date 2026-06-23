@@ -198,6 +198,7 @@ const detailTrackedFormBackBtn = document.getElementById("detailTrackedFormBackB
 const detailTrackedFormTitle = document.getElementById("detailTrackedFormTitle");
 const detailTrackedFormMeta = document.getElementById("detailTrackedFormMeta");
 const detailTrackedTitleInput = document.getElementById("detailTrackedTitleInput");
+const detailTrackedDraftBtn = document.getElementById("detailTrackedDraftBtn");
 const detailTrackedStrongInput = document.getElementById("detailTrackedStrongInput");
 const detailTrackedCoreInput = document.getElementById("detailTrackedCoreInput");
 const detailTrackedContextInput = document.getElementById("detailTrackedContextInput");
@@ -2285,6 +2286,11 @@ function openTrackedTopicForm(mode, topic = null) {
     ? "修改规则、增量范围和启用状态；字段说明和打分说明都放在当前编辑页内。"
     : "创建后即可在右栏查看时间线，并可从新闻详情手动加入；先按当前页说明填写规则，再逐步调分。";
   detailTrackedFormBackBtn.classList.toggle("hidden", mode !== "edit" || !topic);
+  if (detailTrackedDraftBtn) {
+    detailTrackedDraftBtn.classList.toggle("hidden", mode === "edit");
+    detailTrackedDraftBtn.disabled = false;
+    detailTrackedDraftBtn.textContent = "一键填写";
+  }
   fillTrackedTopicForm(topic);
   updateWorkspaceLayout();
   openDetailOnMobile();
@@ -2309,6 +2315,25 @@ function trackedFormPayload() {
     scope: detailTrackedScopeSelect.value,
     active: detailTrackedActiveInput.checked,
   };
+}
+
+function trackedFormHasRuleContent() {
+  return [
+    detailTrackedStrongInput,
+    detailTrackedCoreInput,
+    detailTrackedContextInput,
+    detailTrackedExcludeInput,
+    detailTrackedThresholdInput,
+  ].some((input) => (input?.value || "").trim());
+}
+
+function applyTrackedRuleDraft(draft) {
+  if (!draft) return;
+  detailTrackedStrongInput.value = Array.isArray(draft.strong_phrases) ? draft.strong_phrases.join(", ") : "";
+  detailTrackedCoreInput.value = Array.isArray(draft.core_terms) ? draft.core_terms.join(", ") : "";
+  detailTrackedContextInput.value = Array.isArray(draft.context_terms) ? draft.context_terms.join(", ") : "";
+  detailTrackedExcludeInput.value = Array.isArray(draft.exclude_terms) ? draft.exclude_terms.join(", ") : "";
+  detailTrackedThresholdInput.value = String(Number(draft.threshold || 6) || 6);
 }
 
 async function openTrackedTopicDetailById(topicId) {
@@ -5016,6 +5041,20 @@ async function generateTrackedTopicDailySummary(topicId, summaryDate) {
   return data;
 }
 
+async function generateTrackedTopicRuleDraft(payload) {
+  const res = await fetch("/api/tracked-topics/rule-draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "tracked_rule_draft_generate_failed" }));
+  if (!res.ok || !data.ok) {
+    const detail = data.detail ? `: ${data.detail}` : "";
+    throw new Error((data.error || "tracked_rule_draft_generate_failed") + detail);
+  }
+  return data;
+}
+
 async function createTrackedTopic(payload) {
   const res = await fetch("/api/tracked-topics", {
     method: "POST",
@@ -6059,6 +6098,33 @@ if (detailTrackedFormCancelBtn) {
       return;
     }
     renderTrackedTopicEmpty(state.trackedTopics.length ? "创建已取消。选择一个主题继续查看。" : "创建已取消。点击“新建跟踪”重新开始。");
+  });
+}
+
+if (detailTrackedDraftBtn) {
+  detailTrackedDraftBtn.addEventListener("click", async () => {
+    const title = detailTrackedTitleInput?.value.trim() || "";
+    if (!title) {
+      setHint("请先输入主题名称");
+      detailTrackedTitleInput?.focus();
+      return;
+    }
+    if (trackedFormHasRuleContent()) {
+      const ok = window.confirm("当前规则字段已有内容，一键填写会覆盖这些字段。是否继续？");
+      if (!ok) return;
+    }
+    detailTrackedDraftBtn.disabled = true;
+    detailTrackedDraftBtn.textContent = "生成中...";
+    try {
+      const data = await generateTrackedTopicRuleDraft({ title });
+      applyTrackedRuleDraft(data.draft || {});
+      setHint(`已生成“${title}”的规则草稿，请检查后再保存`);
+    } catch (error) {
+      setHint(`规则草稿生成失败：${error?.message || error}；可手动填写或稍后重试`);
+    } finally {
+      detailTrackedDraftBtn.disabled = false;
+      detailTrackedDraftBtn.textContent = "一键填写";
+    }
   });
 }
 

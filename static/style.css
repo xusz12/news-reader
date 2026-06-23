@@ -2130,6 +2130,16 @@ html[data-detail-font="large"] {
   padding-right: 4px;
 }
 
+.detail-inline-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.detail-inline-actions .detail-tag-create-input {
+  flex: 1 1 auto;
+}
+
 .detail-inline-checkbox {
   display: inline-flex;
   align-items: center;

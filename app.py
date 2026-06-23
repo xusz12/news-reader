@@ -23,6 +23,7 @@ from llm_client import (
     LLMClientError,
     generate_codex_fallback_translation,
     generate_article_ai,
+    generate_tracked_topic_rule_draft,
     generate_tracked_topic_daily_summary,
     resolve_translation_default_model,
 )
@@ -100,6 +101,7 @@ TRACKED_BACKFILL_MODES = {"recent_important", "all_important", "all_news"}
 TRACKED_MATCH_METHODS = {"keyword", "manual"}
 TRACKED_DAILY_SUMMARY_STATUSES = {"success", "failed"}
 TRACKED_DAILY_SUMMARY_VERSION = "v1.9.8.5"
+TRACKED_RULE_DRAFT_VERSION = "v1.9.8.6"
 TRACKED_RULE_FIELD_SCORES = {
     "title": {"strong": 8, "core": 4, "context": 2},
     "note": {"strong": 6, "core": 3, "context": 2},
@@ -138,6 +140,8 @@ TRACKED_DAILY_SUMMARY_NOTE_LIMIT = 800
 TRACKED_DAILY_SUMMARY_SUMMARY_LIMIT = 800
 TRACKED_DAILY_SUMMARY_MIN_CHARS = 120
 TRACKED_DAILY_SUMMARY_MAX_CHARS = 600
+TRACKED_RULE_DRAFT_THRESHOLD_MIN = 3
+TRACKED_RULE_DRAFT_THRESHOLD_MAX = 20
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -441,6 +445,68 @@ def normalize_keyword_list(value: object) -> list[str]:
         seen.add(lowered)
         normalized.append(text)
     return normalized
+
+
+def sanitize_tracked_rule_draft_terms(value: object, *, min_items: int = 0, max_items: int, max_len: int = 40) -> list[str]:
+    normalized = normalize_keyword_list(value)
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for text in normalized:
+        if len(text) > max_len:
+            continue
+        lowered = text.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        cleaned.append(text)
+        if len(cleaned) >= max_items:
+            break
+    if len(cleaned) < min_items:
+        return cleaned
+    return cleaned
+
+
+def sanitize_tracked_rule_draft(payload: dict[str, object]) -> dict[str, object]:
+    title = " ".join(str(payload.get("title") or "").split()).strip()
+    if not title:
+        raise ValueError("empty_title")
+    if len(title) > 120:
+        raise ValueError("title_too_long")
+
+    strong_phrases = sanitize_tracked_rule_draft_terms(
+        payload.get("strong_phrases"),
+        max_items=12,
+    )
+    core_terms = sanitize_tracked_rule_draft_terms(
+        payload.get("core_terms"),
+        max_items=24,
+    )
+    context_terms = sanitize_tracked_rule_draft_terms(
+        payload.get("context_terms"),
+        max_items=32,
+    )
+    exclude_terms = sanitize_tracked_rule_draft_terms(
+        payload.get("exclude_terms"),
+        max_items=24,
+    )
+    if not strong_phrases and not core_terms:
+        raise ValueError("invalid_rule_draft")
+
+    try:
+        threshold_value = payload.get("threshold")
+        threshold = int(float(str(threshold_value).strip()))
+    except Exception as exc:
+        raise ValueError("invalid_tracked_threshold") from exc
+    threshold = min(TRACKED_RULE_DRAFT_THRESHOLD_MAX, max(TRACKED_RULE_DRAFT_THRESHOLD_MIN, threshold))
+
+    return {
+        "title": title,
+        "strong_phrases": strong_phrases,
+        "core_terms": core_terms,
+        "context_terms": context_terms,
+        "exclude_terms": exclude_terms,
+        "threshold": threshold,
+    }
 
 
 def tracked_scope_value(value: object) -> str:
@@ -3184,6 +3250,42 @@ def api_tracked_topics():
     finally:
         conn.close()
     return jsonify({"ok": True, "items": topics})
+
+
+@app.post("/api/tracked-topics/rule-draft")
+def api_tracked_topic_rule_draft():
+    body = request.get_json(silent=True) or {}
+    title = " ".join(str(body.get("title") or "").split()).strip()
+    description = str(body.get("description") or "").strip()
+    if not title:
+        return jsonify({"ok": False, "error": "empty_title"}), 400
+    if len(title) > 120:
+        return jsonify({"ok": False, "error": "title_too_long"}), 400
+    if len(description) > 1000:
+        return jsonify({"ok": False, "error": "description_too_long"}), 400
+
+    llm_settings = current_runtime_settings()["llm"]
+    model_name = (llm_settings["translation"].get("model") or "").strip()
+    try:
+        payload = generate_tracked_topic_rule_draft(
+            title=title,
+            description=description,
+            model=model_name,
+        )
+        draft = sanitize_tracked_rule_draft(payload)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except LLMClientError as exc:
+        return jsonify({"ok": False, "error": "tracked_rule_draft_generate_failed", "detail": str(exc)}), 502
+
+    return jsonify(
+        {
+            "ok": True,
+            "draft": draft,
+            "model": payload.get("model", model_name or "deepseek-chat"),
+            "version": TRACKED_RULE_DRAFT_VERSION,
+        }
+    )
 
 
 @app.post("/api/tracked-topics")
