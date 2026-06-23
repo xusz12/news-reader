@@ -1773,23 +1773,21 @@ button.active {
 
 .tracked-timeflow-row {
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
 }
 
 .tracked-timeflow-axis {
   position: relative;
   min-height: 100%;
-  padding-right: 12px;
-  text-align: right;
 }
 
 .tracked-timeflow-axis::after {
   content: "";
   position: absolute;
-  top: 22px;
-  right: 9px;
+  top: 8px;
+  left: 8px;
   bottom: -10px;
   width: 1px;
   background: var(--border);
@@ -1800,6 +1798,7 @@ button.active {
 }
 
 .tracked-timeflow-date {
+  margin-bottom: 6px;
   font-size: 12px;
   font-weight: 700;
   color: var(--muted);
@@ -1807,8 +1806,8 @@ button.active {
 
 .tracked-timeflow-dot {
   position: absolute;
-  top: 18px;
-  right: 4px;
+  top: 6px;
+  left: 3px;
   width: 11px;
   height: 11px;
   border-radius: 999px;
@@ -1817,11 +1816,23 @@ button.active {
 }
 
 .tracked-timeflow-body {
+  padding-left: 2px;
+  color: var(--text);
+}
+
+.tracked-timeflow-card {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px 14px;
   background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
-  color: var(--text);
+}
+
+.tracked-timeflow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .tracked-timeflow-meta,
@@ -1838,16 +1849,47 @@ button.active {
 }
 
 .tracked-timeflow-actions {
-  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tracked-timeflow-action-btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tracked-timeflow-action-btn:hover,
+.tracked-timeflow-action-btn:focus-visible {
+  color: var(--accent);
 }
 
 .tracked-timeflow-details {
-  margin-top: 10px;
+  margin: 0;
 }
 
 .tracked-timeflow-details summary {
   cursor: pointer;
   color: var(--muted);
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.tracked-timeflow-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.tracked-timeflow-details[open] summary {
+  color: var(--accent);
 }
 
 .tracked-timeflow-items {

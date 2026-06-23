@@ -2118,11 +2118,6 @@ function buildTrackedTimeflowRow(day) {
   const axis = document.createElement("div");
   axis.className = "tracked-timeflow-axis";
 
-  const date = document.createElement("div");
-  date.className = "tracked-timeflow-date";
-  date.textContent = day.date || "未知日期";
-  axis.appendChild(date);
-
   const dot = document.createElement("div");
   dot.className = "tracked-timeflow-dot";
   axis.appendChild(dot);
@@ -2130,36 +2125,28 @@ function buildTrackedTimeflowRow(day) {
   const body = document.createElement("div");
   body.className = "tracked-timeflow-body";
 
+  const date = document.createElement("div");
+  date.className = "tracked-timeflow-date";
+  date.textContent = day.date || "未知日期";
+  body.appendChild(date);
+
+  const card = document.createElement("div");
+  card.className = "tracked-timeflow-card";
+
+  const header = document.createElement("div");
+  header.className = "tracked-timeflow-header";
+
   const meta = document.createElement("div");
   meta.className = "tracked-timeflow-meta";
   meta.textContent = `${trackedDailySummaryStatusLabel(day)} · ${Number(day.item_count || 0)} 条新闻`;
-  body.appendChild(meta);
-
-  if (day.summary_text) {
-    const summary = document.createElement("div");
-    summary.className = "tracked-timeflow-summary";
-    summary.textContent = day.summary_text;
-    body.appendChild(summary);
-  } else {
-    const empty = document.createElement("div");
-    empty.className = "tracked-timeflow-summary muted";
-    empty.textContent = day.status === "failed" ? "上次生成失败，可重试。" : "当前还没有生成这一天的时间流总结。";
-    body.appendChild(empty);
-  }
-
-  if (day.error && day.status === "failed") {
-    const error = document.createElement("div");
-    error.className = "tracked-timeflow-error";
-    error.textContent = `失败原因：${day.error}`;
-    body.appendChild(error);
-  }
+  header.appendChild(meta);
 
   const actions = document.createElement("div");
   actions.className = "tracked-timeflow-actions";
 
   const generateBtn = document.createElement("button");
   generateBtn.type = "button";
-  generateBtn.className = "detail-retry-btn";
+  generateBtn.className = "tracked-timeflow-action-btn";
   generateBtn.textContent = day.status === "stale" ? "重新生成" : "生成当日总结";
   if (day.status === "success") generateBtn.textContent = "重新生成";
   generateBtn.addEventListener("click", async () => {
@@ -2178,13 +2165,36 @@ function buildTrackedTimeflowRow(day) {
     }
   });
   actions.appendChild(generateBtn);
-  body.appendChild(actions);
 
   const details = document.createElement("details");
   details.className = "tracked-timeflow-details";
   const summaryToggle = document.createElement("summary");
-  summaryToggle.textContent = `展开原始新闻 ${Number(day.item_count || 0)} 条`;
+  summaryToggle.textContent = "⌄";
+  summaryToggle.title = `展开原始新闻（${Number(day.item_count || 0)} 条）`;
+  summaryToggle.setAttribute("aria-label", `展开原始新闻（${Number(day.item_count || 0)} 条）`);
   details.appendChild(summaryToggle);
+  actions.appendChild(details);
+  header.appendChild(actions);
+  card.appendChild(header);
+
+  if (day.summary_text) {
+    const summary = document.createElement("div");
+    summary.className = "tracked-timeflow-summary";
+    summary.textContent = day.summary_text;
+    card.appendChild(summary);
+  } else {
+    const empty = document.createElement("div");
+    empty.className = "tracked-timeflow-summary muted";
+    empty.textContent = day.status === "failed" ? "上次生成失败，可重试。" : "当前还没有生成这一天的时间流总结。";
+    card.appendChild(empty);
+  }
+
+  if (day.error && day.status === "failed") {
+    const error = document.createElement("div");
+    error.className = "tracked-timeflow-error";
+    error.textContent = `失败原因：${day.error}`;
+    card.appendChild(error);
+  }
 
   const list = document.createElement("div");
   list.className = "tracked-timeflow-items";
@@ -2211,7 +2221,8 @@ function buildTrackedTimeflowRow(day) {
     list.appendChild(button);
   });
   details.appendChild(list);
-  body.appendChild(details);
+  card.appendChild(details);
+  body.appendChild(card);
 
   row.appendChild(axis);
   row.appendChild(body);
