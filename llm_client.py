@@ -27,6 +27,19 @@ def _validate_daily_summary_payload(parsed: object) -> dict[str, Any]:
     return {"summary_text": normalized}
 
 
+def _validate_market_tag_summary_payload(parsed: object) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        raise LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: payload_not_object")
+
+    summary_text = parsed.get("summary_text")
+    if not isinstance(summary_text, str):
+        raise LLMClientError("INVALID_MARKET_TAG_SUMMARY_TEXT")
+    normalized = summary_text.strip()
+    if not normalized or not _contains_cjk(normalized):
+        raise LLMClientError("INVALID_MARKET_TAG_SUMMARY_TEXT")
+    return {"summary_text": normalized}
+
+
 def _validate_structured_translation_payload(parsed: object) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: payload_not_object")
@@ -190,6 +203,41 @@ def _build_tracked_rule_draft_messages(*, topic_title: str, description: str = "
         f"主题名称：{topic_title.strip()}\n"
         f"补充描述：{(description or '').strip() or '无'}\n\n"
         "请生成跟踪主题规则草稿。可以参考“中东局势 / 美伊战争”这类模板风格，但必须按当前主题定制，不要把示例词原样套用到无关主题。"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def _build_market_tag_summary_messages(
+    *,
+    tag_label: str,
+    range_days: int,
+    news_count: int,
+    note_count: int,
+    materials: str,
+) -> list[dict[str, str]]:
+    system = (
+        "你是专业市场新闻编辑。"
+        "你必须调用给定函数并严格提供结构化参数。"
+        "任务：基于单一板块最近一段时间的本地新闻与用户想法，总结“近期趋势”。"
+        "必须明确区分两类来源："
+        "1) 新闻事实：来自新闻标题、摘要、AI 摘要、AI 正文摘录、正文摘录；"
+        "2) 用户判断：来自新闻想法与独立趋势想法。"
+        "输出要求："
+        "先概括近期事实主线，再单独概括用户判断/分歧/关注点。"
+        "不得把用户判断伪装成新闻事实，不得补充材料外信息，不得联网，不得重打标签。"
+        "如果材料不足或存在冲突，只能按材料原样表述。"
+        "输出为自然中文段落，可用“新闻事实 / 用户想法”这样的短标题，但不要列表化。"
+    )
+    user = (
+        f"板块：{tag_label or '未命名板块'}\n"
+        f"范围：最近 {max(1, int(range_days or 1))} 天\n"
+        f"新闻条数上限：{max(0, int(news_count or 0))}\n"
+        f"独立趋势想法条数：{max(0, int(note_count or 0))}\n\n"
+        "请基于以下本地材料生成板块近期趋势总结：\n\n"
+        f"{materials}"
     )
     return [
         {"role": "system", "content": system},
@@ -435,6 +483,89 @@ def generate_tracked_topic_daily_summary(
         raise LLMClientError(f"INVALID_TOOL_ARGUMENTS_JSON: {exc}") from exc
 
     normalized = _validate_daily_summary_payload(parsed)
+    return {
+        "model": getattr(resp, "model", None) or model_name,
+        **normalized,
+        "raw_json": json.dumps(parsed, ensure_ascii=False),
+    }
+
+
+def generate_market_tag_summary(
+    *,
+    tag_label: str,
+    range_days: int,
+    news_count: int,
+    note_count: int,
+    materials: str,
+    model: str | None = None,
+) -> dict[str, Any]:
+    api_key = _resolve_api_key("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
+
+    compiled_materials = (materials or "").strip()
+    if not compiled_materials:
+        raise LLMClientError("EMPTY_MARKET_TAG_SUMMARY_MATERIALS")
+
+    try:
+        from openai import OpenAI
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
+
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
+    model_name = (model or "").strip() or _configured_model()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "save_market_tag_summary",
+                "description": "保存单一板块近期趋势总结",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "summary_text": {"type": "string"},
+                    },
+                    "required": ["summary_text"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=_build_market_tag_summary_messages(
+                tag_label=tag_label,
+                range_days=range_days,
+                news_count=news_count,
+                note_count=note_count,
+                materials=compiled_materials,
+            ),
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "save_market_tag_summary"}},
+            temperature=0.2,
+            timeout=180,
+        )
+    except Exception as exc:
+        raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
+
+    choices = getattr(resp, "choices", None) or []
+    if not choices:
+        raise LLMClientError("EMPTY_CHOICES")
+    msg = choices[0].message
+    tool_calls = getattr(msg, "tool_calls", None) or []
+    if not tool_calls:
+        raise LLMClientError("NO_TOOL_CALL")
+
+    args_text = getattr(tool_calls[0].function, "arguments", "") or ""
+    try:
+        parsed = json.loads(args_text)
+    except Exception as exc:
+        raise LLMClientError(f"INVALID_TOOL_ARGUMENTS_JSON: {exc}") from exc
+
+    normalized = _validate_market_tag_summary_payload(parsed)
     return {
         "model": getattr(resp, "model", None) or model_name,
         **normalized,

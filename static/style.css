@@ -735,6 +735,10 @@ button.active {
   margin-bottom: 8px;
 }
 
+.nav-btn-secondary {
+  opacity: 0.65;
+}
+
 .feed-column {
   height: calc(100vh - var(--sticky-top) - 12px);
   padding: 10px;
@@ -796,6 +800,10 @@ button.active {
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.market-workbench-form {
+  flex-wrap: wrap;
 }
 
 .search-page-input {
@@ -1963,6 +1971,10 @@ button.active {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.market-overview-item .summary {
+  margin-bottom: 0;
 }
 
 .market-tag-badge {

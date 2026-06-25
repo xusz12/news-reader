@@ -502,6 +502,36 @@ def test_apply_schema_creates_tracked_topic_tables_and_indexes(tmp_path: Path, m
         conn.close()
 
 
+def test_apply_schema_creates_market_tag_summary_table(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "news_index.sqlite3"
+    daily_root = tmp_path / "DailyNews"
+    daily_root.mkdir()
+
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_root))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = {
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        indexes = {
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+        }
+        assert "market_tag_summaries" in tables
+        assert "idx_market_tag_summaries_tag_range" in indexes
+    finally:
+        conn.close()
+
+
 def test_tracked_topics_backfill_incremental_and_overrides(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -3000,6 +3030,160 @@ def test_market_trend_tag_detail_overview(tmp_path: Path, monkeypatch):
     assert [item["direction"] for item in payload["items"]] == ["bullish", "bearish"]
     assert [note["date_key"] for note in payload["trend_notes"]] == ["2026-06-03", "2026-06-01"]
     assert payload["items"][1]["note"]["note"] == "旧新闻想法"
+
+
+def test_market_workbench_overview_and_tag_feed(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-03.md").write_text(
+        """## Reuters · World（3条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-03 09:00:00
+### [R2](https://www.reuters.com/world/r2)
+- 发布时间：2026-06-02 10:00:00
+### [R3](https://www.reuters.com/world/r3)
+- 发布时间：2026-06-01 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    r1 = next(x for x in items if x["title"] == "R1")
+    r2 = next(x for x in items if x["title"] == "R2")
+    r3 = next(x for x in items if x["title"] == "R3")
+
+    assert client.put(f"/api/news/{r1['id']}/market-tag", json={"tag": "AI", "direction": "bullish"}).status_code == 200
+    assert client.put(f"/api/news/{r2['id']}/market-tag", json={"tag": "AI", "direction": "bearish"}).status_code == 200
+    assert client.put(f"/api/news/{r2['id']}/note", json={"note": "这条属于我的板块想法"}).status_code == 200
+    assert client.put(f"/api/news/{r3['id']}/market-tag", json={"tag": "存储", "direction": "bullish"}).status_code == 200
+    assert client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-03", "tag_key": "AI", "direction": "bullish", "note": "独立看多 AI"},
+    ).status_code == 200
+
+    overview = client.get("/api/market-workbench?content_filter=all&per=20")
+    assert overview.status_code == 200
+    overview_payload = overview.get_json()
+    assert overview_payload["mode"] == "all"
+    assert overview_payload["tags"]
+    assert [item["title"] for item in overview_payload["items"]] == ["R1", "R2", "R3"]
+    assert all(item["entry_type"] == "news" for item in overview_payload["items"])
+
+    tag_feed = client.get("/api/market-workbench?tag=AI&content_filter=all&per=20")
+    assert tag_feed.status_code == 200
+    tag_payload = tag_feed.get_json()
+    assert tag_payload["mode"] == "tag"
+    assert tag_payload["selected_tag"]["key"] == "AI"
+    assert [item["entry_type"] for item in tag_payload["items"]] == ["trend_note", "news", "news"]
+    assert tag_payload["items"][0]["idea_type"] == "trend_note"
+    assert tag_payload["items"][1]["title"] == "R1"
+    assert tag_payload["items"][2]["title"] == "R2"
+
+    ideas_only = client.get("/api/market-workbench?tag=AI&content_filter=ideas&per=20").get_json()
+    assert [item["entry_type"] for item in ideas_only["items"]] == ["trend_note", "news"]
+    assert ideas_only["items"][1]["title"] == "R2"
+
+    bullish_only = client.get("/api/market-workbench?tag=AI&content_filter=bullish&per=20").get_json()
+    assert [item["entry_type"] for item in bullish_only["items"]] == ["trend_note", "news"]
+    assert bullish_only["items"][1]["title"] == "R1"
+
+    bearish_only = client.get("/api/market-workbench?tag=AI&content_filter=bearish&per=20").get_json()
+    assert [item["entry_type"] for item in bearish_only["items"]] == ["news"]
+    assert bearish_only["items"][0]["title"] == "R2"
+
+
+def test_market_tag_summary_generate_and_stale(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-03.md").write_text(
+        """## Reuters · World（2条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-03 09:00:00
+- 摘要：AI 继续上涨
+### [R2](https://www.reuters.com/world/r2)
+- 发布时间：2026-06-02 10:00:00
+- 摘要：算力继续扩张
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    r1 = next(x for x in items if x["title"] == "R1")
+    r2 = next(x for x in items if x["title"] == "R2")
+    assert client.put(f"/api/news/{r1['id']}/market-tag", json={"tag": "AI", "direction": "bullish"}).status_code == 200
+    assert client.put(f"/api/news/{r2['id']}/market-tag", json={"tag": "AI", "direction": "bearish"}).status_code == 200
+    assert client.put(f"/api/news/{r1['id']}/note", json={"note": "我倾向继续关注主线"}).status_code == 200
+    assert client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-03", "tag_key": "AI", "direction": "bullish", "note": "独立趋势判断"},
+    ).status_code == 200
+
+    captured = {}
+
+    def fake_summary(**kwargs):
+        captured.update(kwargs)
+        return {
+            "model": "deepseek-chat",
+            "summary_text": "新闻事实：AI 与算力链维持强势。用户想法：继续围绕主线观察，但要区分判断与事实。",
+            "raw_json": "{}",
+        }
+
+    monkeypatch.setattr(app_module, "generate_market_tag_summary", fake_summary)
+
+    missing = client.get("/api/market-tags/AI/summary")
+    assert missing.status_code == 200
+    assert missing.get_json()["summary"]["status"] == "missing"
+
+    generated = client.post("/api/market-tags/AI/summary/generate")
+    assert generated.status_code == 200
+    summary = generated.get_json()["summary"]
+    assert summary["status"] == "success"
+    assert "最近 30 天" in summary["scope_label"]
+    assert "新闻事实" in summary["summary_text"]
+    assert "用户想法" in summary["summary_text"]
+    assert captured["range_days"] == 30
+    assert captured["news_count"] == 2
+    assert captured["note_count"] == 1
+    assert "【新闻事实】" in captured["materials"]
+    assert "【用户想法】" in captured["materials"]
+    assert "对应新闻想法" in captured["materials"]
+
+    stale_note = client.put(f"/api/news/{r2['id']}/note", json={"note": "补充一条新的新闻想法"})
+    assert stale_note.status_code == 200
+
+    stale = client.get("/api/market-tags/AI/summary")
+    assert stale.status_code == 200
+    assert stale.get_json()["summary"]["status"] == "stale"
+
+    def fail_summary(**kwargs):
+        raise app_module.LLMClientError("DEEPSEEK_CALL_FAILED: boom")
+
+    monkeypatch.setattr(app_module, "generate_market_tag_summary", fail_summary)
+    failed = client.post("/api/market-tags/AI/summary/generate")
+    assert failed.status_code == 502
+    failed_payload = failed.get_json()
+    assert failed_payload["summary"]["status"] == "failed"
+    assert "boom" in failed_payload["summary"]["error"]
 
 
 def test_ai_fallback_to_codex_success(tmp_path: Path, monkeypatch):

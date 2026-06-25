@@ -140,6 +140,24 @@ CREATE TABLE IF NOT EXISTS market_trend_notes (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS market_tag_summaries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tag_key TEXT NOT NULL,
+  range_days INTEGER NOT NULL,
+  source_hash TEXT NOT NULL DEFAULT '',
+  summary_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'success',
+  error TEXT,
+  model TEXT,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(tag_key, range_days)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_tag_summaries_tag_range
+ON market_tag_summaries(tag_key, range_days);
+
 CREATE TABLE IF NOT EXISTS news_reminders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id TEXT,

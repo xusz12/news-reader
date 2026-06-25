@@ -40,6 +40,9 @@ let state = {
   selectedTrendIdea: null,
   trendNoteContext: null,
   marketTagChoices: [],
+  marketWorkbenchTag: "",
+  marketWorkbenchFilter: "all",
+  marketWorkbenchSummary: null,
   selectedTagAdminKey: "",
   tagAdminOpen: false,
   trendComposeOpen: false,
@@ -145,6 +148,10 @@ const ideaFilterBar = document.getElementById("ideaFilterBar");
 const ideaFilterAllBtn = document.getElementById("ideaFilterAllBtn");
 const ideaFilterArticleBtn = document.getElementById("ideaFilterArticleBtn");
 const ideaFilterTrendBtn = document.getElementById("ideaFilterTrendBtn");
+const marketWorkbenchBar = document.getElementById("marketWorkbenchBar");
+const marketWorkbenchTagSelect = document.getElementById("marketWorkbenchTagSelect");
+const marketWorkbenchFilterSelect = document.getElementById("marketWorkbenchFilterSelect");
+const marketWorkbenchSummaryBtn = document.getElementById("marketWorkbenchSummaryBtn");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 const workspace = document.getElementById("workspace");
@@ -557,7 +564,7 @@ function updateWorkspaceLayout() {
 }
 
 function updateSourceFilterVisibility() {
-  const visible = state.collection !== "trends" && state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes";
+  const visible = state.collection !== "trends" && state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes" && state.collection !== "market_tags";
   document.querySelectorAll(".sources-title, #sourceFilters").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
@@ -598,6 +605,34 @@ async function fetchMarketTagDefinitions() {
   if (!data.ok) throw new Error(data.error || "market_tags_fetch_failed");
   state.marketTagChoices = Array.isArray(data.tags) ? data.tags : [];
   return state.marketTagChoices;
+}
+
+async function fetchMarketWorkbenchPage(page = 1) {
+  const params = new URLSearchParams({
+    page: String(page),
+    per: String(state.per),
+    content_filter: state.marketWorkbenchFilter || "all",
+  });
+  if (state.marketWorkbenchTag) params.set("tag", state.marketWorkbenchTag);
+  const res = await fetch(`/api/market-workbench?${params.toString()}`);
+  if (!res.ok) throw new Error("market_workbench_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_workbench_fetch_failed");
+  state.marketTagChoices = Array.isArray(data.tags) ? data.tags : state.marketTagChoices;
+  return data;
+}
+
+async function generateMarketTagSummary(tagKey) {
+  const res = await fetch(`/api/market-tags/${encodeURIComponent(tagKey)}/summary/generate`, {
+    method: "POST",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) {
+    const error = new Error(data.detail || data.error || "market_tag_summary_generate_failed");
+    error.payload = data.summary || null;
+    throw error;
+  }
+  return data.summary;
 }
 
 async function fetchErrorStats() {
@@ -1654,6 +1689,37 @@ function updateIdeaFilterBar() {
   });
 }
 
+function renderMarketWorkbenchControls() {
+  if (!marketWorkbenchTagSelect || !marketWorkbenchFilterSelect) return;
+  marketWorkbenchTagSelect.innerHTML = "";
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = "全部板块";
+  marketWorkbenchTagSelect.appendChild(allOption);
+  activeMarketTagChoices().forEach((tag) => {
+    const option = document.createElement("option");
+    option.value = tag.key;
+    option.textContent = tag.display_name;
+    marketWorkbenchTagSelect.appendChild(option);
+  });
+  marketWorkbenchTagSelect.value = state.marketWorkbenchTag || "";
+  marketWorkbenchFilterSelect.value = state.marketWorkbenchFilter || "all";
+}
+
+function updateMarketWorkbenchBar() {
+  if (!marketWorkbenchBar) return;
+  const visible = state.collection === "market_tags";
+  marketWorkbenchBar.classList.toggle("hidden", !visible);
+  if (!visible) {
+    removeMarketWorkbenchSummaryInline();
+    return;
+  }
+  renderMarketWorkbenchControls();
+  if (marketWorkbenchSummaryBtn) {
+    marketWorkbenchSummaryBtn.classList.toggle("hidden", !state.marketWorkbenchTag);
+  }
+}
+
 function updateReminderFilterBar() {
   if (!reminderFilterBar) return;
   const visible = state.collection === "reminders";
@@ -1777,11 +1843,11 @@ function updateCollectionButtons() {
     mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
   }
   if (mobileTabFilterBtn) {
-    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search" || state.collection === "reminders" || state.collection === "notes" || state.collection === "tracked");
+    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search" || state.collection === "reminders" || state.collection === "notes" || state.collection === "tracked" || state.collection === "market_tags");
   }
   if (manageMarketTagsBtn) {
-    manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends");
-    if (state.collection === "trends") {
+    manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends" && state.collection !== "market_tags");
+    if (state.collection === "trends" || state.collection === "market_tags") {
       applyIcon(manageMarketTagsBtn, "pen", {
         tone: state.tagAdminOpen ? "accent" : "default",
         label: "管理板块",
@@ -1789,6 +1855,7 @@ function updateCollectionButtons() {
     }
   }
   updateIdeaFilterBar();
+  updateMarketWorkbenchBar();
   updateReminderFilterBar();
   updateTrackedCreateButton();
 }
@@ -1859,7 +1926,7 @@ function openMobileCollectionSheet() {
 }
 
 function openMobileFilterSheet() {
-  if (!mobileFilterSheet || state.collection === "search" || state.collection === "reminders" || state.collection === "notes" || state.collection === "tracked") return;
+  if (!mobileFilterSheet || state.collection === "search" || state.collection === "reminders" || state.collection === "notes" || state.collection === "tracked" || state.collection === "market_tags") return;
   closeMobileCollectionSheet();
   updateMobileFilterCollectionText();
   renderSourceFilters(latestSourceOptions);
@@ -2504,6 +2571,20 @@ function renderMeta() {
     pageInfo.textContent = "- / -";
     return;
   }
+  if (state.collection === "market_tags") {
+    const selected = activeMarketTagChoices().find((tag) => tag.key === state.marketWorkbenchTag);
+    const filterNames = {
+      all: "全部",
+      ideas: "仅想法",
+      bullish: "看多",
+      bearish: "看空",
+    };
+    meta.textContent = selected
+      ? `板块工作台 · ${selected.display_name} · ${filterNames[state.marketWorkbenchFilter] || "全部"} · 共 ${state.total} 条`
+      : `板块工作台 · 全部板块 · ${filterNames[state.marketWorkbenchFilter] || "全部"} · 共 ${state.total} 条`;
+    pageInfo.textContent = `${state.page} / ${state.pages}`;
+    return;
+  }
   if (state.collection === "reminders") {
     meta.textContent = `提醒 · ${reminderFilterLabel()} · 进行中 ${state.reminderSummary.active_total || 0} · 到期 ${state.reminderSummary.due_total || 0} · 已完成 ${state.reminderSummary.done_total || 0}`;
     pageInfo.textContent = "- / -";
@@ -2562,6 +2643,7 @@ function clearTrendIdeaDetailState() {
 function emptyDetailMessage() {
   if (state.collection === "trends") return "选择一个趋势单元格查看新闻明细";
   if (state.collection === "notes") return "选择一条想法查看详情";
+  if (state.collection === "market_tags") return state.marketWorkbenchTag ? "选择一条板块内容查看详情" : "选择一条板块新闻查看详情";
   return "选择一条新闻查看摘要与正文";
 }
 
@@ -5012,6 +5094,83 @@ function buildIdeaRow(item) {
   return li;
 }
 
+function buildMarketOverviewRow(item) {
+  const li = document.createElement("li");
+  li.className = "news-item market-overview-item";
+  li.dataset.tagKey = item.tag_key || "";
+
+  const line1 = document.createElement("div");
+  line1.className = "line1";
+  const badge = document.createElement("span");
+  badge.className = "note-badge idea-kind-badge trend";
+  badge.textContent = "板块";
+  const text = document.createElement("span");
+  text.className = "line1-text";
+  text.textContent = `近30天新闻 ${item.recent_total || 0} · 看多 ${item.bullish_total || 0} · 看空 ${item.bearish_total || 0}`;
+  line1.appendChild(badge);
+  line1.appendChild(text);
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = item.tag_label || item.tag_key || "";
+
+  const summary = document.createElement("p");
+  summary.className = "summary";
+  const latestTime = item.latest_published_at || item.latest_note_updated_at || "暂无更新";
+  summary.textContent = `总新闻 ${item.total_items || 0} · 独立想法 ${item.trend_note_total || 0} · 最近更新 ${latestTime}`;
+
+  li.appendChild(line1);
+  li.appendChild(title);
+  li.appendChild(summary);
+  li.addEventListener("click", async () => {
+    state.marketWorkbenchTag = item.tag_key || "";
+    state.marketWorkbenchSummary = null;
+    await loadFirstPage();
+  });
+  return li;
+}
+
+function removeMarketWorkbenchSummaryInline() {
+  if (!newsList) return;
+  newsList.querySelectorAll(".market-summary-row").forEach((node) => node.remove());
+}
+
+function renderMarketWorkbenchSummaryInline() {
+  removeMarketWorkbenchSummaryInline();
+  if (!newsList || state.collection !== "market_tags" || !state.marketWorkbenchTag || !state.marketWorkbenchSummary) return;
+  const summary = state.marketWorkbenchSummary;
+  const statusMap = {
+    missing: "尚未生成，点击“总结近期趋势”手动生成。",
+    stale: "本地新闻或想法有更新，当前总结已过期，可重新生成。",
+    failed: `上次生成失败：${summary?.error || "未知错误"}`,
+    success: `已生成 · 新闻 ${summary?.news_count || 0} 条 · 独立想法 ${summary?.trend_note_count || 0} 条`,
+  };
+
+  const li = document.createElement("li");
+  li.className = "market-summary-row";
+  const card = document.createElement("section");
+  card.className = "detail-note-card";
+
+  const title = document.createElement("h4");
+  title.textContent = "近期趋势总结";
+  const scope = document.createElement("div");
+  scope.className = "detail-meta";
+  scope.textContent = summary?.scope_label || "";
+  const status = document.createElement("div");
+  status.className = "detail-meta";
+  status.textContent = statusMap[summary?.status] || "";
+  const text = document.createElement("p");
+  text.className = "detail-note-text";
+  text.textContent = summary?.summary_text || "";
+
+  card.appendChild(title);
+  card.appendChild(scope);
+  card.appendChild(status);
+  card.appendChild(text);
+  li.appendChild(card);
+  newsList.prepend(li);
+}
+
 function updateIdeaDateCountOnDelete(item) {
   const dateKey = item?.date_key || "unknown";
   if (!state.dateCounts.has(dateKey)) return;
@@ -5253,7 +5412,7 @@ async function fetchSearchPage(page) {
 }
 
 function resetList() {
-  newsList.querySelectorAll(".news-item, .date-section").forEach((node) => node.remove());
+  newsList.querySelectorAll(".news-item, .date-section, .market-summary-row").forEach((node) => node.remove());
   enteredViewport.clear();
   state.itemsById.clear();
   state.detailCacheByUrl.clear();
@@ -5485,6 +5644,40 @@ async function loadFirstPage() {
       return;
     }
 
+    if (state.collection === "market_tags") {
+      removeMarketWorkbenchSummaryInline();
+      const data = await fetchMarketWorkbenchPage(1);
+      state.total = Number(data.total || 0);
+      state.pages = Number(data.pages || 1);
+      state.page = Number(data.page || 1);
+      state.hasMore = !!data.has_more;
+      state.marketWorkbenchSummary = data.summary || null;
+      showTrendsView(false);
+      renderMeta();
+      (data.items || []).forEach((item) => {
+        const row = item.entry_type === "trend_note" ? buildIdeaRow(item) : buildItemRow(item);
+        appendNewsRow(item, row);
+      });
+      if (state.marketWorkbenchTag) {
+        renderMarketWorkbenchSummaryInline();
+      } else {
+        removeMarketWorkbenchSummaryInline();
+      }
+      if (!state.total) {
+        setHint("当前板块筛选下暂无内容");
+      } else if (state.hasMore) {
+        setHint("继续下滑加载更多");
+      } else {
+        setHint("已加载当前板块集合的全部结果");
+      }
+      ensureRowStatusPolling();
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      return;
+    }
+
     const sourceList = await fetchSources();
     const available = new Set(sourceList.map((x) => x.key));
     if (state.sourceFilter !== "all" && !available.has(state.sourceFilter)) {
@@ -5552,6 +5745,34 @@ async function loadNextPage() {
     return;
   }
   if (state.collection === "trends") return;
+  if (state.collection === "market_tags") {
+    if (!state.hasMore || !state.marketWorkbenchTag) return;
+    const next = state.page + 1;
+    state.loading = true;
+    try {
+      const data = await fetchMarketWorkbenchPage(next);
+      (data.items || []).forEach((item) => {
+        const row = item.entry_type === "trend_note" ? buildIdeaRow(item) : buildItemRow(item);
+        appendNewsRow(item, row);
+      });
+      state.page = Number(data.page || next);
+      state.pages = Number(data.pages || state.pages);
+      state.total = Number(data.total || state.total);
+      state.hasMore = !!data.has_more;
+      state.marketWorkbenchSummary = data.summary || state.marketWorkbenchSummary;
+      renderMeta();
+      if (state.marketWorkbenchTag) {
+        renderMarketWorkbenchSummaryInline();
+      } else {
+        removeMarketWorkbenchSummaryInline();
+      }
+      setHint(state.hasMore ? "继续下滑加载更多" : "已加载该板块的全部当前结果");
+      ensureRowStatusPolling();
+    } finally {
+      state.loading = false;
+    }
+    return;
+  }
   if (state.collection === "notes") {
     if (!state.hasMore) return;
     const next = state.page + 1;
@@ -5640,6 +5861,52 @@ readFilterToggleBtn.addEventListener("click", async () => {
   });
 });
 
+if (marketWorkbenchTagSelect) {
+  marketWorkbenchTagSelect.addEventListener("change", async () => {
+    removeMarketWorkbenchSummaryInline();
+    state.marketWorkbenchTag = marketWorkbenchTagSelect.value || "";
+    state.marketWorkbenchSummary = null;
+    await loadFirstPage();
+  });
+}
+
+if (marketWorkbenchFilterSelect) {
+  marketWorkbenchFilterSelect.addEventListener("change", async () => {
+    removeMarketWorkbenchSummaryInline();
+    state.marketWorkbenchFilter = marketWorkbenchFilterSelect.value || "all";
+    state.marketWorkbenchSummary = null;
+    await loadFirstPage();
+  });
+}
+
+if (marketWorkbenchSummaryBtn) {
+  marketWorkbenchSummaryBtn.addEventListener("click", async () => {
+    if (!state.marketWorkbenchTag) return;
+    const requestedTag = state.marketWorkbenchTag;
+    marketWorkbenchSummaryBtn.disabled = true;
+    try {
+      const summary = await generateMarketTagSummary(requestedTag);
+      if (state.collection !== "market_tags" || state.marketWorkbenchTag !== requestedTag) {
+        return;
+      }
+      state.marketWorkbenchSummary = summary;
+      renderMarketWorkbenchSummaryInline();
+      setHint("板块近期趋势总结已更新");
+    } catch (error) {
+      if (state.collection !== "market_tags" || state.marketWorkbenchTag !== requestedTag) {
+        return;
+      }
+      if (error?.payload) {
+        state.marketWorkbenchSummary = error.payload;
+        renderMarketWorkbenchSummaryInline();
+      }
+      setHint(`板块近期趋势总结失败：${error?.message || error}`);
+    } finally {
+      marketWorkbenchSummaryBtn.disabled = false;
+    }
+  });
+}
+
 if (sortOrderBtn) {
   sortOrderBtn.addEventListener("click", async () => {
     if (!supportsSortToggle()) return;
@@ -5688,6 +5955,7 @@ async function switchCollection(collection) {
   if (state.collection === collection) {
     return;
   }
+  removeMarketWorkbenchSummaryInline();
   if (collection === "trends" && state.collection !== "trends") {
     state.lastNewsCollectionBeforeTrends = state.collection;
   }

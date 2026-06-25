@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v1.9.8.8</title>
-    <link rel="stylesheet" href="/static/style.css?v=1.9.8.8" />
+    <title>News Reader v1.9.8.9</title>
+    <link rel="stylesheet" href="/static/style.css?v=1.9.8.9" />
   </head>
   <body>
     <header class="topbar">
@@ -12,7 +12,7 @@
         <div class="topbar-brand">
           <div class="topbar-title-row">
             <h1>News Reader</h1>
-            <span class="topbar-version">v1.9.8.8</span>
+            <span class="topbar-version">v1.9.8.9</span>
           </div>
           <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
         </div>
@@ -55,7 +55,7 @@
         <button id="navNotesBtn" class="nav-btn">想法</button>
         <button id="navTrackedBtn" class="nav-btn">跟踪</button>
         <button id="navMarketTagsBtn" class="nav-btn">板块</button>
-        <button id="navTrendsBtn" class="nav-btn">趋势</button>
+        <button id="navTrendsBtn" class="nav-btn nav-btn-secondary hidden">趋势</button>
 
         <h2 class="sources-title">订阅源</h2>
         <div id="sourceFilters" class="source-filters"></div>
@@ -82,6 +82,18 @@
           <button id="ideaFilterArticleBtn" class="reminder-filter-btn" type="button">新闻想法</button>
           <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">趋势想法</button>
         </div>
+        <section id="marketWorkbenchBar" class="search-page-controls hidden" aria-label="板块工作台筛选">
+          <div class="search-page-form market-workbench-form">
+            <select id="marketWorkbenchTagSelect" class="pref-select search-page-select" aria-label="板块选择"></select>
+            <select id="marketWorkbenchFilterSelect" class="pref-select search-page-select" aria-label="内容筛选">
+              <option value="all">全部</option>
+              <option value="ideas">仅想法</option>
+              <option value="bullish">看多</option>
+              <option value="bearish">看空</option>
+            </select>
+            <button id="marketWorkbenchSummaryBtn" class="detail-retry-btn hidden" type="button">总结近期趋势</button>
+          </div>
+        </section>
         <section id="searchPageControls" class="search-page-controls hidden" aria-label="搜索条件">
           <div class="search-page-form" role="search">
             <input id="searchPageInput" class="search-page-input" type="search" placeholder="搜索标题、原文、AI、想法、板块..." aria-label="搜索关键词" />
@@ -501,9 +513,9 @@
     <nav class="mobile-collection-tabs" aria-label="集合切换">
       <button id="mobileCollectionTriggerBtn" class="mobile-tab active" type="button">新闻流</button>
       <button id="mobileTabFilterBtn" class="mobile-tab mobile-filter-tab" type="button">新闻源</button>
-      <button id="mobileTrendsTabBtn" class="mobile-tab" type="button">趋势</button>
+      <button id="mobileTrendsTabBtn" class="mobile-tab hidden" type="button">趋势</button>
     </nav>
 
-    <script src="/static/app.js?v=1.9.8.4"></script>
+    <script src="/static/app.js?v=1.9.8.9"></script>
   </body>
 </html>

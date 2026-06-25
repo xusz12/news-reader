@@ -23,6 +23,7 @@ from llm_client import (
     LLMClientError,
     generate_codex_fallback_translation,
     generate_article_ai,
+    generate_market_tag_summary,
     generate_tracked_topic_rule_draft,
     generate_tracked_topic_daily_summary,
     resolve_translation_default_model,
@@ -100,8 +101,10 @@ TRACKED_TOPIC_SCOPES = {"important", "all"}
 TRACKED_BACKFILL_MODES = {"recent_important", "all_important", "all_news"}
 TRACKED_MATCH_METHODS = {"keyword", "manual"}
 TRACKED_DAILY_SUMMARY_STATUSES = {"success", "failed"}
+MARKET_TAG_SUMMARY_STATUSES = {"success", "failed"}
 TRACKED_DAILY_SUMMARY_VERSION = "v1.9.8.5"
 TRACKED_RULE_DRAFT_VERSION = "v1.9.8.6"
+MARKET_TAG_SUMMARY_VERSION = "v1.9.8.9"
 TRACKED_RULE_FIELD_SCORES = {
     "title": {"strong": 8, "core": 4, "context": 2},
     "note": {"strong": 6, "core": 3, "context": 2},
@@ -153,6 +156,13 @@ TRACKED_DAILY_SUMMARY_MIN_CHARS = 120
 TRACKED_DAILY_SUMMARY_MAX_CHARS = 600
 TRACKED_RULE_DRAFT_THRESHOLD_MIN = 3
 TRACKED_RULE_DRAFT_THRESHOLD_MAX = 20
+MARKET_WORKBENCH_SUMMARY_RANGE_DAYS = 30
+MARKET_WORKBENCH_SUMMARY_MAX_NEWS = 50
+MARKET_WORKBENCH_SUMMARY_TEXT_LIMIT = 16000
+MARKET_WORKBENCH_SUMMARY_SUMMARY_LIMIT = 800
+MARKET_WORKBENCH_SUMMARY_NOTE_LIMIT = 1200
+MARKET_WORKBENCH_SUMMARY_BODY_LIMIT = 2000
+MARKET_WORKBENCH_CONTENT_FILTERS = {"all", "ideas", "bullish", "bearish"}
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -2670,6 +2680,522 @@ def load_trend_notes_map(
     return mapped
 
 
+def parse_market_workbench_content_filter(value: str | None) -> str:
+    normalized = (value or "all").strip().lower()
+    if normalized not in MARKET_WORKBENCH_CONTENT_FILTERS:
+        raise ValueError("invalid_market_workbench_content_filter")
+    return normalized
+
+
+def market_workbench_filter_sql_parts(content_filter: str) -> tuple[str, str]:
+    if content_filter == "ideas":
+        return (
+            "AND an.url IS NOT NULL",
+            "",
+        )
+    if content_filter == "bullish":
+        return (
+            "AND mt.direction = 'bullish'",
+            "AND mtn.direction = 'bullish'",
+        )
+    if content_filter == "bearish":
+        return (
+            "AND mt.direction = 'bearish'",
+            "AND mtn.direction = 'bearish'",
+        )
+    return ("", "")
+
+
+def load_market_workbench_overview(conn: sqlite3.Connection, content_filter: str) -> list[dict]:
+    item_filter_sql, note_filter_sql = market_workbench_filter_sql_parts(content_filter)
+    rows = conn.execute(
+        f"""
+        SELECT
+          mtd.key,
+          mtd.display_name,
+          mtd.active,
+          mtd.sort_order,
+          COALESCE(total_items.total, 0) AS total_items,
+          COALESCE(recent_items.recent_total, 0) AS recent_total,
+          COALESCE(recent_items.bullish_total, 0) AS bullish_total,
+          COALESCE(recent_items.bearish_total, 0) AS bearish_total,
+          COALESCE(total_notes.total, 0) AS trend_note_total,
+          COALESCE(recent_notes.recent_total, 0) AS recent_note_total,
+          recent_items.latest_published_at,
+          recent_notes.latest_note_updated_at
+        FROM market_tag_definitions mtd
+        LEFT JOIN (
+          SELECT mt.tag, COUNT(*) AS total
+          FROM article_market_tags mt
+          LEFT JOIN article_notes an ON an.url = mt.url
+          WHERE 1=1 {item_filter_sql}
+          GROUP BY mt.tag
+        ) total_items ON total_items.tag = mtd.key
+        LEFT JOIN (
+          SELECT mt.tag,
+                 COUNT(*) AS recent_total,
+                 SUM(CASE WHEN mt.direction = 'bullish' THEN 1 ELSE 0 END) AS bullish_total,
+                 SUM(CASE WHEN mt.direction = 'bearish' THEN 1 ELSE 0 END) AS bearish_total,
+                 MAX(items.published_at) AS latest_published_at
+          FROM article_market_tags mt
+          JOIN items ON items.url = mt.url
+          LEFT JOIN article_notes an ON an.url = mt.url
+          WHERE items.published_at >= datetime('now', '-30 days')
+            {item_filter_sql}
+          GROUP BY mt.tag
+        ) recent_items ON recent_items.tag = mtd.key
+        LEFT JOIN (
+          SELECT mtn.tag, COUNT(*) AS total
+          FROM market_trend_notes mtn
+          WHERE 1=1 {note_filter_sql}
+          GROUP BY mtn.tag
+        ) total_notes ON total_notes.tag = mtd.key
+        LEFT JOIN (
+          SELECT mtn.tag,
+                 COUNT(*) AS recent_total,
+                 MAX(mtn.updated_at) AS latest_note_updated_at
+          FROM market_trend_notes mtn
+          WHERE mtn.updated_at >= datetime('now', '-30 days')
+            {note_filter_sql}
+          GROUP BY mtn.tag
+        ) recent_notes ON recent_notes.tag = mtd.key
+        WHERE mtd.active = 1
+        ORDER BY COALESCE(recent_items.latest_published_at, recent_notes.latest_note_updated_at, '') DESC,
+                 mtd.sort_order ASC,
+                 mtd.display_name COLLATE NOCASE ASC
+        """
+    ).fetchall()
+    payload = []
+    for row in rows:
+        total_items = int(row["total_items"] or 0)
+        trend_note_total = int(row["trend_note_total"] or 0)
+        if total_items <= 0 and trend_note_total <= 0:
+            continue
+        payload.append(
+            {
+                "tag_key": row["key"],
+                "tag_label": row["display_name"],
+                "active": int(row["active"] or 0),
+                "total_items": total_items,
+                "recent_total": int(row["recent_total"] or 0),
+                "bullish_total": int(row["bullish_total"] or 0),
+                "bearish_total": int(row["bearish_total"] or 0),
+                "trend_note_total": trend_note_total,
+                "recent_note_total": int(row["recent_note_total"] or 0),
+                "latest_published_at": row["latest_published_at"] or "",
+                "latest_note_updated_at": row["latest_note_updated_at"] or "",
+            }
+        )
+    return payload
+
+
+def load_market_tag_feed(
+    conn: sqlite3.Connection,
+    *,
+    tag_key: str | None,
+    content_filter: str,
+    page: int,
+    per: int,
+) -> dict:
+    item_filter_sql, note_filter_sql = market_workbench_filter_sql_parts(content_filter)
+    if tag_key:
+        union_sql = f"""
+        SELECT
+          'news' AS row_kind,
+          items.id AS ref_id,
+          items.published_at AS sort_ts,
+          items.id AS tie_breaker
+        FROM items
+        JOIN article_market_tags mt ON mt.url = items.url
+        LEFT JOIN article_notes an ON an.url = items.url
+        WHERE mt.tag = ?
+          {item_filter_sql}
+        UNION ALL
+        SELECT
+          'trend_note' AS row_kind,
+          CAST(mtn.id AS TEXT) AS ref_id,
+          COALESCE(mtn.updated_at, mtn.created_at, mtn.date_key) AS sort_ts,
+          CAST(mtn.id AS TEXT) AS tie_breaker
+        FROM market_trend_notes mtn
+        WHERE mtn.tag = ?
+          {note_filter_sql}
+    """
+        args = [tag_key, tag_key]
+    else:
+        union_sql = f"""
+        SELECT
+          'news' AS row_kind,
+          items.id AS ref_id,
+          items.published_at AS sort_ts,
+          items.id AS tie_breaker
+        FROM items
+        JOIN article_market_tags mt ON mt.url = items.url
+        LEFT JOIN article_notes an ON an.url = items.url
+        WHERE 1=1
+          {item_filter_sql}
+        GROUP BY items.id
+        """
+        args = []
+    total = int(conn.execute(f"SELECT COUNT(*) FROM ({union_sql}) feed_rows", args).fetchone()[0] or 0)
+    offset = (page - 1) * per
+    page_rows = conn.execute(
+        f"""
+        SELECT row_kind, ref_id
+        FROM ({union_sql}) feed_rows
+        ORDER BY sort_ts DESC, tie_breaker DESC
+        LIMIT ? OFFSET ?
+        """,
+        [*args, per, offset],
+    ).fetchall()
+    news_ids = [row["ref_id"] for row in page_rows if row["row_kind"] == "news"]
+    trend_note_ids = [int(row["ref_id"]) for row in page_rows if row["row_kind"] == "trend_note"]
+
+    news_map: dict[str, dict] = {}
+    if news_ids:
+        placeholders = ",".join(["?"] * len(news_ids))
+        rows = conn.execute(
+            f"""
+            SELECT items.id, items.source_file, items.item_order, items.published_at,
+                   items.date, items.time, items.source, items.source_type,
+                   items.source_name, items.title, items.summary, items.url,
+                   st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+                   dj.status AS detail_status,
+                   dj.last_error AS detail_error,
+                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+                   an.note AS note_preview_source,
+                   CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
+                   aj.status AS ai_status,
+                   aj.last_error AS ai_error,
+                   CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
+                   (
+                     SELECT COUNT(*)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id AND nr.status = 'active'
+                   ) AS active_reminder_count,
+                   (
+                     SELECT COUNT(*)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id
+                       AND nr.status = 'active'
+                       AND nr.remind_at <= datetime('now', 'localtime')
+                   ) AS due_reminder_count,
+                   (
+                     SELECT MIN(nr.remind_at)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id AND nr.status = 'active'
+                   ) AS next_remind_at,
+                   {ITEM_DATE_SQL} AS date_key
+            FROM items
+            LEFT JOIN item_state st ON st.item_id = items.id
+            LEFT JOIN detail_jobs dj ON dj.url = items.url
+            LEFT JOIN article_details ad ON ad.url = items.url
+            LEFT JOIN article_notes an ON an.url = items.url
+            LEFT JOIN ai_jobs aj ON aj.url = items.url
+            LEFT JOIN article_ai aa ON aa.url = items.url
+            WHERE items.id IN ({placeholders})
+            """,
+            news_ids,
+        ).fetchall()
+        urls = [row["url"] for row in rows if row["url"]]
+        market_tags_map = load_market_tags_map(conn, urls)
+        serialized = serialize_news_rows([dict(row) for row in rows], market_tags_map)
+        news_map = {str(item["id"]): item for item in serialized}
+
+    trend_note_map: dict[int, dict] = {}
+    if trend_note_ids:
+        placeholders = ",".join(["?"] * len(trend_note_ids))
+        rows = conn.execute(
+            f"""
+            SELECT mtn.id,
+                   mtn.date_key,
+                   mtn.tag,
+                   mtn.direction,
+                   mtn.note,
+                   mtn.created_at,
+                   mtn.updated_at,
+                   mtd.display_name
+            FROM market_trend_notes mtn
+            LEFT JOIN market_tag_definitions mtd ON mtd.key = mtn.tag
+            WHERE mtn.id IN ({placeholders})
+            """,
+            trend_note_ids,
+        ).fetchall()
+        for row in rows:
+            updated_at = row["updated_at"] or ""
+            date_key, date_label = derive_ts_date_meta(updated_at)
+            trend_note_map[int(row["id"])] = {
+                "id": None,
+                "idea_id": f"trend:{row['id']}",
+                "idea_type": "trend_note",
+                "idea_context_label": "趋势想法",
+                "trend_note_id": row["id"],
+                "trend_date_key": row["date_key"],
+                "tag_key": row["tag"],
+                "tag_label": row["display_name"] or row["tag"],
+                "direction": row["direction"],
+                "direction_label": "看多" if row["direction"] == "bullish" else "看空",
+                "title": f"{row['display_name'] or row['tag']} · {'看多' if row['direction'] == 'bullish' else '看空'}",
+                "summary": f"{row['date_key']} · {row['display_name'] or row['tag']}",
+                "source": "趋势",
+                "published_at": row["date_key"],
+                "url": "",
+                "note": row["note"],
+                "note_preview": build_note_preview(row["note"]),
+                "created_at": row["created_at"] or "",
+                "updated_at": updated_at,
+                "date_key": date_key,
+                "date_label": date_label,
+            }
+
+    items: list[dict] = []
+    for row in page_rows:
+        if row["row_kind"] == "news":
+            item = news_map.get(str(row["ref_id"]))
+            if item:
+                item["entry_type"] = "news"
+                items.append(item)
+        else:
+            note = trend_note_map.get(int(row["ref_id"]))
+            if note:
+                note["entry_type"] = "trend_note"
+                items.append(note)
+    pages = max(1, math.ceil(total / per)) if total else 1
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "pages": pages,
+        "has_more": page < pages,
+    }
+
+
+def market_tag_summary_row(conn: sqlite3.Connection, tag_key: str, range_days: int) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT tag_key, range_days, source_hash, summary_text, status, error, model, raw_json, created_at, updated_at
+        FROM market_tag_summaries
+        WHERE tag_key = ? AND range_days = ?
+        """,
+        (tag_key, range_days),
+    ).fetchone()
+
+
+def load_market_tag_summary_sources(
+    conn: sqlite3.Connection,
+    *,
+    tag_key: str,
+    range_days: int,
+    limit: int,
+) -> tuple[list[dict], list[dict]]:
+    news_rows = conn.execute(
+        f"""
+        SELECT items.id,
+               items.published_at,
+               items.source,
+               items.source_type,
+               items.source_name,
+               items.title,
+               items.summary,
+               items.url,
+               an.note,
+               an.updated_at AS note_updated_at,
+               aa.conclusion_zh,
+               aa.body_zh,
+               ai.updated_at AS ai_updated_at,
+               ad.content,
+               ad.updated_at AS detail_updated_at,
+               mt.updated_at AS tag_updated_at
+        FROM items
+        JOIN article_market_tags mt ON mt.url = items.url
+        LEFT JOIN article_notes an ON an.url = items.url
+        LEFT JOIN article_ai aa ON aa.url = items.url
+        LEFT JOIN ai_jobs ai ON ai.url = items.url
+        LEFT JOIN article_details ad ON ad.url = items.url
+        WHERE mt.tag = ?
+          AND items.published_at >= datetime('now', ?)
+        ORDER BY items.published_at DESC, items.id DESC
+        LIMIT ?
+        """,
+        (tag_key, f"-{int(range_days)} days", limit),
+    ).fetchall()
+    note_rows = conn.execute(
+        """
+        SELECT id, date_key, direction, note, created_at, updated_at
+        FROM market_trend_notes
+        WHERE tag = ?
+          AND COALESCE(updated_at, created_at, date_key) >= datetime('now', ?)
+        ORDER BY COALESCE(updated_at, created_at, date_key) DESC, id DESC
+        """,
+        (tag_key, f"-{int(range_days)} days"),
+    ).fetchall()
+    return [dict(row) for row in news_rows], [dict(row) for row in note_rows]
+
+
+def build_market_tag_summary_hash(news_rows: list[dict], note_rows: list[dict], range_days: int) -> str:
+    basis = [f"version={MARKET_TAG_SUMMARY_VERSION}", f"range_days={range_days}"]
+    for row in news_rows:
+        basis.append(
+            "||".join(
+                [
+                    str(row.get("id") or ""),
+                    str(row.get("published_at") or ""),
+                    str(row.get("title") or ""),
+                    str(row.get("summary") or ""),
+                    str(row.get("note") or ""),
+                    str(row.get("conclusion_zh") or ""),
+                    str(row.get("body_zh") or ""),
+                    str(row.get("content") or ""),
+                    str(row.get("tag_updated_at") or ""),
+                    str(row.get("note_updated_at") or ""),
+                    str(row.get("ai_updated_at") or ""),
+                    str(row.get("detail_updated_at") or ""),
+                ]
+            )
+        )
+    for row in note_rows:
+        basis.append(
+            "||".join(
+                [
+                    str(row.get("id") or ""),
+                    str(row.get("date_key") or ""),
+                    str(row.get("direction") or ""),
+                    str(row.get("note") or ""),
+                    str(row.get("created_at") or ""),
+                    str(row.get("updated_at") or ""),
+                ]
+            )
+        )
+    return hashlib.sha256("\n".join(basis).encode("utf-8")).hexdigest()
+
+
+def build_market_tag_summary_materials(tag_label: str, news_rows: list[dict], note_rows: list[dict], range_days: int) -> str:
+    blocks = [
+        f"板块：{tag_label}",
+        f"范围：最近 {range_days} 天",
+        "【新闻事实】",
+    ]
+    for index, row in enumerate(news_rows, start=1):
+        lines = [
+            f"新闻 {index}",
+            f"发布时间：{row.get('published_at') or ''}",
+            f"来源：{row.get('source_name') or row.get('source') or '未知来源'}",
+            f"标题：{row.get('title') or '无标题'}",
+        ]
+        summary = truncate_daily_summary_text(row.get("summary"), MARKET_WORKBENCH_SUMMARY_SUMMARY_LIMIT)
+        if summary:
+            lines.append(f"摘要：{summary}")
+        ai_summary = truncate_daily_summary_text(row.get("conclusion_zh"), MARKET_WORKBENCH_SUMMARY_SUMMARY_LIMIT)
+        if ai_summary:
+            lines.append(f"AI 摘要：{ai_summary}")
+        ai_body = truncate_daily_summary_text(row.get("body_zh"), MARKET_WORKBENCH_SUMMARY_BODY_LIMIT)
+        if ai_body:
+            lines.append(f"AI 正文摘录：{ai_body}")
+        content = truncate_daily_summary_text(row.get("content"), MARKET_WORKBENCH_SUMMARY_BODY_LIMIT)
+        if content:
+            lines.append(f"正文摘录：{content}")
+        note = truncate_daily_summary_text(row.get("note"), MARKET_WORKBENCH_SUMMARY_NOTE_LIMIT)
+        if note:
+            lines.append(f"对应新闻想法：{note}")
+        blocks.append("\n".join(lines))
+    blocks.append("【用户想法】")
+    if note_rows:
+        for index, row in enumerate(note_rows, start=1):
+            blocks.append(
+                "\n".join(
+                    [
+                        f"独立趋势想法 {index}",
+                        f"日期：{row.get('date_key') or ''}",
+                        f"方向：{'看多' if row.get('direction') == 'bullish' else '看空'}",
+                        f"内容：{truncate_daily_summary_text(row.get('note'), MARKET_WORKBENCH_SUMMARY_NOTE_LIMIT)}",
+                    ]
+                )
+            )
+    else:
+        blocks.append("无独立趋势想法。")
+    text = "\n\n".join(blocks).strip()
+    if len(text) <= MARKET_WORKBENCH_SUMMARY_TEXT_LIMIT:
+        return text
+    return text[:MARKET_WORKBENCH_SUMMARY_TEXT_LIMIT].rstrip()
+
+
+def serialize_market_tag_summary(
+    tag_def: dict,
+    range_days: int,
+    news_rows: list[dict],
+    note_rows: list[dict],
+    summary_row: sqlite3.Row | None,
+) -> dict:
+    current_hash = build_market_tag_summary_hash(news_rows, note_rows, range_days)
+    saved_hash = (summary_row["source_hash"] if summary_row else "") or ""
+    saved_status = (summary_row["status"] if summary_row else "") or ""
+    if not summary_row:
+        status = "missing"
+    elif current_hash != saved_hash:
+        status = "stale"
+    elif saved_status == "failed":
+        status = "failed"
+    else:
+        status = "success"
+    return {
+        "tag_key": tag_def["key"],
+        "tag_label": tag_def["display_name"],
+        "range_days": range_days,
+        "scope_label": f"最近 {range_days} 天，最多 {MARKET_WORKBENCH_SUMMARY_MAX_NEWS} 条本地新闻",
+        "news_count": len(news_rows),
+        "trend_note_count": len(note_rows),
+        "source_hash": current_hash,
+        "status": status,
+        "summary_text": (summary_row["summary_text"] if summary_row else "") or "",
+        "error": (summary_row["error"] if summary_row else "") or "",
+        "model": (summary_row["model"] if summary_row else "") or "",
+        "created_at": (summary_row["created_at"] if summary_row else "") or "",
+        "updated_at": (summary_row["updated_at"] if summary_row else "") or "",
+    }
+
+
+def save_market_tag_summary(
+    conn: sqlite3.Connection,
+    *,
+    tag_key: str,
+    range_days: int,
+    source_hash: str,
+    status: str,
+    summary_text: str,
+    error: str,
+    model: str,
+    raw_json: str,
+) -> None:
+    ts = now_ts()
+    conn.execute(
+        """
+        INSERT INTO market_tag_summaries(
+          tag_key, range_days, source_hash, summary_text, status, error, model, raw_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tag_key, range_days) DO UPDATE SET
+          source_hash=excluded.source_hash,
+          summary_text=excluded.summary_text,
+          status=excluded.status,
+          error=excluded.error,
+          model=excluded.model,
+          raw_json=excluded.raw_json,
+          updated_at=excluded.updated_at
+        """,
+        (
+            tag_key,
+            range_days,
+            source_hash,
+            summary_text,
+            status,
+            error[:500] if error else None,
+            model,
+            raw_json or "{}",
+            ts,
+            ts,
+        ),
+    )
+
+
 def derive_date_meta(published_at: str | None, raw_date: str | None) -> tuple[str, str]:
     date_key = (raw_date or "").strip()
     if not date_key and published_at:
@@ -4310,6 +4836,170 @@ def api_market_trends_tag_detail():
             "trend_notes": trend_notes,
         }
     )
+
+
+@app.get("/api/market-workbench")
+def api_market_workbench():
+    tag_key = (request.args.get("tag") or "").strip()
+    try:
+        content_filter = parse_market_workbench_content_filter(request.args.get("content_filter"))
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid_market_workbench_content_filter"}), 400
+    page = max(1, int(request.args.get("page", "1")))
+    per = min(100, max(10, int(request.args.get("per", "30"))))
+
+    conn = db_conn()
+    try:
+        tags = load_market_tag_definitions(conn, active_only=True)
+        if not tag_key:
+            feed = load_market_tag_feed(conn, tag_key=None, content_filter=content_filter, page=page, per=per)
+            return jsonify(
+                {
+                    "ok": True,
+                    "mode": "all",
+                    "selected_tag": None,
+                    "content_filter": content_filter,
+                    "tags": tags,
+                    "items": feed["items"],
+                    "total": feed["total"],
+                    "page": feed["page"],
+                    "pages": feed["pages"],
+                    "has_more": feed["has_more"],
+                }
+            )
+
+        tag_def = next((tag for tag in tags if tag["key"] == tag_key), None)
+        if not tag_def:
+            return jsonify({"ok": False, "error": "invalid_tag"}), 400
+
+        feed = load_market_tag_feed(conn, tag_key=tag_key, content_filter=content_filter, page=page, per=per)
+        summary_news_rows, summary_note_rows = load_market_tag_summary_sources(
+            conn,
+            tag_key=tag_key,
+            range_days=MARKET_WORKBENCH_SUMMARY_RANGE_DAYS,
+            limit=MARKET_WORKBENCH_SUMMARY_MAX_NEWS,
+        )
+        summary_row = market_tag_summary_row(conn, tag_key, MARKET_WORKBENCH_SUMMARY_RANGE_DAYS)
+        summary_payload = serialize_market_tag_summary(
+            tag_def,
+            MARKET_WORKBENCH_SUMMARY_RANGE_DAYS,
+            summary_news_rows,
+            summary_note_rows,
+            summary_row,
+        )
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "mode": "tag",
+            "selected_tag": {"key": tag_def["key"], "display_name": tag_def["display_name"]},
+            "content_filter": content_filter,
+            "tags": tags,
+            "items": feed["items"],
+            "total": feed["total"],
+            "page": feed["page"],
+            "pages": feed["pages"],
+            "has_more": feed["has_more"],
+            "summary": summary_payload,
+        }
+    )
+
+
+@app.get("/api/market-tags/<tag_key>/summary")
+def api_market_tag_summary(tag_key: str):
+    conn = db_conn()
+    try:
+        tag_def = conn.execute(
+            "SELECT key, display_name, active FROM market_tag_definitions WHERE key=? AND active=1",
+            (tag_key,),
+        ).fetchone()
+        if not tag_def:
+            return jsonify({"ok": False, "error": "invalid_tag"}), 400
+        news_rows, note_rows = load_market_tag_summary_sources(
+            conn,
+            tag_key=tag_key,
+            range_days=MARKET_WORKBENCH_SUMMARY_RANGE_DAYS,
+            limit=MARKET_WORKBENCH_SUMMARY_MAX_NEWS,
+        )
+        summary_row = market_tag_summary_row(conn, tag_key, MARKET_WORKBENCH_SUMMARY_RANGE_DAYS)
+        payload = serialize_market_tag_summary(dict(tag_def), MARKET_WORKBENCH_SUMMARY_RANGE_DAYS, news_rows, note_rows, summary_row)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "summary": payload})
+
+
+@app.post("/api/market-tags/<tag_key>/summary/generate")
+def api_market_tag_summary_generate(tag_key: str):
+    conn = db_conn()
+    try:
+        tag_def = conn.execute(
+            "SELECT key, display_name, active FROM market_tag_definitions WHERE key=? AND active=1",
+            (tag_key,),
+        ).fetchone()
+        if not tag_def:
+            return jsonify({"ok": False, "error": "invalid_tag"}), 400
+        news_rows, note_rows = load_market_tag_summary_sources(
+            conn,
+            tag_key=tag_key,
+            range_days=MARKET_WORKBENCH_SUMMARY_RANGE_DAYS,
+            limit=MARKET_WORKBENCH_SUMMARY_MAX_NEWS,
+        )
+        if not news_rows and not note_rows:
+            return jsonify({"ok": False, "error": "summary_source_items_not_found"}), 404
+        source_hash = build_market_tag_summary_hash(news_rows, note_rows, MARKET_WORKBENCH_SUMMARY_RANGE_DAYS)
+        materials = build_market_tag_summary_materials(
+            tag_def["display_name"],
+            news_rows,
+            note_rows,
+            MARKET_WORKBENCH_SUMMARY_RANGE_DAYS,
+        )
+        llm_settings = current_runtime_settings()["llm"]
+        model_name = (llm_settings["translation"].get("model") or "").strip()
+        try:
+            payload = generate_market_tag_summary(
+                tag_label=tag_def["display_name"],
+                range_days=MARKET_WORKBENCH_SUMMARY_RANGE_DAYS,
+                news_count=len(news_rows),
+                note_count=len(note_rows),
+                materials=materials,
+                model=model_name,
+            )
+        except LLMClientError as exc:
+            with conn:
+                save_market_tag_summary(
+                    conn,
+                    tag_key=tag_key,
+                    range_days=MARKET_WORKBENCH_SUMMARY_RANGE_DAYS,
+                    source_hash=source_hash,
+                    status="failed",
+                    summary_text="",
+                    error=str(exc),
+                    model=model_name or "deepseek-chat",
+                    raw_json="{}",
+                )
+            summary_row = market_tag_summary_row(conn, tag_key, MARKET_WORKBENCH_SUMMARY_RANGE_DAYS)
+            summary = serialize_market_tag_summary(dict(tag_def), MARKET_WORKBENCH_SUMMARY_RANGE_DAYS, news_rows, note_rows, summary_row)
+            return jsonify({"ok": False, "error": "market_tag_summary_generate_failed", "detail": str(exc), "summary": summary}), 502
+
+        with conn:
+            save_market_tag_summary(
+                conn,
+                tag_key=tag_key,
+                range_days=MARKET_WORKBENCH_SUMMARY_RANGE_DAYS,
+                source_hash=source_hash,
+                status="success",
+                summary_text=(payload.get("summary_text") or "").strip(),
+                error="",
+                model=payload.get("model", model_name or "deepseek-chat"),
+                raw_json=payload.get("raw_json", "{}"),
+            )
+        summary_row = market_tag_summary_row(conn, tag_key, MARKET_WORKBENCH_SUMMARY_RANGE_DAYS)
+        summary = serialize_market_tag_summary(dict(tag_def), MARKET_WORKBENCH_SUMMARY_RANGE_DAYS, news_rows, note_rows, summary_row)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "summary": summary})
 
 
 @app.put("/api/market-trend-note")
