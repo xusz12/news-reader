@@ -1029,12 +1029,21 @@ def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkey
     assert client.post("/api/reindex", json={}).status_code == 200
     items = client.get("/api/news?per=20").get_json()["items"]
     by_title = {item["title"]: item for item in items}
+    create_tag = client.post("/api/market-tags", json={"display_name": "俄乌战争"})
+    assert create_tag.status_code == 200
+    tag_key = create_tag.get_json()["tag"]["key"]
+    assert client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-20", "tag_key": tag_key, "direction": "bullish", "note": "独立想法也在跟踪主题里补充判断"},
+    ).status_code == 200
 
     topic_res = client.post(
         "/api/tracked-topics",
         json={
             "title": "俄乌战争",
             "strong_phrases": ["俄乌战争"],
+            "core_terms": ["俄乌"],
+            "context_terms": ["补充判断"],
             "threshold": 6,
             "scope": "all",
             "active": True,
@@ -1093,12 +1102,13 @@ def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkey
     assert [day["date"] for day in days] == ["2026-06-21", "2026-06-20"]
     assert days[0]["status"] == "missing"
     assert days[0]["items"][0]["has_detail"] is False
+    assert all(item["entry_type"] == "news" for item in days[1]["items"])
     assert [item["title"] for item in days[1]["items"]] == [
         "俄乌战争：乌克兰回应",
         "俄乌战争：俄罗斯表态",
     ]
     assert days[1]["max_summary_chars"] == 120
-    assert all(item["has_detail"] is True for item in days[1]["items"])
+    assert all(item["has_detail"] is True for item in days[1]["items"][:2])
 
     def fail_summary(**kwargs):
         raise app_module.LLMClientError("DEEPSEEK_CALL_FAILED: unavailable")
@@ -1120,7 +1130,7 @@ def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkey
         captured["news_count"] = kwargs["news_count"]
         return {
             "model": "deepseek-chat",
-            "summary_text": "甲" * 130,
+            "summary_text": "甲" * 180,
             "raw_json": "{}",
         }
 
@@ -1137,6 +1147,8 @@ def test_tracked_topic_daily_summaries_generate_and_stale(tmp_path: Path, monkey
     assert captured["materials"].index("标题：俄乌战争：乌克兰回应") < captured["materials"].index("标题：俄乌战争：俄罗斯表态")
     assert "正文：Full local body 1" in captured["materials"]
     assert "正文：Full local body 2" in captured["materials"]
+    assert "【独立想法 / 用户判断】" not in captured["materials"]
+    assert "无独立想法。" not in captured["materials"]
 
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -1177,6 +1189,60 @@ def test_tracked_daily_summary_limits_and_truncation_helpers(tmp_path: Path, mon
     assert app_module.tracked_daily_summary_char_limit(20) == 600
     assert app_module.enforce_daily_summary_char_limit("第一句。第二句。第三句。", 6) == "第一句。…"
     assert app_module.enforce_daily_summary_char_limit("abcdefghijklmnopqrstuvwxyz", 8) == "abcdefg…"
+
+
+def test_tracked_topic_manual_add_trend_note_rejected(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-20.md").write_text(
+        """## Reuters · World（1条）
+### [普通新闻](https://example.com/plain)
+- 发布时间：2026-06-20 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    create_tag = client.post("/api/market-tags", json={"display_name": "AI 跟踪测试"})
+    assert create_tag.status_code == 200
+    tag_key = create_tag.get_json()["tag"]["key"]
+    note_res = client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-20", "tag_key": tag_key, "direction": "bullish", "note": "AI 独立趋势判断"},
+    )
+    assert note_res.status_code == 200
+    note_id = note_res.get_json()["trend_note"]["id"]
+
+    topic_res = client.post(
+        "/api/tracked-topics",
+        json={
+            "title": "AI",
+            "strong_phrases": ["AI"],
+            "threshold": 6,
+            "scope": "all",
+            "active": True,
+        },
+    )
+    assert topic_res.status_code == 200
+    topic_id = topic_res.get_json()["topic"]["id"]
+
+    add_res = client.post(
+        f"/api/tracked-topics/{topic_id}/items",
+        json={"item_id": f"trend_note:{note_id}"},
+    )
+    assert add_res.status_code == 400
+    assert add_res.get_json()["error"] == "invalid_item_id"
 
 
 def test_tracked_topic_rule_draft_generate_and_save(tmp_path: Path, monkeypatch):
@@ -3076,8 +3142,21 @@ def test_market_workbench_overview_and_tag_feed(tmp_path: Path, monkeypatch):
     overview_payload = overview.get_json()
     assert overview_payload["mode"] == "all"
     assert overview_payload["tags"]
-    assert [item["title"] for item in overview_payload["items"]] == ["R1", "R2", "R3"]
-    assert all(item["entry_type"] == "news" for item in overview_payload["items"])
+    assert [item["entry_type"] for item in overview_payload["items"]] == ["trend_note", "news", "news", "news"]
+    assert overview_payload["items"][0]["idea_type"] == "trend_note"
+    assert [item["title"] for item in overview_payload["items"][1:]] == ["R1", "R2", "R3"]
+
+    overview_ideas = client.get("/api/market-workbench?content_filter=ideas&per=20").get_json()
+    assert [item["entry_type"] for item in overview_ideas["items"]] == ["trend_note", "news"]
+    assert overview_ideas["items"][1]["title"] == "R2"
+
+    overview_bullish = client.get("/api/market-workbench?content_filter=bullish&per=20").get_json()
+    assert [item["entry_type"] for item in overview_bullish["items"]] == ["trend_note", "news", "news"]
+    assert [item["title"] for item in overview_bullish["items"][1:]] == ["R1", "R3"]
+
+    overview_bearish = client.get("/api/market-workbench?content_filter=bearish&per=20").get_json()
+    assert [item["entry_type"] for item in overview_bearish["items"]] == ["news"]
+    assert overview_bearish["items"][0]["title"] == "R2"
 
     tag_feed = client.get("/api/market-workbench?tag=AI&content_filter=all&per=20")
     assert tag_feed.status_code == 200
@@ -3166,6 +3245,8 @@ def test_market_tag_summary_generate_and_stale(tmp_path: Path, monkeypatch):
     assert captured["note_count"] == 1
     assert "【新闻事实】" in captured["materials"]
     assert "【用户想法】" in captured["materials"]
+    assert "方向：看多" in captured["materials"]
+    assert "方向：看空" in captured["materials"]
     assert "对应新闻想法" in captured["materials"]
 
     stale_note = client.put(f"/api/news/{r2['id']}/note", json={"note": "补充一条新的新闻想法"})

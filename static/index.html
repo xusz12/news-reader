@@ -92,6 +92,7 @@
               <option value="bearish">看空</option>
             </select>
             <button id="marketWorkbenchSummaryBtn" class="detail-retry-btn hidden" type="button">总结近期趋势</button>
+            <button id="marketWorkbenchComposeBtn" class="detail-retry-btn" type="button">添加独立想法</button>
           </div>
         </section>
         <section id="searchPageControls" class="search-page-controls hidden" aria-label="搜索条件">
@@ -164,12 +165,21 @@
             </div>
           </div>
           <section class="detail-tag-create detail-trend-compose">
-            <select id="trendNoteDateSelect" class="pref-select"></select>
-            <select id="trendNoteTagSelect" class="pref-select"></select>
-            <select id="trendNoteDirectionSelect" class="pref-select">
+            <label class="detail-trend-compose-field">
+              <span class="detail-trend-compose-label">日期</span>
+              <select id="trendNoteDateSelect" class="pref-select"></select>
+            </label>
+            <label class="detail-trend-compose-field">
+              <span class="detail-trend-compose-label">板块</span>
+              <select id="trendNoteTagSelect" class="pref-select"></select>
+            </label>
+            <label class="detail-trend-compose-field">
+              <span class="detail-trend-compose-label">方向</span>
+              <select id="trendNoteDirectionSelect" class="pref-select">
               <option value="bullish">看多</option>
               <option value="bearish">看空</option>
-            </select>
+              </select>
+            </label>
           </section>
           <section class="detail-note-editor">
             <textarea id="trendNoteComposeInput" class="detail-note-input" rows="5" maxlength="5000" placeholder="记录你对这个趋势单元格的判断..."></textarea>
@@ -230,6 +240,14 @@
           <div class="tracked-view-switch" role="tablist" aria-label="跟踪视图切换">
             <button id="trackedViewTimelineBtn" class="tracked-view-switch-btn active" type="button">原始新闻</button>
             <button id="trackedViewTimeflowBtn" class="tracked-view-switch-btn" type="button">时间流</button>
+          </div>
+          <div id="trackedTimeflowBatchBar" class="tracked-timeflow-batch hidden">
+            <select id="trackedTimeflowBatchModeSelect" class="pref-select">
+              <option value="all">全部</option>
+              <option value="stale">更新已过期</option>
+              <option value="missing">仅未生成</option>
+            </select>
+            <button id="trackedTimeflowBatchGenerateBtn" class="detail-retry-btn" type="button">一键生成</button>
           </div>
           <div id="trackedTimelineHint" class="detail-meta"></div>
           <div id="trackedTimelineList" class="detail-trend-list tracked-timeline-list"></div>

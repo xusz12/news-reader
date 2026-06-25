@@ -1897,12 +1897,16 @@ def load_tracked_topics(conn: sqlite3.Connection) -> list[dict]:
                (
                  SELECT COUNT(*)
                  FROM tracked_topic_items tti
-                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NULL
+                 WHERE tti.topic_id = tt.id
+                   AND tti.hidden_at IS NULL
+                   AND tti.item_id NOT LIKE 'trend_note:%'
                ) AS visible_item_count,
                (
                  SELECT COUNT(*)
                  FROM tracked_topic_items tti
-                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NOT NULL
+                 WHERE tti.topic_id = tt.id
+                   AND tti.hidden_at IS NOT NULL
+                   AND tti.item_id NOT LIKE 'trend_note:%'
                ) AS hidden_item_count,
                (
                  SELECT MAX(items.published_at)
@@ -1914,6 +1918,7 @@ def load_tracked_topics(conn: sqlite3.Connection) -> list[dict]:
                  SELECT MAX(tti.updated_at)
                  FROM tracked_topic_items tti
                  WHERE tti.topic_id = tt.id
+                   AND tti.item_id NOT LIKE 'trend_note:%'
                ) AS latest_matched_at
         FROM tracked_topics tt
         ORDER BY tt.updated_at DESC, tt.id DESC
@@ -1929,12 +1934,16 @@ def load_tracked_topic(conn: sqlite3.Connection, topic_id: int) -> dict | None:
                (
                  SELECT COUNT(*)
                  FROM tracked_topic_items tti
-                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NULL
+                 WHERE tti.topic_id = tt.id
+                   AND tti.hidden_at IS NULL
+                   AND tti.item_id NOT LIKE 'trend_note:%'
                ) AS visible_item_count,
                (
                  SELECT COUNT(*)
                  FROM tracked_topic_items tti
-                 WHERE tti.topic_id = tt.id AND tti.hidden_at IS NOT NULL
+                 WHERE tti.topic_id = tt.id
+                   AND tti.hidden_at IS NOT NULL
+                   AND tti.item_id NOT LIKE 'trend_note:%'
                ) AS hidden_item_count,
                (
                  SELECT MAX(items.published_at)
@@ -1946,6 +1955,7 @@ def load_tracked_topic(conn: sqlite3.Connection, topic_id: int) -> dict | None:
                  SELECT MAX(tti.updated_at)
                  FROM tracked_topic_items tti
                  WHERE tti.topic_id = tt.id
+                   AND tti.item_id NOT LIKE 'trend_note:%'
                ) AS latest_matched_at
         FROM tracked_topics tt
         WHERE tt.id = ?
@@ -1974,7 +1984,7 @@ def tracked_topic_candidate_rows(
     scope: str,
     created_after: str | None = None,
     date_after: str | None = None,
-) -> list[sqlite3.Row]:
+) -> list[dict]:
     where = []
     args: list[object] = []
     if scope == "important":
@@ -1986,7 +1996,7 @@ def tracked_topic_candidate_rows(
         where.append(f"{ITEM_DATE_SQL} >= ?")
         args.append(date_after)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-    return conn.execute(
+    news_rows = conn.execute(
         f"""
         SELECT items.id,
                items.url,
@@ -2007,6 +2017,7 @@ def tracked_topic_candidate_rows(
         """,
         args,
     ).fetchall()
+    return [dict(row) for row in news_rows]
 
 
 def upsert_tracked_topic_match(
@@ -2129,116 +2140,170 @@ def run_tracked_topics_incremental(conn: sqlite3.Connection) -> int:
 
 
 def tracked_topic_timeline_items(conn: sqlite3.Connection, topic_id: int) -> list[dict]:
-    rows = conn.execute(
+    tracked_rows = conn.execute(
         """
-        SELECT items.id,
-               items.source_file,
-               items.item_order,
-               items.published_at,
-               items.date,
-               items.time,
-               items.source,
-               items.source_type,
-               items.source_name,
-               items.title,
-               items.summary,
-               items.url,
-               st.read_at,
-               st.important_at,
-               st.read_later_at,
-               st.favorite_at,
-               dj.status AS detail_status,
-               dj.last_error AS detail_error,
-               CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
-               an.note AS note_preview_source,
-               CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
-               aj.status AS ai_status,
-               aj.last_error AS ai_error,
-               CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
-               (
-                 SELECT COUNT(*)
-                 FROM news_reminders nr
-                 WHERE nr.item_id = items.id AND nr.status = 'active'
-               ) AS active_reminder_count,
-               (
-                 SELECT COUNT(*)
-                 FROM news_reminders nr
-                 WHERE nr.item_id = items.id
-                   AND nr.status = 'active'
-                   AND nr.remind_at <= datetime('now', 'localtime')
-               ) AS due_reminder_count,
-               (
-                 SELECT MIN(nr.remind_at)
-                 FROM news_reminders nr
-                 WHERE nr.item_id = items.id AND nr.status = 'active'
-               ) AS next_remind_at,
-               tti.match_method,
-               tti.score,
-               tti.reason,
-               tti.manual_added_at,
-               tti.updated_at AS tracked_updated_at
-        FROM tracked_topic_items tti
-        JOIN items ON items.id = tti.item_id
-        LEFT JOIN item_state st ON st.item_id = items.id
-        LEFT JOIN detail_jobs dj ON dj.url = items.url
-        LEFT JOIN article_details ad ON ad.url = items.url
-        LEFT JOIN article_notes an ON an.url = items.url
-        LEFT JOIN ai_jobs aj ON aj.url = items.url
-        LEFT JOIN article_ai aa ON aa.url = items.url
-        WHERE tti.topic_id = ? AND tti.hidden_at IS NULL
-        ORDER BY items.published_at DESC, items.id DESC
+        SELECT item_id, item_url, match_method, score, reason, manual_added_at, updated_at AS tracked_updated_at
+        FROM tracked_topic_items
+        WHERE topic_id = ?
+          AND hidden_at IS NULL
+          AND item_id NOT LIKE 'trend_note:%'
         """,
         (topic_id,),
     ).fetchall()
-    urls = [row["url"] for row in rows if row["url"]]
-    market_tags_map = load_market_tags_map(conn, urls)
-    items = serialize_news_rows([dict(row) for row in rows], market_tags_map)
-    for item in items:
-        item["tracked_match_method"] = item.get("match_method") or "keyword"
-        item["tracked_score"] = float(item.get("score") or 0)
-        item["tracked_reason"] = item.get("reason") or ""
-        item["tracked_manual_added_at"] = item.get("manual_added_at") or ""
-        item["tracked_updated_at"] = item.get("tracked_updated_at") or ""
+    news_ids = [row["item_id"] for row in tracked_rows]
+
+    news_map: dict[str, dict] = {}
+    if news_ids:
+        placeholders = ",".join(["?"] * len(news_ids))
+        rows = conn.execute(
+            f"""
+            SELECT items.id,
+                   items.source_file,
+                   items.item_order,
+                   items.published_at,
+                   items.date,
+                   items.time,
+                   items.source,
+                   items.source_type,
+                   items.source_name,
+                   items.title,
+                   items.summary,
+                   items.url,
+                   st.read_at,
+                   st.important_at,
+                   st.read_later_at,
+                   st.favorite_at,
+                   dj.status AS detail_status,
+                   dj.last_error AS detail_error,
+                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
+                   an.note AS note_preview_source,
+                   CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note,
+                   aj.status AS ai_status,
+                   aj.last_error AS ai_error,
+                   CASE WHEN aa.url IS NULL THEN 0 ELSE 1 END AS ai_ready,
+                   (
+                     SELECT COUNT(*)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id AND nr.status = 'active'
+                   ) AS active_reminder_count,
+                   (
+                     SELECT COUNT(*)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id
+                       AND nr.status = 'active'
+                       AND nr.remind_at <= datetime('now', 'localtime')
+                   ) AS due_reminder_count,
+                   (
+                     SELECT MIN(nr.remind_at)
+                     FROM news_reminders nr
+                     WHERE nr.item_id = items.id AND nr.status = 'active'
+                   ) AS next_remind_at
+            FROM items
+            LEFT JOIN item_state st ON st.item_id = items.id
+            LEFT JOIN detail_jobs dj ON dj.url = items.url
+            LEFT JOIN article_details ad ON ad.url = items.url
+            LEFT JOIN article_notes an ON an.url = items.url
+            LEFT JOIN ai_jobs aj ON aj.url = items.url
+            LEFT JOIN article_ai aa ON aa.url = items.url
+            WHERE items.id IN ({placeholders})
+            """,
+            news_ids,
+        ).fetchall()
+        urls = [row["url"] for row in rows if row["url"]]
+        market_tags_map = load_market_tags_map(conn, urls)
+        serialized = serialize_news_rows([dict(row) for row in rows], market_tags_map)
+        for item in serialized:
+            item["entry_type"] = "news"
+            item["tracked_item_id"] = str(item["id"])
+            item["tracked_sort_ts"] = item.get("published_at") or ""
+            news_map[str(item["id"])] = item
+
+    items: list[dict] = []
+    for tracked_row in tracked_rows:
+        tracked_item_id = str(tracked_row["item_id"])
+        item = news_map.get(tracked_item_id)
+        if not item:
+            continue
+        item = dict(item)
+        item["tracked_match_method"] = tracked_row["match_method"] or "keyword"
+        item["tracked_score"] = float(tracked_row["score"] or 0)
+        item["tracked_reason"] = tracked_row["reason"] or ""
+        item["tracked_manual_added_at"] = tracked_row["manual_added_at"] or ""
+        item["tracked_updated_at"] = tracked_row["tracked_updated_at"] or ""
+        items.append(item)
+    items.sort(
+        key=lambda item: (
+            item.get("tracked_sort_ts") or item.get("published_at") or "",
+            str(item.get("tracked_item_id") or item.get("id") or ""),
+        ),
+        reverse=True,
+    )
     return items
 
 
-def tracked_daily_summary_source_rows(conn: sqlite3.Connection, topic_id: int, *, date: str | None = None) -> list[sqlite3.Row]:
-    where_sql = "WHERE tti.topic_id = ? AND tti.hidden_at IS NULL"
-    args: list[object] = [topic_id]
-    if date:
-        where_sql += f" AND {ITEM_DATE_SQL} = ?"
-        args.append(date)
-    return conn.execute(
-        f"""
-        SELECT items.id,
-               items.url,
-               items.title,
-               items.summary,
-               items.published_at,
-               items.date,
-               items.time,
-               items.source,
-               items.source_name,
-               an.note,
-               aa.conclusion_zh,
-               aa.body_zh,
-               ad.content,
-               CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS has_detail,
-               items.updated_at AS item_updated_at,
-               tti.updated_at AS tracked_updated_at,
-               COALESCE(an.updated_at, '') AS note_updated_at,
-               COALESCE(aa.updated_at, '') AS ai_updated_at,
-               COALESCE(ad.updated_at, '') AS detail_updated_at
-        FROM tracked_topic_items tti
-        JOIN items ON items.id = tti.item_id
-        LEFT JOIN article_notes an ON an.url = items.url
-        LEFT JOIN article_ai aa ON aa.url = items.url
-        LEFT JOIN article_details ad ON ad.url = items.url
-        {where_sql}
-        ORDER BY {ITEM_DATE_SQL} DESC, items.published_at ASC, items.id ASC
+def tracked_daily_summary_source_rows(conn: sqlite3.Connection, topic_id: int, *, date: str | None = None) -> list[dict]:
+    tracked_rows = conn.execute(
+        """
+        SELECT item_id, updated_at AS tracked_updated_at
+        FROM tracked_topic_items
+        WHERE topic_id = ?
+          AND hidden_at IS NULL
+          AND item_id NOT LIKE 'trend_note:%'
         """,
-        args,
+        (topic_id,),
     ).fetchall()
+    news_ids = [row["item_id"] for row in tracked_rows]
+
+    rows: list[dict] = []
+    tracked_updated_by_item_id = {str(row["item_id"]): row["tracked_updated_at"] or "" for row in tracked_rows}
+    if news_ids:
+        placeholders = ",".join(["?"] * len(news_ids))
+        news_rows = conn.execute(
+            f"""
+            SELECT items.id,
+                   items.url,
+                   items.title,
+                   items.summary,
+                   items.published_at,
+                   items.date,
+                   items.time,
+                   items.source,
+                   items.source_name,
+                   an.note,
+                   aa.conclusion_zh,
+                   aa.body_zh,
+                   ad.content,
+                   CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS has_detail,
+                   items.updated_at AS item_updated_at,
+                   COALESCE(an.updated_at, '') AS note_updated_at,
+                   COALESCE(aa.updated_at, '') AS ai_updated_at,
+                   COALESCE(ad.updated_at, '') AS detail_updated_at
+            FROM items
+            LEFT JOIN article_notes an ON an.url = items.url
+            LEFT JOIN article_ai aa ON aa.url = items.url
+            LEFT JOIN article_details ad ON ad.url = items.url
+            WHERE items.id IN ({placeholders})
+            """,
+            news_ids,
+        ).fetchall()
+        for row in news_rows:
+            payload = dict(row)
+            payload["entry_type"] = "news"
+            payload["tracked_item_id"] = str(payload["id"])
+            payload["tracked_updated_at"] = tracked_updated_by_item_id.get(str(payload["id"]), "")
+            payload["date_key"] = payload.get("date") or (str(payload.get("published_at") or "")[:10])
+            rows.append(payload)
+    if date:
+        rows = [row for row in rows if (row.get("date_key") or "") == date]
+    rows.sort(
+        key=lambda row: (
+            row.get("date_key") or "",
+            row.get("published_at") or "",
+            str(row.get("tracked_item_id") or row.get("id") or ""),
+        ),
+        reverse=False,
+    )
+    return rows
 
 
 def tracked_daily_summary_row(conn: sqlite3.Connection, topic_id: int, date: str) -> sqlite3.Row | None:
@@ -2363,7 +2428,8 @@ def serialize_tracked_daily_summary_group(topic: dict, date: str, rows: list[dic
     for row in rows:
         items.append(
             {
-                "id": row.get("id") or "",
+                "id": row.get("tracked_item_id") or row.get("id") or "",
+                "entry_type": "news",
                 "url": row.get("url") or "",
                 "title": row.get("title") or "未命名新闻",
                 "published_at": row.get("published_at") or "",
@@ -2389,10 +2455,10 @@ def serialize_tracked_daily_summary_group(topic: dict, date: str, rows: list[dic
 
 
 def load_tracked_topic_daily_summaries(conn: sqlite3.Connection, topic: dict) -> list[dict]:
-    rows = [dict(row) for row in tracked_daily_summary_source_rows(conn, int(topic["id"]))]
+    rows = tracked_daily_summary_source_rows(conn, int(topic["id"]))
     grouped: dict[str, list[dict]] = {}
     for row in rows:
-        date = (row.get("date") or "") or ((row.get("published_at") or "")[:10])
+        date = (row.get("date_key") or row.get("date") or "") or ((row.get("published_at") or "")[:10])
         if not date:
             continue
         grouped.setdefault(date, []).append(row)
@@ -2794,10 +2860,12 @@ def load_market_tag_feed(
     *,
     tag_key: str | None,
     content_filter: str,
+    sort_order: str,
     page: int,
     per: int,
 ) -> dict:
     item_filter_sql, note_filter_sql = market_workbench_filter_sql_parts(content_filter)
+    sort_direction = "ASC" if sort_order == "reverse" else "DESC"
     if tag_key:
         union_sql = f"""
         SELECT
@@ -2834,6 +2902,15 @@ def load_market_tag_feed(
         WHERE 1=1
           {item_filter_sql}
         GROUP BY items.id
+        UNION ALL
+        SELECT
+          'trend_note' AS row_kind,
+          CAST(mtn.id AS TEXT) AS ref_id,
+          COALESCE(mtn.updated_at, mtn.created_at, mtn.date_key) AS sort_ts,
+          CAST(mtn.id AS TEXT) AS tie_breaker
+        FROM market_trend_notes mtn
+        WHERE 1=1
+          {note_filter_sql}
         """
         args = []
     total = int(conn.execute(f"SELECT COUNT(*) FROM ({union_sql}) feed_rows", args).fetchone()[0] or 0)
@@ -2842,7 +2919,7 @@ def load_market_tag_feed(
         f"""
         SELECT row_kind, ref_id
         FROM ({union_sql}) feed_rows
-        ORDER BY sort_ts DESC, tie_breaker DESC
+        ORDER BY sort_ts {sort_direction}, tie_breaker {sort_direction}
         LIMIT ? OFFSET ?
         """,
         [*args, per, offset],
@@ -2997,6 +3074,7 @@ def load_market_tag_summary_sources(
                items.title,
                items.summary,
                items.url,
+               mt.direction,
                an.note,
                an.updated_at AS note_updated_at,
                aa.conclusion_zh,
@@ -3042,6 +3120,7 @@ def build_market_tag_summary_hash(news_rows: list[dict], note_rows: list[dict], 
                     str(row.get("title") or ""),
                     str(row.get("summary") or ""),
                     str(row.get("note") or ""),
+                    str(row.get("direction") or ""),
                     str(row.get("conclusion_zh") or ""),
                     str(row.get("body_zh") or ""),
                     str(row.get("content") or ""),
@@ -3080,6 +3159,7 @@ def build_market_tag_summary_materials(tag_label: str, news_rows: list[dict], no
             f"发布时间：{row.get('published_at') or ''}",
             f"来源：{row.get('source_name') or row.get('source') or '未知来源'}",
             f"标题：{row.get('title') or '无标题'}",
+            f"方向：{'看多' if row.get('direction') == 'bullish' else '看空'}",
         ]
         summary = truncate_daily_summary_text(row.get("summary"), MARKET_WORKBENCH_SUMMARY_SUMMARY_LIMIT)
         if summary:
@@ -4161,6 +4241,8 @@ def api_tracked_topic_item_create(topic_id: int):
     item_id = str(body.get("item_id") or "").strip()
     if not item_id:
         return jsonify({"ok": False, "error": "missing_item_id"}), 400
+    if item_id.startswith("trend_note:"):
+        return jsonify({"ok": False, "error": "invalid_item_id"}), 400
 
     conn = db_conn()
     try:
@@ -4843,8 +4925,10 @@ def api_market_workbench():
     tag_key = (request.args.get("tag") or "").strip()
     try:
         content_filter = parse_market_workbench_content_filter(request.args.get("content_filter"))
-    except ValueError:
-        return jsonify({"ok": False, "error": "invalid_market_workbench_content_filter"}), 400
+        sort_order = parse_news_sort_order(request.args)
+    except ValueError as exc:
+        error = "invalid_market_workbench_content_filter" if str(exc) == "invalid_market_workbench_content_filter" else "invalid_sort_order"
+        return jsonify({"ok": False, "error": error}), 400
     page = max(1, int(request.args.get("page", "1")))
     per = min(100, max(10, int(request.args.get("per", "30"))))
 
@@ -4852,13 +4936,14 @@ def api_market_workbench():
     try:
         tags = load_market_tag_definitions(conn, active_only=True)
         if not tag_key:
-            feed = load_market_tag_feed(conn, tag_key=None, content_filter=content_filter, page=page, per=per)
+            feed = load_market_tag_feed(conn, tag_key=None, content_filter=content_filter, sort_order=sort_order, page=page, per=per)
             return jsonify(
                 {
                     "ok": True,
                     "mode": "all",
                     "selected_tag": None,
                     "content_filter": content_filter,
+                    "sort_order": sort_order,
                     "tags": tags,
                     "items": feed["items"],
                     "total": feed["total"],
@@ -4872,7 +4957,7 @@ def api_market_workbench():
         if not tag_def:
             return jsonify({"ok": False, "error": "invalid_tag"}), 400
 
-        feed = load_market_tag_feed(conn, tag_key=tag_key, content_filter=content_filter, page=page, per=per)
+        feed = load_market_tag_feed(conn, tag_key=tag_key, content_filter=content_filter, sort_order=sort_order, page=page, per=per)
         summary_news_rows, summary_note_rows = load_market_tag_summary_sources(
             conn,
             tag_key=tag_key,
@@ -4896,6 +4981,7 @@ def api_market_workbench():
             "mode": "tag",
             "selected_tag": {"key": tag_def["key"], "display_name": tag_def["display_name"]},
             "content_filter": content_filter,
+            "sort_order": sort_order,
             "tags": tags,
             "items": feed["items"],
             "total": feed["total"],

@@ -1061,6 +1061,23 @@ button.active {
   margin-bottom: 12px;
 }
 
+.detail-tag-create.detail-trend-compose {
+  align-items: flex-end;
+}
+
+.detail-trend-compose-field {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-trend-compose-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .detail-tag-create-input,
 .detail-tag-admin-input {
   min-width: 0;
@@ -1663,6 +1680,13 @@ button.active {
   margin-top: 12px;
 }
 
+.tracked-timeline-date-group {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
 .tracked-topic-row {
   width: 100%;
   text-align: left;
@@ -1697,6 +1721,10 @@ button.active {
   color: var(--text);
 }
 
+.tracked-title-detail-ready {
+  color: var(--accent);
+}
+
 .tracked-topic-row-meta,
 .tracked-timeline-meta,
 .tracked-timeline-summary {
@@ -1723,6 +1751,14 @@ button.active {
   display: inline-flex;
   gap: 8px;
   margin: 12px 0 8px;
+}
+
+.tracked-timeflow-batch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
 }
 
 .tracked-view-switch-btn {
@@ -1923,7 +1959,43 @@ button.active {
   min-width: 0;
 }
 
+.tracked-timeline-row-trend,
+.tracked-timeflow-item-trend {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
 .tracked-timeflow-item:hover {
+  color: var(--accent);
+}
+
+.market-summary-details {
+  margin-top: 4px;
+}
+
+.market-summary-toggle {
+  list-style: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.market-summary-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.market-summary-toggle-text {
+  min-width: 0;
+}
+
+.market-summary-caret {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.market-summary-details[open] .market-summary-caret {
   color: var(--accent);
 }
 

@@ -24,6 +24,8 @@ let state = {
   trackedDailySummaries: [],
   trackedBackfillMode: "recent_important",
   trackedDetailView: "timeline",
+  trackedTimeflowBatchMode: "all",
+  trackedTimeflowBatchToken: "",
   reminderSummary: {
     total: 0,
     active_total: 0,
@@ -152,6 +154,7 @@ const marketWorkbenchBar = document.getElementById("marketWorkbenchBar");
 const marketWorkbenchTagSelect = document.getElementById("marketWorkbenchTagSelect");
 const marketWorkbenchFilterSelect = document.getElementById("marketWorkbenchFilterSelect");
 const marketWorkbenchSummaryBtn = document.getElementById("marketWorkbenchSummaryBtn");
+const marketWorkbenchComposeBtn = document.getElementById("marketWorkbenchComposeBtn");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 const workspace = document.getElementById("workspace");
@@ -164,6 +167,9 @@ const trackedEditBtn = document.getElementById("trackedEditBtn");
 const trackedDeleteBtn = document.getElementById("trackedDeleteBtn");
 const trackedViewTimelineBtn = document.getElementById("trackedViewTimelineBtn");
 const trackedViewTimeflowBtn = document.getElementById("trackedViewTimeflowBtn");
+const trackedTimeflowBatchBar = document.getElementById("trackedTimeflowBatchBar");
+const trackedTimeflowBatchModeSelect = document.getElementById("trackedTimeflowBatchModeSelect");
+const trackedTimeflowBatchGenerateBtn = document.getElementById("trackedTimeflowBatchGenerateBtn");
 const trackedTimelineHint = document.getElementById("trackedTimelineHint");
 const trackedTimelineList = document.getElementById("trackedTimelineList");
 
@@ -612,6 +618,7 @@ async function fetchMarketWorkbenchPage(page = 1) {
     page: String(page),
     per: String(state.per),
     content_filter: state.marketWorkbenchFilter || "all",
+    sort_order: getNewsSortOrder(state.collection),
   });
   if (state.marketWorkbenchTag) params.set("tag", state.marketWorkbenchTag);
   const res = await fetch(`/api/market-workbench?${params.toString()}`);
@@ -2121,13 +2128,7 @@ function buildTrackedTimelineRow(item) {
   const title = document.createElement("div");
   title.className = "tracked-timeline-title";
   title.textContent = item.title || "未命名新闻";
-  if (Number(item.detail_ready || 0) === 1) {
-    const badge = document.createElement("span");
-    badge.className = "tracked-detail-badge";
-    badge.textContent = "正文";
-    title.appendChild(document.createTextNode(" "));
-    title.appendChild(badge);
-  }
+  title.classList.toggle("tracked-title-detail-ready", Number(item.detail_ready || 0) === 1);
   main.appendChild(title);
 
   const metaLine = document.createElement("div");
@@ -2136,10 +2137,11 @@ function buildTrackedTimelineRow(item) {
   metaLine.textContent = `${item.published_at || item.date_key || ""} · ${item.source || ""} · ${reason}`;
   main.appendChild(metaLine);
 
-  if (item.summary) {
+  const summaryText = item.summary;
+  if (summaryText) {
     const summary = document.createElement("div");
     summary.className = "tracked-timeline-summary";
-    summary.textContent = item.summary;
+    summary.textContent = summaryText;
     main.appendChild(summary);
   }
 
@@ -2176,6 +2178,22 @@ function trackedDailySummaryStatusLabel(day) {
 function renderTrackedViewSwitch() {
   if (trackedViewTimelineBtn) trackedViewTimelineBtn.classList.toggle("active", state.trackedDetailView === "timeline");
   if (trackedViewTimeflowBtn) trackedViewTimeflowBtn.classList.toggle("active", state.trackedDetailView === "timeflow");
+  if (trackedTimeflowBatchBar) trackedTimeflowBatchBar.classList.toggle("hidden", state.trackedDetailView !== "timeflow");
+  if (trackedTimeflowBatchModeSelect) trackedTimeflowBatchModeSelect.value = state.trackedTimeflowBatchMode || "all";
+}
+
+function groupedTrackedTimelineItems(items = []) {
+  const groups = [];
+  let current = null;
+  items.forEach((item) => {
+    const dateKey = ((item.published_at || item.date_key || "").slice(0, 10) || "未知日期");
+    if (!current || current.dateKey !== dateKey) {
+      current = { dateKey, items: [] };
+      groups.push(current);
+    }
+    current.items.push(item);
+  });
+  return groups;
 }
 
 function buildTrackedTimeflowRow(day) {
@@ -2272,13 +2290,8 @@ function buildTrackedTimeflowRow(day) {
     const itemTitle = document.createElement("span");
     itemTitle.className = "tracked-timeflow-item-title";
     itemTitle.textContent = `${item.published_at || ""} · ${item.title || "未命名新闻"}`;
+    itemTitle.classList.toggle("tracked-title-detail-ready", item.has_detail);
     button.appendChild(itemTitle);
-    if (item.has_detail) {
-      const badge = document.createElement("span");
-      badge.className = "tracked-detail-badge";
-      badge.textContent = "正文";
-      button.appendChild(badge);
-    }
     button.addEventListener("click", async () => {
       const matched = state.trackedTimelineItems.find((row) => String(row.id) === String(item.id));
       if (matched) {
@@ -2342,7 +2355,7 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
   trackedTimelineList.innerHTML = "";
   if (state.trackedDetailView === "timeflow") {
     if (state.trackedDailySummaries.length) {
-      trackedTimelineHint.textContent = `时间流按日期新→旧展示；需手动逐日生成或重新生成。共 ${state.trackedDailySummaries.length} 天。`;
+      trackedTimelineHint.textContent = `时间流按日期新→旧展示；支持逐日生成和一键批量生成。共 ${state.trackedDailySummaries.length} 天。`;
       state.trackedDailySummaries.forEach((day) => trackedTimelineList.appendChild(buildTrackedTimeflowRow(day)));
     } else {
       trackedTimelineHint.textContent = items.length
@@ -2351,9 +2364,15 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
     }
   } else {
     trackedTimelineHint.textContent = items.length
-      ? `时间线按新闻发布时间新→旧，共 ${items.length} 条`
+      ? `时间线按日期分组、整体新→旧，共 ${items.length} 条`
       : "当前主题还没有命中新闻。可先执行历史回扫，或从新闻详情里手动加入。";
-    items.forEach((item) => trackedTimelineList.appendChild(buildTrackedTimelineRow(item)));
+    groupedTrackedTimelineItems(items).forEach((group) => {
+      const heading = document.createElement("div");
+      heading.className = "tracked-timeline-date-group";
+      heading.textContent = group.dateKey || "未知日期";
+      trackedTimelineList.appendChild(heading);
+      group.items.forEach((item) => trackedTimelineList.appendChild(buildTrackedTimelineRow(item)));
+    });
   }
   updateWorkspaceLayout();
   openDetailOnMobile();
@@ -2622,11 +2641,33 @@ function activeMarketTagChoices() {
   return state.marketTagChoices.filter((tag) => Number(tag.active || 0) === 1);
 }
 
+function defaultTrendComposeDates() {
+  const dates = [];
+  const today = new Date();
+  for (let offset = 0; offset < 7; offset += 1) {
+    const next = new Date(today);
+    next.setDate(today.getDate() - offset);
+    dates.push(next.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
 function closeTrendComposerView() {
   state.trendComposeOpen = false;
   if (detailTrendComposerBody) {
     detailTrendComposerBody.classList.add("hidden");
   }
+}
+
+function restoreMarketWorkbenchDetailState() {
+  if (detailTrendBody) detailTrendBody.classList.add("hidden");
+  if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
+  if (detailBody) detailBody.classList.add("hidden");
+  if (detailEmpty) {
+    detailEmpty.textContent = emptyDetailMessage();
+    detailEmpty.classList.remove("hidden");
+  }
+  updateWorkspaceLayout();
 }
 
 function setTrendIdeaEditorOpen(open) {
@@ -2709,20 +2750,23 @@ async function deleteTrendNote(noteId) {
 
 function renderTrendComposeOptions() {
   if (!trendNoteDateSelect || !trendNoteTagSelect) return;
+  const dateOptions = state.trendDates.length ? state.trendDates : defaultTrendComposeDates();
+  const tagOptions = activeMarketTagChoices();
   trendNoteDateSelect.innerHTML = "";
-  state.trendDates.forEach((date) => {
+  dateOptions.forEach((date) => {
     const option = document.createElement("option");
     option.value = date;
     option.textContent = date;
     trendNoteDateSelect.appendChild(option);
   });
   trendNoteTagSelect.innerHTML = "";
-  activeMarketTagChoices().forEach((tag) => {
+  tagOptions.forEach((tag) => {
     const option = document.createElement("option");
     option.value = tag.key;
     option.textContent = tag.display_name;
     trendNoteTagSelect.appendChild(option);
   });
+  trendNoteComposeSaveBtn.disabled = !dateOptions.length || !tagOptions.length;
 }
 
 function openTrendComposeView(prefill = null) {
@@ -2736,8 +2780,11 @@ function openTrendComposeView(prefill = null) {
   detailTrendComposerBody.classList.remove("hidden");
   state.trendComposeOpen = true;
   renderTrendComposeOptions();
-  if (state.trendDates.length) {
-    trendNoteDateSelect.value = state.trendDates[state.trendDates.length - 1];
+  if (trendNoteDateSelect.options.length) {
+    trendNoteDateSelect.value = trendNoteDateSelect.options[0].value;
+  }
+  if (trendNoteTagSelect.options.length) {
+    trendNoteTagSelect.value = trendNoteTagSelect.options[0].value;
   }
   if (base) {
     trendNoteDateSelect.value = base.date;
@@ -3034,6 +3081,42 @@ async function refreshTrendSelectionAfterMutation(nextSelection = state.trendSel
   renderTrendsView();
   renderTrendDetail(payload);
   renderMeta();
+}
+
+async function refreshMarketWorkbenchAfterTrendCompose() {
+  if (state.collection !== "market_tags") return;
+  await fetchMarketTagDefinitions().catch(() => {});
+  resetList();
+  removeMarketWorkbenchSummaryInline();
+  const data = await fetchMarketWorkbenchPage(1);
+  state.total = Number(data.total || 0);
+  state.pages = Number(data.pages || 1);
+  state.page = Number(data.page || 1);
+  state.hasMore = !!data.has_more;
+  state.marketWorkbenchSummary = data.summary || null;
+  showTrendsView(false);
+  renderMeta();
+  (data.items || []).forEach((item) => {
+    const row = item.entry_type === "trend_note" ? buildIdeaRow(item) : buildItemRow(item);
+    appendNewsRow(item, row);
+  });
+  if (state.marketWorkbenchTag) {
+    renderMarketWorkbenchSummaryInline();
+  } else {
+    removeMarketWorkbenchSummaryInline();
+  }
+  if (!state.total) {
+    setHint("当前板块筛选下暂无内容");
+  } else if (state.hasMore) {
+    setHint("继续下滑加载更多");
+  } else {
+    setHint("已加载当前板块集合的全部结果");
+  }
+  ensureRowStatusPolling();
+  if (readObserver) {
+    readObserver.disconnect();
+    readObserver = null;
+  }
 }
 
 async function openTagAdminView() {
@@ -5153,20 +5236,33 @@ function renderMarketWorkbenchSummaryInline() {
 
   const title = document.createElement("h4");
   title.textContent = "近期趋势总结";
+  const details = document.createElement("details");
+  details.className = "market-summary-details";
+  const detailsSummary = document.createElement("summary");
+  detailsSummary.className = "market-summary-toggle";
+  const summaryMeta = document.createElement("div");
+  summaryMeta.className = "market-summary-toggle-text";
   const scope = document.createElement("div");
   scope.className = "detail-meta";
   scope.textContent = summary?.scope_label || "";
   const status = document.createElement("div");
   status.className = "detail-meta";
   status.textContent = statusMap[summary?.status] || "";
+  summaryMeta.appendChild(title);
+  summaryMeta.appendChild(scope);
+  summaryMeta.appendChild(status);
+  detailsSummary.appendChild(summaryMeta);
+  const caret = document.createElement("span");
+  caret.className = "market-summary-caret";
+  caret.textContent = "展开";
+  detailsSummary.appendChild(caret);
+  details.appendChild(detailsSummary);
+
   const text = document.createElement("p");
   text.className = "detail-note-text";
-  text.textContent = summary?.summary_text || "";
-
-  card.appendChild(title);
-  card.appendChild(scope);
-  card.appendChild(status);
-  card.appendChild(text);
+  text.textContent = summary?.summary_text || "当前还没有正文总结。";
+  details.appendChild(text);
+  card.appendChild(details);
   li.appendChild(card);
   newsList.prepend(li);
 }
@@ -5309,6 +5405,49 @@ async function generateTrackedTopicDailySummary(topicId, summaryDate) {
     throw new Error((data.error || "tracked_topic_daily_summary_generate_failed") + detail);
   }
   return data;
+}
+
+function trackedTimeflowBatchTargets(days, mode = state.trackedTimeflowBatchMode) {
+  const rows = Array.isArray(days) ? days : [];
+  if (mode === "missing") return rows.filter((day) => day?.status === "missing");
+  if (mode === "stale") return rows.filter((day) => day?.status === "stale");
+  return rows;
+}
+
+async function runTrackedTimeflowBatch(topicId) {
+  const topic = selectedTrackedTopic();
+  if (!topic || String(topic.id) !== String(topicId)) return;
+  const targets = trackedTimeflowBatchTargets(state.trackedDailySummaries, state.trackedTimeflowBatchMode);
+  if (!targets.length) {
+    const modeLabel = state.trackedTimeflowBatchMode === "missing" ? "未生成" : (state.trackedTimeflowBatchMode === "stale" ? "已过期" : "可处理");
+    setHint(`没有需要一键生成的${modeLabel}日期`);
+    return;
+  }
+  const token = `${topicId}:${Date.now()}`;
+  state.trackedTimeflowBatchToken = token;
+  let successCount = 0;
+  let failedCount = 0;
+  for (const day of targets) {
+    if (state.trackedTimeflowBatchToken !== token || String(state.selectedTrackedTopicId) !== String(topicId) || state.collection !== "tracked") {
+      break;
+    }
+    try {
+      await generateTrackedTopicDailySummary(topicId, day.date);
+      successCount += 1;
+    } catch (_) {
+      failedCount += 1;
+    }
+    if (state.trackedTimeflowBatchToken !== token || String(state.selectedTrackedTopicId) !== String(topicId) || state.collection !== "tracked") {
+      break;
+    }
+    await loadTrackedTopicDailySummaries(topicId);
+  }
+  if (state.trackedTimeflowBatchToken === token) {
+    state.trackedTimeflowBatchToken = "";
+    if (String(state.selectedTrackedTopicId) === String(topicId) && state.collection === "tracked") {
+      setHint(`时间流一键生成完成：成功 ${successCount} 天，失败 ${failedCount} 天`);
+    }
+  }
 }
 
 async function generateTrackedTopicRuleDraft(payload) {
@@ -5907,6 +6046,21 @@ if (marketWorkbenchSummaryBtn) {
   });
 }
 
+if (marketWorkbenchComposeBtn) {
+  marketWorkbenchComposeBtn.addEventListener("click", () => {
+    const selected = activeMarketTagChoices().find((tag) => tag.key === state.marketWorkbenchTag);
+    openTrendComposeView(
+      state.marketWorkbenchTag
+        ? {
+            date: new Date().toISOString().slice(0, 10),
+            tagKey: state.marketWorkbenchTag,
+            tagLabel: selected?.display_name || state.marketWorkbenchTag,
+          }
+        : null
+    );
+  });
+}
+
 if (sortOrderBtn) {
   sortOrderBtn.addEventListener("click", async () => {
     if (!supportsSortToggle()) return;
@@ -6089,6 +6243,25 @@ if (trackedViewTimeflowBtn) {
   });
 }
 
+if (trackedTimeflowBatchModeSelect) {
+  trackedTimeflowBatchModeSelect.addEventListener("change", () => {
+    state.trackedTimeflowBatchMode = trackedTimeflowBatchModeSelect.value || "all";
+  });
+}
+
+if (trackedTimeflowBatchGenerateBtn) {
+  trackedTimeflowBatchGenerateBtn.addEventListener("click", async () => {
+    const topic = selectedTrackedTopic();
+    if (!topic) return;
+    trackedTimeflowBatchGenerateBtn.disabled = true;
+    try {
+      await runTrackedTimeflowBatch(topic.id);
+    } finally {
+      trackedTimeflowBatchGenerateBtn.disabled = false;
+    }
+  });
+}
+
 if (trackedDeleteBtn) {
   trackedDeleteBtn.addEventListener("click", async () => {
     const topic = selectedTrackedTopic();
@@ -6147,7 +6320,7 @@ if (trackedBackfillBtn) {
 
 if (manageMarketTagsBtn) {
   manageMarketTagsBtn.addEventListener("click", async () => {
-    if (state.collection !== "trends") return;
+    if (state.collection !== "trends" && state.collection !== "market_tags") return;
     await openTagAdminView();
   });
 }
@@ -6697,6 +6870,10 @@ if (detailTrendNoteDeleteBtn) {
 if (trendNoteComposeCancelBtn) {
   trendNoteComposeCancelBtn.addEventListener("click", () => {
     closeTrendComposerView();
+    if (state.collection === "market_tags") {
+      restoreMarketWorkbenchDetailState();
+      return;
+    }
     if (state.trendSelection?.detailPayload) {
       renderTrendDetail(state.trendSelection.detailPayload);
     } else {
@@ -6710,15 +6887,30 @@ if (trendNoteComposeSaveBtn) {
     const date = trendNoteDateSelect.value;
     const tag = trendNoteTagSelect.value;
     const direction = trendNoteDirectionSelect.value;
-    if (!date || !tag || !direction) return;
+    const note = (trendNoteComposeInput.value || "").trim();
+    if (!date || !tag || !direction) {
+      setHint("请先选择日期、板块和方向，再保存趋势想法");
+      return;
+    }
+    if (!note) {
+      setHint("请先输入趋势想法内容，再保存");
+      return;
+    }
     trendNoteComposeSaveBtn.disabled = true;
     try {
       await saveTrendNote({
         date,
         tag,
         direction,
-        note: trendNoteComposeInput.value,
+        note,
       });
+      if (state.collection === "market_tags") {
+        await refreshMarketWorkbenchAfterTrendCompose();
+        closeTrendComposerView();
+        restoreMarketWorkbenchDetailState();
+        setHint("趋势想法已保存");
+        return;
+      }
       await refreshTrendSelectionAfterMutation({
         kind: "cell",
         key: `${tag}|${date}`,
