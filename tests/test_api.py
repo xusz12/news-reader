@@ -3591,7 +3591,7 @@ def test_detail_endpoint_includes_chat_providers(tmp_path: Path, monkeypatch):
     assert payload["chat_providers"]["codex"]["label"] == "Codex"
 
 
-def test_news_chat_requires_ready_detail(tmp_path: Path, monkeypatch):
+def test_news_chat_without_detail_uses_summary_context(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
@@ -3612,12 +3612,38 @@ def test_news_chat_requires_ready_detail(tmp_path: Path, monkeypatch):
     assert client.post("/api/reindex", json={}).status_code == 200
 
     item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        with conn:
+            conn.execute(
+                "UPDATE items SET summary=? WHERE id=?",
+                ("Fallback summary for chat route tests.", item["id"]),
+            )
+
+    captured = {}
+
+    def fake_run_codex_chat(**kwargs):
+        captured.update(kwargs)
+        return {
+            "provider": "codex",
+            "session_id": "summary-session",
+            "model": kwargs["model"],
+            "answer": "Fallback 回答",
+        }
+
+    monkeypatch.setattr(app_module, "run_codex_chat", fake_run_codex_chat)
     res = client.post(
         f"/api/news/{item['id']}/chat",
         json={"question": "这是什么意思？"},
     )
-    assert res.status_code == 409
-    assert res.get_json()["error"] == "detail_not_ready"
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert payload["context_level"] == "summary_context"
+    assert payload["context_label"] == "摘要与元数据"
+    assert captured["context_level"] == "summary_context"
+    assert "Fallback summary for chat route tests." in captured["content"]
+    assert "https://example.com/chat-pending" in captured["content"]
+    assert "Reuters" in captured["content"]
 
 
 def test_news_chat_first_turn_uses_context_and_returns_session(tmp_path: Path, monkeypatch):
@@ -3687,8 +3713,11 @@ def test_news_chat_first_turn_uses_context_and_returns_session(tmp_path: Path, m
     assert payload["ok"] is True
     assert payload["answer"] == "Codex 回答"
     assert payload["session_id"] == "session-123"
+    assert payload["context_level"] == "full_detail"
+    assert payload["context_label"] == "完整正文"
     assert captured["title"] == "Chat Ready"
     assert captured["content"] == "Full english body for chat route tests."
+    assert captured["context_level"] == "full_detail"
     assert captured["question"] == "那最新影响呢？"
     assert captured["session_id"] == ""
     assert captured["model"] == "gpt-5-codex"
@@ -3760,9 +3789,83 @@ def test_news_chat_resume_uses_explicit_session_id(tmp_path: Path, monkeypatch):
     )
     assert resume_res.status_code == 200
     assert resume_res.get_json()["session_id"] == "session-456"
+    assert resume_res.get_json()["context_level"] == "full_detail"
     assert captured["session_id"] == "session-456"
     assert captured["question"] == "最新进展？"
     assert captured["model"] == "gpt-5-codex"
+    assert captured["context_level"] == "full_detail"
+
+
+def test_news_chat_twitter_skipped_detail_uses_summary_context(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## X · Social（1条）
+### [Tweet Update](https://x.com/example/status/123)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                "UPDATE items SET source=?, source_name=?, source_type=?, summary=? WHERE id=?",
+                ("Twitter", "Twitter", "twitter", "Tweet summary context.", item["id"]),
+            )
+            conn.execute(
+                """
+                INSERT INTO detail_jobs(url, item_id, source, status, attempts, last_error, queued_at, started_at, finished_at, updated_at)
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["url"],
+                    item["id"],
+                    "Twitter",
+                    "skipped",
+                    "TWITTER_SKIPPED",
+                    ts,
+                    ts,
+                    ts,
+                    ts,
+                ),
+            )
+
+    captured = {}
+
+    def fake_run_codex_chat(**kwargs):
+        captured.update(kwargs)
+        return {
+            "provider": "codex",
+            "session_id": "tweet-session",
+            "model": kwargs["model"],
+            "answer": "推文 fallback 回答",
+        }
+
+    monkeypatch.setattr(app_module, "run_codex_chat", fake_run_codex_chat)
+    res = client.post(
+        f"/api/news/{item['id']}/chat",
+        json={"question": "这条推文在说什么？"},
+    )
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert payload["context_level"] == "summary_context"
+    assert payload["context_label"] == "摘要与元数据"
+    assert captured["context_level"] == "summary_context"
+    assert "来源类型：twitter" in captured["content"]
+    assert "Tweet summary context." in captured["content"]
 
 
 def test_news_chat_errors_and_busy(tmp_path: Path, monkeypatch):
@@ -4049,6 +4152,7 @@ def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypa
         source="Reuters",
         published_at="2026-06-11 09:00:00",
         content="Body",
+        context_level="full_detail",
         model="gpt-5-codex",
     )
     resumed = app_module.run_codex_chat(
@@ -4058,6 +4162,7 @@ def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypa
         source="Reuters",
         published_at="2026-06-11 09:00:00",
         content="Body",
+        context_level="full_detail",
         model="gpt-5-codex",
     )
 
@@ -4067,8 +4172,11 @@ def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypa
     assert "resume" not in commands[0]
     assert "--last" not in commands[0]
     assert commands[0][2].startswith("你是一名新闻研究助手。要求：使用中文，回答尽量简洁。")
+    assert "新闻标题：Test" in commands[0][2]
+    assert "新闻来源：Reuters" in commands[0][2]
     assert "发布时间：2026-06-11 09:00:00" in commands[0][2]
-    assert "新闻正文：\nBody" in commands[0][2]
+    assert "上下文级别：full_detail" in commands[0][2]
+    assert "新闻上下文：\nBody" in commands[0][2]
     assert "用户问题：什么是 codex exec？" in commands[0][2]
     assert commands[1][0:4] == ["codex", "exec", "resume", "first-session"]
     assert "--last" not in commands[1]

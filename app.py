@@ -1413,7 +1413,7 @@ def chat_provider_catalog() -> dict[str, dict]:
         "codex": {
             "label": "Codex",
             "available": True,
-            "note": "基于新闻正文上下文回答；可结合外部知识，无法确认的最新进展会明确说明。",
+            "note": "基于当前新闻可用上下文回答；有正文时使用正文，无正文时退回标题、摘要与元数据。",
             "model": model,
         }
     }
@@ -1429,17 +1429,148 @@ def codex_chat_lock(item_id: str) -> threading.Lock:
         return CODEX_CHAT_LOCKS.setdefault(item_id, threading.Lock())
 
 
-def build_codex_chat_prompt(*, title: str, source: str, published_at: str, content: str, question: str) -> str:
+def truncate_chat_context_text(value: str, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def build_news_chat_context(
+    *,
+    item: sqlite3.Row | dict,
+    detail: sqlite3.Row | dict | None = None,
+    ai: sqlite3.Row | dict | None = None,
+    note_row: sqlite3.Row | dict | None = None,
+    market_tags: list[dict] | None = None,
+) -> dict | None:
+    item_payload = dict(item or {})
+    detail_payload = dict(detail or {})
+    ai_payload = dict(ai or {})
+    note_payload = dict(note_row or {})
+    tags = market_tags or []
+
+    title = str(detail_payload.get("title") or item_payload.get("title") or "").strip()
+    source = str(
+        detail_payload.get("source")
+        or item_payload.get("source")
+        or item_payload.get("source_name")
+        or item_payload.get("source_type")
+        or ""
+    ).strip()
+    published_at = str(detail_payload.get("published_at") or item_payload.get("published_at") or "").strip()
+    url = str(item_payload.get("url") or "").strip()
+    detail_content = str(detail_payload.get("content") or "").strip()
+    if detail_content:
+        return {
+            "title": title,
+            "source": source,
+            "published_at": published_at,
+            "content": detail_content,
+            "context_level": "full_detail",
+            "context_label": "完整正文",
+        }
+
+    lines: list[str] = []
+    if title:
+        lines.append(f"新闻标题：{title}")
+    if source:
+        lines.append(f"新闻来源：{source}")
+    if item_payload.get("source_type"):
+        lines.append(f"来源类型：{item_payload['source_type']}")
+    if published_at:
+        lines.append(f"发布时间：{published_at}")
+    if url:
+        lines.append(f"原文链接：{url}")
+
+    summary = truncate_chat_context_text(item_payload.get("summary") or "", 1200)
+    if summary:
+        lines.append(f"新闻摘要：\n{summary}")
+
+    key_points = truncate_chat_context_text(parse_key_points_text(ai_payload.get("key_points_zh")), 1200)
+    if key_points:
+        lines.append(f"AI 中文要点：\n{key_points}")
+
+    conclusion = truncate_chat_context_text(ai_payload.get("conclusion_zh") or "", 800)
+    if conclusion:
+        lines.append(f"AI 中文结论：\n{conclusion}")
+
+    ai_body = truncate_chat_context_text(ai_payload.get("body_zh") or "", 2400)
+    if ai_body:
+        lines.append(f"AI 中文正文摘录：\n{ai_body}")
+
+    note = truncate_chat_context_text(note_payload.get("note") or "", 1200)
+    if note:
+        lines.append(f"用户想法：\n{note}")
+
+    if tags:
+        tag_labels: list[str] = []
+        for tag in tags:
+            label = str(tag.get("display_name") or tag.get("tag") or "").strip()
+            if not label:
+                continue
+            direction = str(tag.get("direction") or "").strip()
+            if direction == "bullish":
+                label = f"{label}(看多)"
+            elif direction == "bearish":
+                label = f"{label}(看空)"
+            tag_labels.append(label)
+        if tag_labels:
+            lines.append(f"板块标签：{', '.join(tag_labels)}")
+
+    content = "\n\n".join(part for part in lines if part).strip()
+    if not content:
+        return None
+    return {
+        "title": title,
+        "source": source,
+        "published_at": published_at,
+        "content": content,
+        "context_level": "summary_context",
+        "context_label": "摘要与元数据",
+    }
+
+
+def build_codex_chat_prompt(
+    *,
+    title: str,
+    source: str,
+    published_at: str,
+    content: str,
+    question: str,
+    context_level: str,
+) -> str:
+    context_header = (
+        "以下包含新闻完整正文，可以基于正文回答。"
+        if context_level == "full_detail"
+        else "以下不是完整正文，只包含标题、摘要、元数据、用户笔记等上下文。不要假装读过全文；无法确认全文细节时要明确说明。"
+    )
     return (
         "你是一名新闻研究助手。要求：使用中文，回答尽量简洁。\n"
+        f"新闻标题：{title}\n"
+        f"新闻来源：{source}\n"
         f"发布时间：{published_at}\n"
-        "新闻正文：\n"
+        f"上下文级别：{context_level}\n"
+        f"{context_header}\n"
+        "新闻上下文：\n"
         f"{content}\n\n"
         f"用户问题：{question}"
     )
 
 
-def run_codex_chat(*, question: str, title: str, source: str, published_at: str, content: str, session_id: str = "", model: str = "", reset: bool = False, timeout: int = 90) -> dict:
+def run_codex_chat(
+    *,
+    question: str,
+    title: str,
+    source: str,
+    published_at: str,
+    content: str,
+    context_level: str,
+    session_id: str = "",
+    model: str = "",
+    reset: bool = False,
+    timeout: int = 90,
+) -> dict:
     prompt = question.strip()
     if not prompt:
         raise ValueError("empty_question")
@@ -1457,6 +1588,7 @@ def run_codex_chat(*, question: str, title: str, source: str, published_at: str,
                 published_at=published_at,
                 content=content,
                 question=prompt,
+                context_level=context_level,
             )
         )
     command.extend(["--json", "--skip-git-repo-check"])
@@ -5467,7 +5599,7 @@ def api_news_detail(item_id: str):
     conn = db_conn()
     try:
         item = conn.execute(
-            "SELECT id, title, url, source, summary FROM items WHERE id=?",
+            "SELECT id, title, url, source, source_name, source_type, summary, published_at FROM items WHERE id=?",
             (item_id,),
         ).fetchone()
         if not item:
@@ -5550,6 +5682,13 @@ def api_news_detail(item_id: str):
             "tracked_topic_choices": tracked_topic_choices,
             "reminders": reminders,
             "reminder_summary": reminder_summary,
+            "chat_context": build_news_chat_context(
+                item=item,
+                detail=detail,
+                ai=ai,
+                note_row=note_row,
+                market_tags=market_tags,
+            ),
             "chat_providers": chat_provider_catalog(),
         }
     )
@@ -5749,7 +5888,7 @@ def api_news_chat(item_id: str):
     conn = db_conn()
     try:
         item = conn.execute(
-            "SELECT id, title, url, source, published_at FROM items WHERE id=?",
+            "SELECT id, title, url, source, source_name, source_type, summary, published_at FROM items WHERE id=?",
             (item_id,),
         ).fetchone()
         if not item:
@@ -5765,11 +5904,35 @@ def api_news_chat(item_id: str):
             """,
             (url,),
         ).fetchone()
+        ai = conn.execute(
+            """
+            SELECT key_points_zh, conclusion_zh, body_zh
+            FROM article_ai
+            WHERE url=?
+            """,
+            (url,),
+        ).fetchone()
+        note_row = conn.execute(
+            """
+            SELECT note
+            FROM article_notes
+            WHERE url=?
+            """,
+            (url,),
+        ).fetchone()
+        market_tags = load_market_tags_map(conn, [url]).get(url, [])
     finally:
         conn.close()
 
-    if not detail or not (detail["content"] or "").strip():
-        return jsonify({"ok": False, "error": "detail_not_ready"}), 409
+    chat_context = build_news_chat_context(
+        item=item,
+        detail=detail,
+        ai=ai,
+        note_row=note_row,
+        market_tags=market_tags,
+    )
+    if not chat_context:
+        return jsonify({"ok": False, "error": "context_unavailable"}), 409
 
     lock = codex_chat_lock(item_id)
     if not lock.acquire(blocking=False):
@@ -5781,10 +5944,11 @@ def api_news_chat(item_id: str):
             session_id=session_id,
             model=model,
             reset=reset,
-            title=(detail["title"] or item["title"] or "").strip(),
-            source=(detail["source"] or item["source"] or "").strip(),
-            published_at=(detail["published_at"] or item["published_at"] or "").strip(),
-            content=(detail["content"] or "").strip(),
+            title=chat_context["title"],
+            source=chat_context["source"],
+            published_at=chat_context["published_at"],
+            content=chat_context["content"],
+            context_level=chat_context["context_level"],
         )
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
@@ -5802,7 +5966,14 @@ def api_news_chat(item_id: str):
     finally:
         lock.release()
 
-    return jsonify({"ok": True, **payload})
+    return jsonify(
+        {
+            "ok": True,
+            **payload,
+            "context_level": chat_context["context_level"],
+            "context_label": chat_context["context_label"],
+        }
+    )
 
 
 @app.post("/api/news/<item_id>/chat/archive")

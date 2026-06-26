@@ -3874,6 +3874,7 @@ function isCodexFallbackAi(ai) {
 function renderDetailChatMeta(item, codexMeta) {
   if (!detailChatMeta) return;
   detailChatMeta.innerHTML = "";
+  const contextMeta = detailChatContextMeta(item);
 
   const source = document.createElement("span");
   source.className = "detail-chat-source";
@@ -3884,6 +3885,13 @@ function renderDetailChatMeta(item, codexMeta) {
   modelBadge.className = `detail-chat-model-badge ${codexMeta.available ? "ok" : "failed"}`;
   modelBadge.textContent = `● ${chatModelLabel(codexMeta)}`;
   detailChatMeta.appendChild(modelBadge);
+
+  if (contextMeta?.context_label) {
+    const contextBadge = document.createElement("span");
+    contextBadge.className = "detail-chat-source";
+    contextBadge.textContent = contextMeta.context_label;
+    detailChatMeta.appendChild(contextBadge);
+  }
 }
 
 function renderDetailChatKeyPoints(item) {
@@ -3899,6 +3907,16 @@ function renderDetailChatKeyPoints(item) {
   detailChatCapability.classList.remove("hidden");
 }
 
+function detailChatContextMeta(item) {
+  const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
+  const context = cached?.chat_context || null;
+  if (context?.context_label) return context;
+  if (cached?.detail?.content) {
+    return { context_level: "full_detail", context_label: "完整正文" };
+  }
+  return { context_level: "summary_context", context_label: "摘要与元数据" };
+}
+
 function renderDetailChat(item) {
   if (!item) return;
   const providers = chatProvidersFromItem(item);
@@ -3908,6 +3926,11 @@ function renderDetailChat(item) {
     && !state.detailChatSending
     && !state.detailChatArchiving
     && state.detailChatMessages.some((message) => message.role === "assistant");
+  const contextMeta = detailChatContextMeta(item);
+  const contextLabel = contextMeta?.context_label || "摘要与元数据";
+  const contextHint = contextMeta?.context_level === "full_detail"
+    ? "围绕完整正文继续追问。"
+    : "基于摘要与元数据继续追问，不要默认模型已读过全文。";
 
   renderDetailChatMeta(item, codexMeta);
   renderDetailChatKeyPoints(item);
@@ -3917,7 +3940,9 @@ function renderDetailChat(item) {
     detailChatArchiveBtn.disabled = !archiveEnabled;
   }
   detailChatInput.placeholder = chatEnabled
-    ? "围绕这条新闻继续追问，例如：这件事对相关公司/板块意味着什么？"
+    ? (contextMeta?.context_level === "full_detail"
+      ? "围绕这条新闻继续追问，例如：这件事对相关公司/板块意味着什么？"
+      : "基于摘要与元数据提问，例如：这条新闻可能影响哪些公司或板块？")
     : "Codex chat 当前不可用。";
 
   const chatReady = !!(state.detailChatMessages && state.detailChatMessages.length);
@@ -3930,7 +3955,7 @@ function renderDetailChat(item) {
     const empty = document.createElement("div");
     empty.className = "detail-chat-empty";
     empty.textContent = chatEnabled
-      ? "围绕正文继续追问。"
+      ? `${contextHint}当前上下文：${contextLabel}。`
       : "Codex chat 当前不可用。";
     detailChatMessages.appendChild(empty);
     return;
@@ -4011,11 +4036,12 @@ async function sendDetailChatMessage() {
     state.detailChatMessages = [...state.detailChatMessages, { role: "assistant", content: payload.answer || "" }];
     state.detailChatSessionId = payload.session_id || "";
     state.detailChatModel = configuredModel;
-    state.detailChatStatus = `${payload.provider === "codex" ? "Codex" : "助手"} · ${payload.model || "默认模型"}`.trim();
+    state.detailChatStatus = `${payload.provider === "codex" ? "Codex" : "助手"} · ${payload.model || "默认模型"} · ${payload.context_label || "摘要与元数据"}`.trim();
   } catch (error) {
     const code = error instanceof Error ? error.message : "chat_request_failed";
     const labelMap = {
       detail_not_ready: "正文还没准备好，暂时不能提问。",
+      context_unavailable: "这条新闻缺少可提问的上下文，请稍后重试。",
       provider_busy: "该模型当前正忙，请稍后重试。",
       provider_timeout: "请求超时，请稍后重试。",
       provider_failed: "Codex 调用失败，请稍后重试。",
@@ -4774,12 +4800,8 @@ function renderDetail(item) {
     retryBtn.classList.remove("hidden");
   }
 
-  const chatReady = !!(detail && detail.content);
+  const chatReady = !item.snapshotOnly && !!item.id && !!item.url;
   askBtn.classList.toggle("hidden", !chatReady);
-  if (!chatReady && state.detailView === "chat") {
-    state.detailView = "detail";
-    state.detailChatStatus = "正文还没准备好，暂时不能提问。";
-  }
   detailBody.classList.toggle("hidden", state.detailView === "chat");
   detailChatBody.classList.toggle("hidden", state.detailView !== "chat");
   if (state.detailView === "chat" && chatReady) {

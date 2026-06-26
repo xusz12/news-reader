@@ -4,20 +4,31 @@
 
 ## What's Changed
 
+### 2026-06-26 — v1.9.8.11 improve: Chat 支持所有新闻
+- **文件**
+  - *app.py（+）*、*tests/test_api.py（+）*
+    - 为 `POST /api/news/:id/chat` 抽出统一 chat context 构造：有正文时走 `full_detail`，无正文时回退到标题、摘要、AI 中文内容、原文链接、用户想法和板块标签
+    - 不再因缺 `article_details.content` 直接返回 `detail_not_ready`；Twitter、视频、skipped source 等无正文条目也可提问
+    - chat prompt 明确区分“完整正文”与“摘要/元数据上下文”，避免模型假装读过全文；原有 `provider_busy / provider_timeout / session_invalid` 语义保持不变
+  - *static/index.html（+）*、*static/app.js（+）*
+    - 右栏 `提问` 按钮对所有正常新闻可见，不再绑定“正文已抓取”前置条件
+    - Chat 页显示当前上下文级别 `完整正文 / 摘要与元数据`，并在 placeholder、空态、发送后状态文案中明确提示
+    - 保持 Twitter / 视频 / skipped source 的正文状态文案，不恢复 Twitter 的稍后阅读，也不改抓取 worker
+- **影响**：用户现在可以对所有新闻直接提问；有正文时继续围绕全文，多数无正文条目则退回基于摘要与元数据的问答，交互口径更统一。
+
 ### 2026-06-25 — v1.9.8.10 fix: 板块集合与跟踪集合修复
 - **文件**
   - *app.py（+）*、*llm_client.py（+）*、*tests/test_api.py（+）*
     - 板块近期趋势总结材料新增新闻侧 `方向：看多 / 看空`，并把 direction 纳入 `market_tag_summaries.source_hash`，确保方向变化会触发 stale
     - `GET /api/market-workbench` 补齐 `sort_order`，板块集合里的排序按钮重新生效
-    - 跟踪集合扩展支持 `market_trend_notes` 作为 tracked item：规则匹配、手动加入、时间线展示、时间流日总结材料都支持 `trend_note:<id>` 合成条目
     - 跟踪时间流 prompt 明确把“独立想法 / 用户判断”与新闻事实区分，避免把用户判断伪装成事实
   - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
     - 板块集合顶部补回 `添加独立想法` 入口；`板块管理` 在 `market_tags` 下也可正常打开
     - 单板块 `近期趋势总结` 改为默认折叠，仍保留在新闻滚动区内随列表滚动
     - 跟踪原始新闻页改为按日期分组展示；小屏幕不再用挤占标题空间的 `正文` badge，而是改成已抓取正文标题高亮
     - 跟踪时间流页新增 `一键生成`，支持 `全部 / 更新已过期 / 仅未生成` 三种模式，前端顺序调用现有逐日生成接口
-    - 独立趋势想法在跟踪时间线 / 时间流里显示为独立类型，点击后进入趋势想法详情，不再误走新闻详情
-- **影响**：板块集合的顶部操作恢复可用，单板块总结默认更克制；跟踪集合同时覆盖新闻与独立想法，时间线与时间流都更适合长期维护主题。
+    - 独立趋势想法继续停留在板块工作台内查看与编辑，不再进入跟踪集合
+- **影响**：板块集合的顶部操作恢复可用，单板块总结默认更克制；跟踪集合继续聚焦新闻主题维护，不再混入已取消的独立想法收录口径。
 
 ### 2026-06-25 — v1.9.8.9 feat: 板块工作台整合总览、单板块混合流与近期总结
 - **文件**
