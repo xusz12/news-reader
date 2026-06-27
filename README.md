@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-06-28 — v1.9.9.3 feat: news-reader 优先读取 newsflow sidecar JSON
+- **文件**
+  - *parser.py（+）*、*scanner.py（+）*、*tests/test_parser.py（+）*、*tests/test_scanner.py（+）*
+    - 新增 `newsreader.daily.v1` sidecar 解析：支持读取 `dailyFreshNews_YYYY-MM-DD.newsreader.json`
+    - `reindex` 继续以 `dailyFreshNews_*.md` 为扫描主入口；同目录 sidecar 存在时优先解析 JSON，schema 不支持或读取失败时自动回退到原 Markdown parser
+    - `items.source_file` 继续写 md 相对路径，`item id` 继续沿用现有规则，避免从 md 切到 JSON 后重复入库或破坏历史状态
+    - `source_files` 的变更检测改为 sidecar 优先指纹：md 不变但 sidecar 更新时也会触发重扫；sidecar 删除后可自然回退 md
+    - 补覆盖：JSON 结构化解析、invalid schema fallback、sidecar 更新触发 reindex、Twitter `source_type/source_name` 从 sidecar 入库
+  - *static/index.html（+）*
+    - 顶栏版本号、页面 `<title>` 与静态资源版本参数同步更新到 `v1.9.9.3`
+- **影响**：news-reader 现在可以优先消费 newsflow 的结构化 sidecar JSON，减少对 Markdown 格式演化的耦合；同时保留现有 md fallback，回滚成本低，不影响历史 DailyNews 工作流。
+
 ### 2026-06-28 — v1.9.9.2 feat: Chat 搜索增强与超时调整
 - **文件**
   - *app.py（+）*、*tests/test_api.py（+）*

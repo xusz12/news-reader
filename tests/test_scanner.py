@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -12,6 +13,30 @@ def make_daily(path: Path, title: str, url: str, t: str = "08:00:00"):
 ### [{title}]({url})
 - 发布时间：2026-05-25 {t}
 """,
+        encoding="utf-8",
+    )
+
+
+def make_sidecar(path: Path, *, title: str, url: str, summary: str | None = None, source_type: str | None = None, source_name: str | None = None):
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "newsreader.daily.v1",
+                "items": [
+                    {
+                        "item_order": 1,
+                        "section": f"Twitter · {source_name}" if source_type == "twitter" and source_name else "Reuters · World",
+                        "source_type": source_type,
+                        "source_name": source_name,
+                        "title": title,
+                        "summary": summary,
+                        "published_at": "2026-05-25 08:00:00",
+                        "url": url,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
 
@@ -82,3 +107,78 @@ def test_stale_delete_and_item_state_preserved(tmp_path: Path):
     assert cnt_items == 1
     cnt_state = conn.execute("SELECT COUNT(*) FROM item_state").fetchone()[0]
     assert cnt_state == 1
+
+
+def test_reindex_prefers_valid_sidecar_json(tmp_path: Path):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    md_path = daily_dir / "dailyFreshNews_2026-05-25.md"
+    sidecar_path = daily_dir / "dailyFreshNews_2026-05-25.newsreader.json"
+    make_daily(md_path, "Markdown 标题", "https://example.com/a")
+    make_sidecar(sidecar_path, title="JSON 标题", url="https://example.com/a", summary="JSON 摘要")
+
+    conn = sqlite3.connect(":memory:")
+    apply_schema(conn, Path(__file__).resolve().parents[1] / "schema.sql")
+    reindex(conn, tmp_path / "DailyNews")
+
+    row = conn.execute("SELECT source_file, title, summary FROM items").fetchone()
+    assert row == ("2026年5月/dailyFreshNews_2026-05-25.md", "JSON 标题", "JSON 摘要")
+
+
+def test_reindex_falls_back_to_markdown_when_sidecar_invalid(tmp_path: Path):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    md_path = daily_dir / "dailyFreshNews_2026-05-25.md"
+    sidecar_path = daily_dir / "dailyFreshNews_2026-05-25.newsreader.json"
+    make_daily(md_path, "Markdown 标题", "https://example.com/a")
+    sidecar_path.write_text(json.dumps({"schema_version": "newsreader.daily.v0", "items": []}), encoding="utf-8")
+
+    conn = sqlite3.connect(":memory:")
+    apply_schema(conn, Path(__file__).resolve().parents[1] / "schema.sql")
+    reindex(conn, tmp_path / "DailyNews")
+
+    row = conn.execute("SELECT title FROM items").fetchone()
+    assert row == ("Markdown 标题",)
+
+
+def test_reindex_detects_sidecar_update_when_markdown_unchanged(tmp_path: Path):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    md_path = daily_dir / "dailyFreshNews_2026-05-25.md"
+    sidecar_path = daily_dir / "dailyFreshNews_2026-05-25.newsreader.json"
+    make_daily(md_path, "Markdown 标题", "https://example.com/a")
+    make_sidecar(sidecar_path, title="JSON 标题", url="https://example.com/a", summary="摘要 A")
+
+    conn = sqlite3.connect(":memory:")
+    apply_schema(conn, Path(__file__).resolve().parents[1] / "schema.sql")
+    first = reindex(conn, tmp_path / "DailyNews")
+    assert first.changed_files == 1
+
+    make_sidecar(sidecar_path, title="JSON 标题", url="https://example.com/a", summary="摘要 B")
+    second = reindex(conn, tmp_path / "DailyNews")
+    assert second.changed_files == 1
+    row = conn.execute("SELECT summary FROM items").fetchone()
+    assert row == ("摘要 B",)
+
+
+def test_reindex_sidecar_can_set_twitter_source_meta(tmp_path: Path):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    md_path = daily_dir / "dailyFreshNews_2026-05-25.md"
+    sidecar_path = daily_dir / "dailyFreshNews_2026-05-25.newsreader.json"
+    make_daily(md_path, "推文标题", "https://x.com/evan/status/1")
+    make_sidecar(
+        sidecar_path,
+        title="推文标题",
+        url="https://x.com/evan/status/1",
+        summary="推文摘要",
+        source_type="twitter",
+        source_name="Evan",
+    )
+
+    conn = sqlite3.connect(":memory:")
+    apply_schema(conn, Path(__file__).resolve().parents[1] / "schema.sql")
+    reindex(conn, tmp_path / "DailyNews")
+
+    row = conn.execute("SELECT source, source_type, source_name FROM items").fetchone()
+    assert row == ("Twitter · Evan", "twitter", "Evan")

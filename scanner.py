@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from parser import parse_daily_file
+from parser import parse_daily_file, parse_daily_json_file, sidecar_path_for_daily
 
 
 @dataclass
@@ -66,6 +66,31 @@ def list_daily_files(root: Path) -> list[Path]:
     return sorted(root.rglob("dailyFreshNews_*.md"))
 
 
+def file_signature(path: Path, sidecar_path: Path | None = None) -> tuple[float, int]:
+    md_stat = path.stat()
+    sidecar_exists = bool(sidecar_path and sidecar_path.exists())
+    sidecar_stat = sidecar_path.stat() if sidecar_exists and sidecar_path else None
+    latest_mtime = max(float(md_stat.st_mtime), float(sidecar_stat.st_mtime) if sidecar_stat else 0.0)
+    basis = "|".join(
+        [
+            f"md:{md_stat.st_mtime_ns}:{md_stat.st_size}",
+            f"sidecar:{sidecar_stat.st_mtime_ns}:{sidecar_stat.st_size}" if sidecar_stat else "sidecar:missing",
+        ]
+    )
+    signature = int(hashlib.sha256(basis.encode("utf-8")).hexdigest()[:15], 16)
+    return latest_mtime, signature
+
+
+def parse_daily_source(path: Path) -> list:
+    sidecar_path = sidecar_path_for_daily(path)
+    if sidecar_path.exists():
+        try:
+            return parse_daily_json_file(sidecar_path)
+        except Exception:
+            pass
+    return parse_daily_file(path)
+
+
 def load_source_record(conn: sqlite3.Connection, rel_path: str) -> tuple[float, int] | None:
     row = conn.execute(
         "SELECT mtime, size FROM source_files WHERE path = ?",
@@ -93,14 +118,14 @@ def reindex(
 
     for path in files:
         rel_path = str(path.relative_to(daily_root))
-        st = path.stat()
-        current = (float(st.st_mtime), int(st.st_size))
+        sidecar_path = sidecar_path_for_daily(path)
+        current = file_signature(path, sidecar_path)
         old = load_source_record(conn, rel_path)
         if old == current:
             continue
 
         stats.changed_files += 1
-        parsed = parse_daily_file(path)
+        parsed = parse_daily_source(path)
         ts = now_iso()
         new_ids: list[str] = []
 

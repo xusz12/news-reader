@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,6 +15,7 @@ ERROR_ITEM_RE = re.compile(r"^###\s+(?:\d+\.\s*)?(.+?)\s*$")
 ERROR_TIME_RE = re.compile(r"^- 抓取时间：(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s*$")
 IGNORE_SECTIONS = {"本次无更新的分组", "errors"}
 DAILY_FILE_RE = re.compile(r"dailyFreshNews_(\d{4}-\d{2}-\d{2})\.md$")
+JSON_SCHEMA_VERSION = "newsreader.daily.v1"
 TWITTER_SECTION_RE = re.compile(r"^(Twitter|X)\s*[·•\-]\s*(.+)$", re.IGNORECASE)
 SOCIAL_SOURCE_NAMES = {
     "Ilya Sutskever",
@@ -39,6 +41,16 @@ class ParsedItem:
     url: str
 
 
+def sidecar_path_for_daily(path: Path) -> Path:
+    return path.with_suffix(".newsreader.json")
+
+
+def daily_path_for_sidecar(path: Path) -> Path:
+    if path.name.endswith(".newsreader.json"):
+        return path.with_name(path.name[: -len(".newsreader.json")] + ".md")
+    return path
+
+
 def extract_date_from_filename(path: Path) -> str:
     m = DAILY_FILE_RE.search(path.name)
     if not m:
@@ -53,6 +65,32 @@ def normalize_source_meta(section_name: str) -> tuple[str | None, str | None]:
     if section_name.strip() in SOCIAL_SOURCE_NAMES:
         return "twitter", section_name.strip()
     return None, None
+
+
+def _normalize_published_parts(raw_value: object, default_date: str) -> tuple[str, str, str]:
+    text = str(raw_value or "").strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+    return default_date, "00:00", f"{default_date} 00:00"
+
+
+def _json_item_source_payload(item: dict) -> tuple[str, str | None, str | None]:
+    source = str(item.get("section") or item.get("source") or "").strip()
+    source_type = str(item.get("source_type") or "").strip() or None
+    source_name = str(item.get("source_name") or "").strip() or None
+    if not source:
+        if source_type == "twitter" and source_name:
+            source = f"Twitter · {source_name}"
+        else:
+            source = source_name or "未知来源"
+    if source_type or source_name:
+        return source, source_type, source_name
+    normalized_type, normalized_name = normalize_source_meta(source)
+    return source, normalized_type, normalized_name
 
 
 def parse_daily_file(path: Path) -> list[ParsedItem]:
@@ -145,6 +183,51 @@ def parse_daily_file(path: Path) -> list[ParsedItem]:
             items[idx].time = "00:00"
             items[idx].date = date
 
+    return items
+
+
+def parse_daily_json_file(path: Path) -> list[ParsedItem]:
+    default_date = extract_date_from_filename(daily_path_for_sidecar(path))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("invalid_newsreader_daily_json")
+    if str(payload.get("schema_version") or "").strip() != JSON_SCHEMA_VERSION:
+        raise ValueError("unsupported_newsreader_daily_schema")
+    rows = payload.get("items")
+    if not isinstance(rows, list):
+        raise ValueError("invalid_newsreader_daily_items")
+
+    items: list[ParsedItem] = []
+    order = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        url = str(row.get("url") or "").strip()
+        if not title or not url:
+            continue
+        item_order = row.get("item_order")
+        if isinstance(item_order, int) and item_order > 0:
+            order = item_order
+        else:
+            order += 1
+        date, time, published_at = _normalize_published_parts(row.get("published_at"), default_date)
+        source, source_type, source_name = _json_item_source_payload(row)
+        summary = str(row.get("summary") or "").strip() or None
+        items.append(
+            ParsedItem(
+                item_order=order,
+                date=date,
+                time=time,
+                published_at=published_at,
+                source=source,
+                source_type=source_type,
+                source_name=source_name,
+                title=title,
+                summary=summary,
+                url=url,
+            )
+        )
     return items
 
 
