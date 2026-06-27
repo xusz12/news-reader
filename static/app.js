@@ -3937,8 +3937,8 @@ function renderDetailChat(item) {
   const contextMeta = detailChatContextMeta(item);
   const contextLabel = contextMeta?.context_label || "摘要与元数据";
   const contextHint = contextMeta?.context_level === "full_detail"
-    ? "围绕完整正文继续追问。"
-    : "基于摘要与元数据继续追问，不要默认模型已读过全文。";
+    ? "可基于完整正文继续追问；涉及背景或最新信息时，助手会主动搜索补充。"
+    : "当前只有摘要与元数据；助手会把它当作提问场景，并在需要时主动搜索补充。";
 
   renderDetailChatMeta(item, codexMeta);
   renderDetailChatKeyPoints(item);
@@ -3949,8 +3949,8 @@ function renderDetailChat(item) {
   }
   detailChatInput.placeholder = chatEnabled
     ? (contextMeta?.context_level === "full_detail"
-      ? "围绕这条新闻继续追问，例如：这件事对相关公司/板块意味着什么？"
-      : "基于摘要与元数据提问，例如：这条新闻可能影响哪些公司或板块？")
+      ? "围绕这条新闻提问，例如：这件事现在的最新进展是什么？"
+      : "结合这条新闻背景提问，例如：这件事现在有哪些最新进展？")
     : "Codex chat 当前不可用。";
 
   const chatReady = !!(state.detailChatMessages && state.detailChatMessages.length);
@@ -4030,7 +4030,7 @@ async function sendDetailChatMessage() {
 
   state.detailChatMessages = [...state.detailChatMessages, { role: "user", content }];
   state.detailChatSending = true;
-  state.detailChatStatus = "正在生成回答...";
+  state.detailChatStatus = "正在生成回答，可能会搜索资料...";
   detailChatInput.value = "";
   renderDetailChat(item);
 

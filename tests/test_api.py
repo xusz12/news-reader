@@ -4498,9 +4498,11 @@ def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypa
     monkeypatch.chdir(tmp_path)
 
     commands = []
+    timeouts = []
 
     def fake_run(command, capture_output, text, timeout, cwd):
         commands.append(command)
+        timeouts.append(timeout)
         output_path = command[command.index("--output-last-message") + 1]
         Path(output_path).write_text("回答内容", encoding="utf-8")
         if "resume" in command:
@@ -4539,15 +4541,20 @@ def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypa
     assert commands[0][0:2] == ["codex", "exec"]
     assert "resume" not in commands[0]
     assert "--last" not in commands[0]
-    assert commands[0][2].startswith("你是一名新闻研究助手。要求：使用中文，回答尽量简洁。")
+    assert commands[0][2].startswith("你是一名新闻研究助手。用户当前围绕一篇新闻提问。")
+    assert "给你的新闻内容主要用于理解提问场景，不代表答案一定存在于文中。" in commands[0][2]
+    assert "如果用户问的是背景、最新进展、实时数据、影响判断或文中没有的细节，应主动搜索最新且可靠的信息后再回答。" in commands[0][2]
+    assert "回答时明确区分哪些信息来自新闻上下文，哪些来自你后续搜索到的信息。" in commands[0][2]
     assert "新闻标题：Test" in commands[0][2]
     assert "新闻来源：Reuters" in commands[0][2]
     assert "发布时间：2026-06-11 09:00:00" in commands[0][2]
     assert "上下文级别：full_detail" in commands[0][2]
+    assert "以下包含新闻完整正文。回答原文内容、总结或作者观点时，优先基于正文；若用户追问背景、最新进展、实时数据或文外细节，仍应主动搜索补充。" in commands[0][2]
     assert "新闻上下文：\nBody" in commands[0][2]
     assert "用户问题：什么是 codex exec？" in commands[0][2]
     assert commands[1][0:4] == ["codex", "exec", "resume", "first-session"]
     assert "--last" not in commands[1]
+    assert timeouts == [180, 180]
 
 
 def test_release_notes_api_returns_items(tmp_path: Path, monkeypatch):
