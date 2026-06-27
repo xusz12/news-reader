@@ -23,7 +23,9 @@ from llm_client import (
     LLMClientError,
     generate_codex_fallback_translation,
     generate_article_ai,
+    generate_body_translation_only,
     generate_market_tag_summary,
+    generate_twitter_comments_summary,
     generate_tracked_topic_rule_draft,
     generate_tracked_topic_daily_summary,
     resolve_translation_default_model,
@@ -55,6 +57,11 @@ DETAIL_COMMAND_ROUTES = {
     "techcrunch.com": {"source": "TechCrunch", "command": ["opencli", "TechcrunchPublic", "article"], "timeout": 45},
     "arstechnica.com": {"source": "Ars Technica", "command": ["opencli", "ArsPublic", "article"], "timeout": 45},
 }
+TWITTER_THREAD_COMMAND = ["opencli", "twitter", "thread"]
+TWITTER_ARTICLE_COMMAND = ["opencli", "twitter", "article"]
+TWITTER_COMMENT_FETCH_LIMIT = 50
+TWITTER_THREAD_TIMEOUT = 90
+TWITTER_ARTICLE_TIMEOUT = 60
 
 SOURCE_LABELS = {
     "all": "全部来源",
@@ -3440,27 +3447,13 @@ def resolve_detail_route(url: str) -> dict | None:
     if host.startswith("www."):
         host = host[4:]
     if host in ("x.com", "twitter.com"):
-        return {"source": "Twitter/X", "command": [], "timeout": 0}
+        return {"source": "Twitter/X", "command": TWITTER_THREAD_COMMAND, "timeout": TWITTER_THREAD_TIMEOUT}
     return DETAIL_COMMAND_ROUTES.get(host)
 
 
 def enqueue_detail_job(conn: sqlite3.Connection, item_id: str, url: str, source: str) -> bool:
     route = resolve_detail_route(url)
     ts = now_ts()
-    if route and route["source"] == "Twitter/X":
-        conn.execute(
-            """
-            INSERT INTO detail_jobs(url, item_id, source, status, attempts, queued_at, updated_at)
-            VALUES (?, ?, ?, 'skipped', 0, ?, ?)
-            ON CONFLICT(url) DO UPDATE SET
-              item_id=excluded.item_id,
-              source=excluded.source,
-              updated_at=excluded.updated_at
-            """,
-            (url, item_id, source, ts, ts),
-        )
-        return False
-
     existing_detail = conn.execute(
         "SELECT url FROM article_details WHERE url=?",
         (url,),
@@ -3507,6 +3500,247 @@ def enqueue_detail_job(conn: sqlite3.Connection, item_id: str, url: str, source:
     return True
 
 
+def _run_opencli_json_command(cmd: list[str], timeout: int) -> tuple[bool, object, str]:
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return False, None, "TIMEOUT"
+    except Exception as exc:
+        return False, None, f"SUBPROCESS_ERROR: {exc}"
+
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        return False, None, err or f"EXIT_{proc.returncode}"
+
+    try:
+        parsed = json.loads(proc.stdout or "[]")
+    except Exception as exc:
+        return False, None, f"INVALID_JSON: {exc}"
+    return True, parsed, ""
+
+
+def _normalize_text(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(part for part in (_normalize_text(item) for item in value) if part)
+    if isinstance(value, dict):
+        return _normalize_text(value.get("text") or value.get("content") or value.get("body"))
+    return ""
+
+
+def _normalize_text_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = _normalize_text(item)
+        if text:
+            result.append(text)
+    return result
+
+
+def _strip_twitter_comment_summary_prefix(text: str, comment_count: int) -> str:
+    normalized = (text or "").strip()
+    if not normalized:
+        return ""
+    prefixes = [
+        f"基于已抓取的 {comment_count} 条评论总结：",
+        f"基于已抓取的{comment_count}条评论总结：",
+        f"基于已抓取的 {comment_count} 条评论总结",
+        f"基于已抓取的{comment_count}条评论总结",
+    ]
+    for prefix in prefixes:
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):].strip()
+    return normalized.lstrip("：: ").strip()
+
+
+def _looks_like_same_content(left: str, right: str) -> bool:
+    a = re.sub(r"\s+", " ", (left or "").strip())
+    b = re.sub(r"\s+", " ", (right or "").strip())
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    return len(shorter) >= 80 and shorter in longer
+
+
+def _extract_twitter_thread_payload(parsed: object) -> tuple[dict, list[dict]]:
+    if isinstance(parsed, list):
+        tweets = [item for item in parsed if isinstance(item, dict)]
+        if not tweets:
+            return {}, []
+        return tweets[0], tweets[1:]
+
+    record = parsed if isinstance(parsed, dict) else {}
+    if not record:
+        return {}, []
+    main = record.get("tweet") if isinstance(record.get("tweet"), dict) else record
+    comments: list[dict] = []
+    for key in ("comments", "replies", "reply_tweets", "tweets"):
+        value = record.get(key)
+        if isinstance(value, list):
+            entries = [item for item in value if isinstance(item, dict)]
+            if entries:
+                comments = entries[1:] if key == "tweets" and entries and main is entries[0] else entries
+                break
+    return main if isinstance(main, dict) else {}, comments
+
+
+def _extract_twitter_article_payload(parsed: object) -> dict:
+    record = parsed[0] if isinstance(parsed, list) and parsed else parsed
+    return record if isinstance(record, dict) else {}
+
+
+def _build_twitter_comments_summary_text(comments: list[dict]) -> str:
+    parts: list[str] = []
+    for index, comment in enumerate(comments, start=1):
+        author = _normalize_text(comment.get("author") or comment.get("username") or comment.get("screen_name"))
+        text = _normalize_text(comment.get("text") or comment.get("content") or comment.get("full_text") or comment.get("body"))
+        if not text:
+            continue
+        label = f"评论 {index}"
+        if author:
+            label += f"（{author}）"
+        parts.append(f"{label}：{text}")
+    return "\n".join(parts).strip()
+
+
+def run_opencli_twitter_detail(url: str) -> tuple[bool, dict, str]:
+    thread_cmd = [
+        *TWITTER_THREAD_COMMAND,
+        url,
+        "--limit",
+        str(TWITTER_COMMENT_FETCH_LIMIT),
+        "-f",
+        "json",
+        "--window",
+        "background",
+        "--site-session",
+        "persistent",
+    ]
+    ok, parsed_thread, error = _run_opencli_json_command(thread_cmd, TWITTER_THREAD_TIMEOUT)
+    if not ok:
+        return False, {}, error
+
+    main_tweet, comments = _extract_twitter_thread_payload(parsed_thread)
+    main_text = _normalize_text(main_tweet.get("text") or main_tweet.get("content") or main_tweet.get("full_text") or main_tweet.get("body"))
+    if len(main_text) < 20:
+        return False, {}, "EMPTY_TWITTER_THREAD"
+
+    quoted = main_tweet.get("quoted_tweet") if isinstance(main_tweet.get("quoted_tweet"), dict) else {}
+    quoted_text = _normalize_text(quoted.get("text") or quoted.get("content") or quoted.get("full_text") or quoted.get("body"))
+
+    article_record: dict = {}
+    article_error = ""
+    article_cmd = [
+        *TWITTER_ARTICLE_COMMAND,
+        url,
+        "-f",
+        "json",
+        "--window",
+        "background",
+        "--site-session",
+        "persistent",
+    ]
+    article_ok, parsed_article, article_err = _run_opencli_json_command(article_cmd, TWITTER_ARTICLE_TIMEOUT)
+    if article_ok:
+        article_record = _extract_twitter_article_payload(parsed_article)
+    else:
+        article_error = article_err
+
+    article_text = _normalize_text(article_record.get("content") or article_record.get("body") or article_record.get("text") or article_record.get("full_text"))
+    if _looks_like_same_content(main_text, article_text):
+        article_text = ""
+
+    comment_count = len(comments)
+    comment_summary_text = ""
+    comment_summary_error = ""
+    if comment_count > 5:
+        comments_text = _build_twitter_comments_summary_text(comments)
+        if comments_text:
+            try:
+                summary_payload = generate_twitter_comments_summary(
+                    title=_normalize_text(main_tweet.get("title")) or "Twitter/X 评论区",
+                    source="Twitter/X",
+                    comments_text=comments_text,
+                    comment_count=comment_count,
+                )
+                comment_summary_text = _strip_twitter_comment_summary_prefix(
+                    summary_payload.get("summary_text", ""),
+                    comment_count,
+                )
+            except LLMClientError as exc:
+                comment_summary_error = str(exc)
+
+    lines = ["【主推文】", main_text]
+    if quoted_text:
+        lines.extend(["", "【引用推文】", quoted_text])
+    if article_text:
+        lines.extend(["", "【长文补充】", article_text])
+    if comment_count <= 5:
+        comment_lines = _normalize_text_list(
+            [
+                f"{_normalize_text(comment.get('author') or comment.get('username') or comment.get('screen_name'))}：{_normalize_text(comment.get('text') or comment.get('content') or comment.get('full_text') or comment.get('body'))}"
+                for comment in comments
+            ]
+        )
+        if comment_lines:
+            lines.extend(["", "【评论区观点】", *comment_lines])
+        else:
+            lines.extend(
+                [
+                    "",
+                    "【评论区观点】",
+                    "未获取到评论；opencli thread 本次返回 0 条评论，可能是该推文无可见评论、登录态/权限限制或 X 分页未返回。",
+                ]
+            )
+    elif comment_summary_text:
+        lines.extend(["", "【评论区观点】", f"基于已抓取的 {comment_count} 条评论总结：{comment_summary_text}"])
+    elif comment_count:
+        fallback_lines = _normalize_text_list(
+            [
+                f"{_normalize_text(comment.get('author') or comment.get('username') or comment.get('screen_name'))}：{_normalize_text(comment.get('text') or comment.get('content') or comment.get('full_text') or comment.get('body'))}"
+                for comment in comments[:5]
+            ]
+        )
+        lines.extend(
+            [
+                "",
+                "【评论区观点】",
+                f"评论区观点总结失败，以下仅展示已抓取评论样本（共 {comment_count} 条）。",
+                *fallback_lines,
+            ]
+        )
+
+    content = "\n".join(part for part in lines if part is not None).strip()
+    payload = {
+        "source": "Twitter/X",
+        "tweet": main_tweet,
+        "quoted_tweet": quoted or None,
+        "comments": comments,
+        "comment_count": comment_count,
+        "article": article_record or None,
+        "article_error": article_error or None,
+        "comment_summary_error": comment_summary_error or None,
+    }
+    return (
+        True,
+        {
+            "source": "Twitter/X",
+            "title": _normalize_text(main_tweet.get("title")) or _normalize_text(main_tweet.get("author")) or "Twitter/X",
+            "author": _normalize_text(main_tweet.get("author") or main_tweet.get("username") or main_tweet.get("screen_name")),
+            "published_at": _normalize_text(main_tweet.get("published_at") or main_tweet.get("created_at") or main_tweet.get("date") or main_tweet.get("time")),
+            "content": content,
+            "content_length": len(content),
+            "raw_json": json.dumps(payload, ensure_ascii=False),
+        },
+        "",
+    )
+
+
 def run_opencli_detail(url: str) -> tuple[bool, dict, str]:
     route = resolve_detail_route(url)
     if not route:
@@ -3515,28 +3749,16 @@ def run_opencli_detail(url: str) -> tuple[bool, dict, str]:
     command = route["command"]
     timeout = int(route.get("timeout", 30))
     if source == "Twitter/X":
-        return False, {}, "SKIPPED_SOURCE"
+        return run_opencli_twitter_detail(url)
 
     parsed_url = urlparse(url)
     if source == "Bloomberg" and "/news/videos/" in parsed_url.path:
         return False, {}, "SKIPPED_SOURCE: BLOOMBERG_VIDEO"
 
     cmd = [*command, url, "-f", "json"]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired:
-        return False, {}, "TIMEOUT"
-    except Exception as exc:
-        return False, {}, f"SUBPROCESS_ERROR: {exc}"
-
-    if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip()
-        return False, {}, err or f"EXIT_{proc.returncode}"
-
-    try:
-        parsed = json.loads(proc.stdout or "[]")
-    except Exception as exc:
-        return False, {}, f"INVALID_JSON: {exc}"
+    ok, parsed, error = _run_opencli_json_command(cmd, timeout)
+    if not ok:
+        return False, {}, error
 
     record = parsed[0] if isinstance(parsed, list) and parsed else parsed
     if not isinstance(record, dict):
@@ -3631,7 +3853,8 @@ def process_pending_jobs_once() -> bool:
                     """,
                     (finished, finished, job["url"]),
                 )
-                enqueue_ai_job(conn, job["url"])
+                if detail["source"] != "Twitter/X":
+                    enqueue_ai_job(conn, job["url"])
             else:
                 attempts = int(job["attempts"] or 0) + 1
                 conn.execute(
@@ -3731,12 +3954,20 @@ def process_pending_ai_once() -> bool:
         error = ""
         try:
             llm_settings = current_runtime_settings()["llm"]
-            payload = generate_article_ai(
-                title=(detail["title"] or "").strip(),
-                source=(detail["source"] or "").strip(),
-                content=(detail["content"] or "").strip(),
-                model=llm_settings["translation"]["model"],
-            )
+            if (detail["source"] or "").strip() == "Twitter/X":
+                payload = generate_body_translation_only(
+                    title=(detail["title"] or "").strip(),
+                    source=(detail["source"] or "").strip(),
+                    content=(detail["content"] or "").strip(),
+                    model=llm_settings["translation"]["model"],
+                )
+            else:
+                payload = generate_article_ai(
+                    title=(detail["title"] or "").strip(),
+                    source=(detail["source"] or "").strip(),
+                    content=(detail["content"] or "").strip(),
+                    model=llm_settings["translation"]["model"],
+                )
             ok = True
         except LLMClientError as exc:
             primary_error = str(exc)
@@ -3747,6 +3978,9 @@ def process_pending_ai_once() -> bool:
                     content=(detail["content"] or "").strip(),
                     model=(llm_settings.get("codex_chat", {}).get("model") or "").strip(),
                 )
+                if (detail["source"] or "").strip() == "Twitter/X":
+                    payload["key_points_zh"] = []
+                    payload["conclusion_zh"] = ""
                 ok = True
             except LLMClientError as fallback_exc:
                 error = f"{primary_error} | {fallback_exc}"

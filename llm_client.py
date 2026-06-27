@@ -40,6 +40,31 @@ def _validate_market_tag_summary_payload(parsed: object) -> dict[str, Any]:
     return {"summary_text": normalized}
 
 
+def _validate_twitter_comments_summary_payload(parsed: object) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        raise LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: payload_not_object")
+
+    summary_text = parsed.get("summary_text")
+    if not isinstance(summary_text, str):
+        raise LLMClientError("INVALID_TWITTER_COMMENTS_SUMMARY_TEXT")
+    normalized = summary_text.strip()
+    if not normalized or not _contains_cjk(normalized):
+        raise LLMClientError("INVALID_TWITTER_COMMENTS_SUMMARY_TEXT")
+    return {"summary_text": normalized}
+
+
+def _validate_body_translation_only_payload(parsed: object) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        raise LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: payload_not_object")
+    body_zh = parsed.get("body_zh")
+    if not isinstance(body_zh, str):
+        raise LLMClientError("INVALID_BODY_ZH")
+    normalized = body_zh.strip()
+    if not normalized or not _contains_cjk(normalized):
+        raise LLMClientError("INVALID_BODY_ZH")
+    return {"body_zh": normalized}
+
+
 def _validate_structured_translation_payload(parsed: object) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: payload_not_object")
@@ -247,6 +272,53 @@ def _build_market_tag_summary_messages(
     ]
 
 
+def _build_twitter_comments_summary_messages(
+    *,
+    title: str,
+    source: str,
+    comments_text: str,
+    comment_count: int,
+) -> list[dict[str, str]]:
+    system = (
+        "你是专业社交媒体编辑。"
+        "你必须调用给定函数并严格提供结构化参数。"
+        "任务：基于已抓取的 Twitter/X 评论样本，总结评论区的主要观点。"
+        "不要假装看过未抓取的评论，不要补充材料外信息，不要联网。"
+        "summary_text 只写观点总结本体，用自然中文 1-3 句话概括评论区主流观点、分歧点或情绪。"
+        "不要在 summary_text 里重复“基于已抓取的 N 条评论总结”这类前缀。"
+    )
+    user = (
+        f"标题：{title or '无标题'}\n"
+        f"来源：{source or 'Twitter/X'}\n"
+        f"已抓取评论数：{max(0, int(comment_count or 0))}\n\n"
+        "请基于以下评论样本生成总结：\n\n"
+        f"{comments_text}"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def _build_body_translation_only_messages(*, title: str, source: str, content: str) -> list[dict[str, str]]:
+    system = (
+        "你是专业翻译。"
+        "你必须调用给定函数并严格提供结构化参数。"
+        "任务：把正文完整翻译成中文。"
+        "不要生成要点，不要生成结论，只返回完整中文正文。"
+    )
+    user = (
+        f"来源：{source or '未知'}\n"
+        f"标题：{title or '无标题'}\n\n"
+        "请翻译以下正文：\n\n"
+        f"{content}"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
 def generate_article_ai(*, title: str, source: str, content: str, model: str | None = None) -> dict[str, Any]:
     api_key = _resolve_api_key("DEEPSEEK_API_KEY")
     if not api_key:
@@ -315,6 +387,158 @@ def generate_article_ai(*, title: str, source: str, content: str, model: str | N
 
     return {
         "model": getattr(resp, "model", None) or model_name,
+        **normalized,
+        "raw_json": json.dumps(parsed, ensure_ascii=False),
+    }
+
+
+def generate_twitter_comments_summary(
+    *,
+    title: str,
+    source: str,
+    comments_text: str,
+    comment_count: int,
+    model: str | None = None,
+) -> dict[str, Any]:
+    api_key = _resolve_api_key("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
+
+    body = (comments_text or "").strip()
+    if not body:
+        raise LLMClientError("EMPTY_TWITTER_COMMENTS")
+
+    try:
+        from openai import OpenAI
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
+
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
+    model_name = (model or "").strip() or _configured_model()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "save_twitter_comments_summary",
+                "description": "保存 Twitter 评论区观点总结",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "summary_text": {"type": "string"},
+                    },
+                    "required": ["summary_text"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=_build_twitter_comments_summary_messages(
+                title=title,
+                source=source,
+                comments_text=body,
+                comment_count=comment_count,
+            ),
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "save_twitter_comments_summary"}},
+            temperature=0.2,
+            timeout=120,
+        )
+    except Exception as exc:
+        raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
+
+    choices = getattr(resp, "choices", None) or []
+    if not choices:
+        raise LLMClientError("EMPTY_CHOICES")
+    msg = choices[0].message
+    tool_calls = getattr(msg, "tool_calls", None) or []
+    if not tool_calls:
+        raise LLMClientError("NO_TOOL_CALL")
+
+    args_text = getattr(tool_calls[0].function, "arguments", "") or ""
+    try:
+        parsed = json.loads(args_text)
+    except Exception as exc:
+        raise LLMClientError(f"INVALID_TOOL_ARGUMENTS_JSON: {exc}") from exc
+
+    normalized = _validate_twitter_comments_summary_payload(parsed)
+    return {
+        "model": getattr(resp, "model", None) or model_name,
+        **normalized,
+        "raw_json": json.dumps(parsed, ensure_ascii=False),
+    }
+
+
+def generate_body_translation_only(*, title: str, source: str, content: str, model: str | None = None) -> dict[str, Any]:
+    api_key = _resolve_api_key("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise LLMClientError("MISSING_DEEPSEEK_API_KEY")
+
+    body = (content or "").strip()
+    if not body:
+        raise LLMClientError("EMPTY_TRANSLATION_CONTENT")
+
+    try:
+        from openai import OpenAI
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise LLMClientError(f"OPENAI_SDK_IMPORT_FAILED: {exc}") from exc
+
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/beta")
+    model_name = (model or "").strip() or _configured_model()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "save_body_translation_only",
+                "description": "保存仅正文中文翻译",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "body_zh": {"type": "string"},
+                    },
+                    "required": ["body_zh"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=_build_body_translation_only_messages(title=title, source=source, content=body),
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "save_body_translation_only"}},
+            temperature=0.2,
+            timeout=120,
+        )
+    except Exception as exc:
+        raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
+
+    choices = getattr(resp, "choices", None) or []
+    if not choices:
+        raise LLMClientError("EMPTY_CHOICES")
+    msg = choices[0].message
+    tool_calls = getattr(msg, "tool_calls", None) or []
+    if not tool_calls:
+        raise LLMClientError("NO_TOOL_CALL")
+
+    args_text = getattr(tool_calls[0].function, "arguments", "") or ""
+    try:
+        parsed = json.loads(args_text)
+    except Exception as exc:
+        raise LLMClientError(f"INVALID_TOOL_ARGUMENTS_JSON: {exc}") from exc
+
+    normalized = _validate_body_translation_only_payload(parsed)
+    return {
+        "model": getattr(resp, "model", None) or model_name,
+        "key_points_zh": [],
+        "conclusion_zh": "",
         **normalized,
         "raw_json": json.dumps(parsed, ensure_ascii=False),
     }

@@ -2098,6 +2098,41 @@ def test_read_later_enqueues_detail_job_and_retry(tmp_path: Path, monkeypatch):
     assert retry.get_json()["ok"] is True
 
 
+def test_twitter_read_later_enqueues_pending_detail_job(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## X · Social（1条）
+### [Tweet Update](https://x.com/example/status/123)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=?, summary=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", "Tweet summary context.", item["id"]),
+        )
+        conn.commit()
+
+    patch = client.patch(f"/api/news/{item['id']}/state", json={"read_later": True})
+    assert patch.status_code == 200
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["detail_status"] == "pending"
+
+
 def test_detail_api_includes_ai_fields(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"
     daily_dir.mkdir(parents=True)
@@ -3866,6 +3901,339 @@ def test_news_chat_twitter_skipped_detail_uses_summary_context(tmp_path: Path, m
     assert captured["context_level"] == "summary_context"
     assert "来源类型：twitter" in captured["content"]
     assert "Tweet summary context." in captured["content"]
+
+
+def test_process_pending_jobs_once_twitter_success_and_comment_summary(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## X · Social（1条）
+### [Tweet Update](https://x.com/example/status/123)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", item["id"]),
+        )
+        app_module.enqueue_detail_job(conn, item["id"], item["url"], "Twitter")
+        conn.commit()
+
+    def fake_twitter_detail(url):
+        return (
+            True,
+            {
+                "source": "Twitter/X",
+                "title": "Tweet Update",
+                "author": "alice",
+                "published_at": "2026-06-11 09:00:00",
+                "content": "【主推文】\n主推文内容\n\n【引用推文】\n引用内容\n\n【长文补充】\n长文内容\n\n【评论区观点】\n基于已抓取的 6 条评论总结：评论区主要围绕利好与估值分歧展开。",
+                "content_length": 120,
+                "raw_json": json.dumps(
+                    {
+                        "tweet": {"text": "主推文内容"},
+                        "quoted_tweet": {"text": "引用内容"},
+                        "article": {"content": "长文内容"},
+                        "comments": [{"text": f"评论 {i}"} for i in range(6)],
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            "",
+        )
+
+    monkeypatch.setattr(app_module, "run_opencli_twitter_detail", fake_twitter_detail)
+    assert app_module.process_pending_jobs_once() is True
+
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["detail_status"] == "success"
+    assert detail["detail"]["content"].count("【主推文】") == 1
+    assert "基于已抓取的 6 条评论总结" in detail["detail"]["content"]
+    assert detail["ai_status"] == "none"
+
+
+def test_process_pending_jobs_once_twitter_article_failure_does_not_fail_detail(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## X · Social（1条）
+### [Tweet Update](https://x.com/example/status/123)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", item["id"]),
+        )
+        app_module.enqueue_detail_job(conn, item["id"], item["url"], "Twitter")
+        conn.commit()
+
+    def fake_twitter_detail(url):
+        return (
+            True,
+            {
+                "source": "Twitter/X",
+                "title": "Tweet Update",
+                "author": "alice",
+                "published_at": "2026-06-11 09:00:00",
+                "content": "【主推文】\n主推文内容\n\n【评论区观点】\n评论区观点总结失败，以下仅展示已抓取评论样本（共 6 条）。",
+                "content_length": 80,
+                "raw_json": json.dumps(
+                    {
+                        "tweet": {"text": "主推文内容"},
+                        "article_error": "Article not found",
+                        "comment_summary_error": "MISSING_DEEPSEEK_API_KEY",
+                        "comments": [{"text": f"评论 {i}"} for i in range(6)],
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            "",
+        )
+
+    monkeypatch.setattr(app_module, "run_opencli_twitter_detail", fake_twitter_detail)
+    assert app_module.process_pending_jobs_once() is True
+
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["detail_status"] == "success"
+    assert "评论区观点总结失败" in detail["detail"]["content"]
+
+
+def test_run_opencli_twitter_detail_parses_list_thread_payload(monkeypatch):
+    import app as app_module
+
+    thread_payload = [
+        {
+            "id": "tweet-1",
+            "author": "alice",
+            "text": "主推文内容比较完整，足够通过正文长度校验。",
+            "quoted_tweet": {"text": "引用内容"},
+            "created_at": "2026-06-11 09:00:00",
+        },
+        {"id": "reply-1", "author": "bob", "text": "评论一"},
+        {"id": "reply-2", "author": "carol", "text": "评论二"},
+    ]
+    article_payload = {"content": "长文内容"}
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return True, article_payload, ""
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is True
+    assert error == ""
+    assert "【评论区观点】" in detail["content"]
+    assert "评论一" in detail["content"]
+    assert "评论二" in detail["content"]
+
+
+def test_run_opencli_twitter_detail_includes_zero_comment_notice(monkeypatch):
+    import app as app_module
+
+    thread_payload = [
+        {
+            "id": "tweet-1",
+            "author": "alice",
+            "text": "主推文内容比较完整，足够通过正文长度校验。",
+            "created_at": "2026-06-11 09:00:00",
+        }
+    ]
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return False, None, "Article not found"
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is True
+    assert error == ""
+    assert "【评论区观点】" in detail["content"]
+    assert "opencli thread 本次返回 0 条评论" in detail["content"]
+    payload = json.loads(detail["raw_json"])
+    assert payload["comment_count"] == 0
+
+
+def test_run_opencli_twitter_detail_deduplicates_summary_prefix(monkeypatch):
+    import app as app_module
+
+    thread_payload = [
+        {
+            "id": "tweet-1",
+            "author": "alice",
+            "text": "主推文内容比较完整，足够通过正文长度校验。",
+            "created_at": "2026-06-11 09:00:00",
+        },
+        *({"id": f"reply-{i}", "author": "bob", "text": f"评论 {i}"} for i in range(6)),
+    ]
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return False, None, "Article not found"
+
+    def fake_summary(**kwargs):
+        count = kwargs["comment_count"]
+        return {
+            "model": "deepseek-chat",
+            "summary_text": f"基于已抓取的 {count} 条评论总结：评论区主要围绕利好与估值分歧展开。",
+            "raw_json": "{}",
+        }
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+    monkeypatch.setattr(app_module, "generate_twitter_comments_summary", fake_summary)
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is True
+    assert error == ""
+    assert detail["content"].count("基于已抓取的 6 条评论总结：") == 1
+
+
+def test_process_pending_ai_once_twitter_generates_body_only(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## X · Social（1条）
+### [Tweet Update](https://x.com/example/status/123)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    with app_module.db_conn() as conn:
+        conn.execute("UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?", ("Twitter", "Twitter", "twitter", item["id"]))
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, 'Twitter/X', 'Tweet Update', 'alice', '2026-06-11 09:00:00', ?, ?, '{}', ?, ?)
+            """,
+            (item["url"], "【主推文】\n主推文内容", len("【主推文】\n主推文内容"), ts, ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
+            VALUES (?, 'pending', 0, ?, ?)
+            """,
+            (item["url"], ts, ts),
+        )
+        conn.commit()
+
+    def fake_generate_body_translation_only(**kwargs):
+        return {
+            "model": "deepseek-chat",
+            "key_points_zh": [],
+            "conclusion_zh": "",
+            "body_zh": "这是推文中文翻译。",
+            "raw_json": "{}",
+        }
+
+    monkeypatch.setattr(app_module, "generate_body_translation_only", fake_generate_body_translation_only)
+    assert app_module.process_pending_ai_once() is True
+
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["ai_status"] == "success"
+    assert detail["ai"]["body_zh"] == "这是推文中文翻译。"
+    assert detail["ai"]["key_points_zh"] == "[]"
+    assert detail["ai"]["conclusion_zh"] == ""
+
+
+def test_row_title_text_truncates_twitter_titles():
+    path = Path("/Users/x/news-reader/news-reader/static/app.js")
+    source = path.read_text(encoding="utf-8")
+    assert "function rowTitleText(item)" in source
+    assert "item?.source_type === \"twitter\"" in source
+    assert "title.slice(0, 100)" in source
+
+
+def test_process_pending_jobs_once_twitter_success_does_not_enqueue_ai_job(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## X · Social（1条）
+### [Tweet Update](https://x.com/example/status/123)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        conn.execute("UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?", ("Twitter", "Twitter", "twitter", item["id"]))
+        app_module.enqueue_detail_job(conn, item["id"], item["url"], "Twitter")
+        conn.commit()
+
+    def fake_twitter_detail(url):
+        return (
+            True,
+            {
+                "source": "Twitter/X",
+                "title": "Tweet Update",
+                "author": "alice",
+                "published_at": "2026-06-11 09:00:00",
+                "content": "【主推文】\n主推文内容\n\n【评论区观点】\n未获取到评论；opencli thread 本次返回 0 条评论，可能是该推文无可见评论、登录态/权限限制或 X 分页未返回。",
+                "content_length": 120,
+                "raw_json": json.dumps({"tweet": {"text": "主推文内容"}, "comments": [], "comment_count": 0}, ensure_ascii=False),
+            },
+            "",
+        )
+
+    monkeypatch.setattr(app_module, "run_opencli_twitter_detail", fake_twitter_detail)
+    assert app_module.process_pending_jobs_once() is True
+
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["detail_status"] == "success"
+    assert detail["ai_status"] == "none"
 
 
 def test_news_chat_errors_and_busy(tmp_path: Path, monkeypatch):

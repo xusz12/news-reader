@@ -1570,6 +1570,14 @@ function createSourceIcon(item) {
   return wrap;
 }
 
+function rowTitleText(item) {
+  const title = String(item?.title || "");
+  if (item?.source_type === "twitter" && title.length > 100) {
+    return `${title.slice(0, 100).trimEnd()}...`;
+  }
+  return title;
+}
+
 function rowIsRead(li) {
   return li.dataset.read === "1";
 }
@@ -4675,6 +4683,7 @@ function renderDetail(item) {
   const detailErr = cached?.job?.last_error || item.detail_error || "";
   const ai = cached?.ai || null;
   const aiStatus = cached?.ai_status || item.ai_status || "none";
+  const isTwitterDetail = item.source_type === "twitter" || detail?.source === "Twitter/X";
   const fallbackProvider = fallbackProviderFromAi(ai);
   const isCodexFallback = isCodexFallbackAi(ai);
   const isCodexFallbackBodyOnly = fallbackProvider === "codex-fallback-body-only";
@@ -4711,14 +4720,23 @@ function renderDetail(item) {
     detailOriginalContent.textContent = original;
     detailOriginalWrap.classList.remove("hidden");
     retranslateBtn.classList.remove("hidden");
+    if (isTwitterDetail) retranslateBtn.textContent = "翻译正文";
 
     if (aiStatus === "pending" || aiStatus === "running" || aiStatus === "none") {
-      statusEl.textContent = aiStatus === "pending" ? "排队生成中文内容" : "正在生成中文内容";
-      statusEl.className = "detail-status pending";
-      contentEl.textContent = ai && ai.body_zh ? ai.body_zh : original;
-      contentEl.classList.remove("hidden");
-      retranslateBtn.textContent = "正在重新翻译...";
-      retranslateBtn.disabled = true;
+      if (isTwitterDetail && aiStatus === "none") {
+        statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
+        statusEl.className = "detail-status ready";
+        contentEl.textContent = original;
+        contentEl.classList.remove("hidden");
+        stopDetailPolling();
+      } else {
+        statusEl.textContent = aiStatus === "pending" ? "排队生成中文内容" : "正在生成中文内容";
+        statusEl.className = "detail-status pending";
+        contentEl.textContent = ai && ai.body_zh ? ai.body_zh : original;
+        contentEl.classList.remove("hidden");
+        retranslateBtn.textContent = isTwitterDetail ? "正在翻译正文..." : "正在重新翻译...";
+        retranslateBtn.disabled = true;
+      }
     } else if (ai && ai.body_zh) {
       let keyPoints = [];
       try {
@@ -4726,24 +4744,26 @@ function renderDetail(item) {
       } catch {
         keyPoints = [];
       }
-      if (Array.isArray(keyPoints) && keyPoints.length) {
+      if (!isTwitterDetail && Array.isArray(keyPoints) && keyPoints.length) {
         keyPoints.forEach((point) => {
           const li = document.createElement("li");
           li.textContent = point;
           detailAiPoints.appendChild(li);
         });
       }
-      if ((Array.isArray(keyPoints) && keyPoints.length) || (ai.conclusion_zh || "").trim()) {
+      if (!isTwitterDetail && ((Array.isArray(keyPoints) && keyPoints.length) || (ai.conclusion_zh || "").trim())) {
         detailAiConclusion.textContent = ai.conclusion_zh || "";
         detailAiBox.classList.remove("hidden");
       }
 
-      statusEl.textContent = isCodexFallbackBodyOnly
-        ? "已由 GPT 完成翻译；结构化 fallback 失败，仅保留正文翻译"
-        : isCodexFallback
-          ? "已由 GPT 完成翻译"
-        : "中文摘要与翻译已生成";
-      statusEl.className = isCodexFallbackBodyOnly ? "detail-status pending" : "detail-status ready";
+      statusEl.textContent = isTwitterDetail
+        ? (isCodexFallback ? "已由 GPT 完成正文翻译" : "中文正文翻译已生成")
+        : isCodexFallbackBodyOnly
+          ? "已由 GPT 完成翻译；结构化 fallback 失败，仅保留正文翻译"
+          : isCodexFallback
+            ? "已由 GPT 完成翻译"
+            : "中文摘要与翻译已生成";
+      statusEl.className = isTwitterDetail ? "detail-status ready" : (isCodexFallbackBodyOnly ? "detail-status pending" : "detail-status ready");
       contentEl.textContent = ai.body_zh;
       contentEl.classList.remove("hidden");
       stopDetailPolling();
@@ -4783,7 +4803,7 @@ function renderDetail(item) {
     stopDetailPolling();
   } else if (status === "skipped") {
     if (item.source_type === "twitter") {
-      statusEl.textContent = "这是推文，当前不提供正文抓取";
+      statusEl.textContent = "这是旧版推文详情任务，当前可重试抓取正文";
     } else if (detailErr.includes("BLOOMBERG_VIDEO") || isBloombergVideoUrl(item.url)) {
       statusEl.textContent = "这是视频新闻，当前不提供正文抓取";
     } else {
@@ -5042,7 +5062,7 @@ function buildItemRow(item) {
 
   const title = document.createElement("div");
   title.className = "title";
-  title.textContent = item.title || "";
+  title.textContent = rowTitleText(item);
 
   const summary = document.createElement("p");
   summary.className = "summary";
@@ -5084,7 +5104,7 @@ function buildItemRow(item) {
   });
 
   actions.appendChild(btnImportant);
-  if (!isBloombergVideoUrl(item.url) && item.source_type !== "twitter") {
+  if (!isBloombergVideoUrl(item.url)) {
     actions.appendChild(btnReadLater);
   }
   actions.appendChild(btnFavorite);

@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-06-27 — v1.9.9.1 feat: Twitter 恢复稍后阅读与详情抓取
+- **文件**
+  - *app.py（+）*、*llm_client.py（+）*、*tests/test_api.py（+）*
+    - Twitter/X 不再在 `detail_jobs` 中直接标记为 `skipped`，改为进入 Twitter 专用详情抓取链路，继续复用现有 `detail_jobs / article_details / article_ai`
+    - 新增 `opencli twitter thread --limit 50` + `opencli twitter article` 组合抓取：主成功条件是 thread 成功，article 失败或无长文不阻塞详情成功
+    - `article_details.content` 组装为 `主推文 / 引用推文 / 长文补充 / 评论区观点` 四层；评论 `<=5` 直接列样本，`>5` 用 DeepSeek 生成“基于已抓取的 N 条评论总结”
+    - 评论总结失败不阻塞详情成功，错误保留在 `raw_json`；同时补充 Twitter read_later 入队、详情成功、评论总结与失败降级的回归测试
+  - *static/app.js（+）*
+    - Twitter row 恢复 `稍后阅读` 按钮；Bloomberg video 仍保持不支持正文抓取
+    - 旧版已跳过的 Twitter 详情任务在右栏改为可重试提示，避免继续停留在“当前不提供正文抓取”的旧口径
+- **影响**：Twitter/X 新闻现在可以进入稍后阅读并抓取主推文详情、引用推文、长文补充和评论区观点；无详情时仍保留 v1.9.8.11 的 Chat fallback，不回归到完全不可用。
+
 ### 2026-06-26 — v1.9.8.11 improve: Chat 支持所有新闻
 - **文件**
   - *app.py（+）*、*tests/test_api.py（+）*
