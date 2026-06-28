@@ -205,7 +205,7 @@ def parse_daily_json_file(path: Path) -> list[ParsedItem]:
         title = str(row.get("title") or "").strip()
         url = str(row.get("url") or "").strip()
         if not title or not url:
-            continue
+            raise ValueError("missing_newsreader_daily_required_fields")
         item_order = row.get("item_order")
         if isinstance(item_order, int) and item_order > 0:
             order = item_order
@@ -228,6 +228,8 @@ def parse_daily_json_file(path: Path) -> list[ParsedItem]:
                 url=url,
             )
         )
+    if rows and not items:
+        raise ValueError("missing_newsreader_daily_required_fields")
     return items
 
 

@@ -8,6 +8,39 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
+def make_api_daily(path: Path, title: str, url: str, summary: str | None = None):
+    lines = [
+        "## Reuters · World（1条）",
+        f"### [{title}]({url})",
+        "- 发布时间：2026-05-25 12:00:00",
+    ]
+    if summary:
+        lines.append(f"- 摘要：{summary}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def make_api_sidecar(path: Path, *, title: str, url: str, summary: str | None = None):
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "newsreader.daily.v1",
+                "items": [
+                    {
+                        "item_order": 1,
+                        "section": "Reuters · World",
+                        "title": title,
+                        "summary": summary,
+                        "published_at": "2026-05-25 12:00:00",
+                        "url": url,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"
     daily_dir.mkdir(parents=True)
@@ -92,6 +125,50 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     combo = client.get("/api/news?collection=important&read_filter=unread")
     assert combo.status_code == 200
     assert combo.get_json()["total"] == 1
+
+
+def test_reindex_and_detail_return_ingest_provenance(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    md_path = daily_dir / "dailyFreshNews_2026-05-25.md"
+    sidecar_path = daily_dir / "dailyFreshNews_2026-05-25.newsreader.json"
+    make_api_daily(md_path, "Markdown 标题", "https://example.com/api-sidecar", summary="Markdown 摘要")
+    make_api_sidecar(sidecar_path, title="JSON 标题", url="https://example.com/api-sidecar", summary="JSON 摘要")
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    reindex_payload = client.post("/api/reindex", json={}).get_json()
+    assert reindex_payload["ingest_counts"] == {
+        "sidecar_json": 1,
+        "markdown_fallback": 0,
+        "markdown_only": 0,
+    }
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["ingest_mode"] == "sidecar_json"
+    assert detail["ingest_warning"] is None
+
+    sidecar_path.write_text(json.dumps({"schema_version": "newsreader.daily.v0", "items": []}), encoding="utf-8")
+
+    reindex_payload_2 = client.post("/api/reindex", json={}).get_json()
+    assert reindex_payload_2["ingest_counts"] == {
+        "sidecar_json": 0,
+        "markdown_fallback": 1,
+        "markdown_only": 0,
+    }
+    detail_2 = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail_2["ingest_mode"] == "markdown_fallback"
+    assert detail_2["ingest_warning"] == "unsupported_newsreader_daily_schema"
 
 
 def test_global_search_mvp(tmp_path: Path, monkeypatch):

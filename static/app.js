@@ -363,6 +363,20 @@ function setHint(text) {
   listHint.textContent = text || "";
 }
 
+function ingestModeLabel(mode) {
+  if (mode === "sidecar_json") return "JSON sidecar";
+  if (mode === "markdown_fallback") return "Markdown fallback";
+  return "Markdown";
+}
+
+function formatReindexHint(payload) {
+  const counts = payload?.ingest_counts || {};
+  const jsonCount = Number(counts.sidecar_json || 0);
+  const fallbackCount = Number(counts.markdown_fallback || 0);
+  const markdownCount = Number(counts.markdown_only || 0);
+  return `同步完成：JSON ${jsonCount}，fallback ${fallbackCount}，Markdown ${markdownCount}`;
+}
+
 function closeErrorStatsPanel() {
   if (!errorStatsPanel) return;
   errorStatsPanel.classList.add("hidden");
@@ -4647,7 +4661,18 @@ function renderDetail(item) {
   syncDetailReturnButton();
 
   document.getElementById("detailTitle").textContent = item.title || "";
-  document.getElementById("detailMeta").textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
+  const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
+  const ingestMode = cached?.ingest_mode || item.ingest_mode || "";
+  const ingestWarning = cached?.ingest_warning || item.ingest_warning || "";
+  const metaLines = [`${item.source || "未知来源"} · ${item.published_at || ""}`];
+  if (ingestMode) {
+    let ingestText = `导入路径：${ingestModeLabel(ingestMode)}`;
+    if (ingestMode === "markdown_fallback" && ingestWarning) {
+      ingestText += `（原因：${ingestWarning}）`;
+    }
+    metaLines.push(ingestText);
+  }
+  document.getElementById("detailMeta").innerHTML = metaLines.join("<br>");
   const summaryEl = document.getElementById("detailSummary");
   const hasSummary = typeof item.summary === "string" && item.summary.trim().length > 0;
   if (hasSummary) {
@@ -4677,7 +4702,6 @@ function renderDetail(item) {
     detailNoteToggleBtn.disabled = true;
   }
 
-  const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
   const detail = cached?.detail || null;
   const status = cached?.detail_status || item.detail_status || "none";
   const detailErr = cached?.job?.last_error || item.detail_error || "";
@@ -4896,6 +4920,8 @@ async function loadDetail(itemId) {
   item.has_market_tags = Number(payload.has_market_tags || 0);
   item.ai_status = payload.ai_status || "none";
   item.ai_ready = payload.ai ? 1 : 0;
+  item.ingest_mode = payload.ingest_mode || "";
+  item.ingest_warning = payload.ingest_warning || "";
   if (payload.job && payload.job.last_error) item.detail_error = payload.job.last_error;
   if (payload.ai_job && payload.ai_job.last_error) item.ai_error = payload.ai_job.last_error;
   cached.reminders = Array.isArray(payload.reminders) ? payload.reminders : [];
@@ -6003,7 +6029,9 @@ async function autoReindexAndLoad() {
   try {
     const r = await fetch("/api/reindex", { method: "POST" });
     if (!r.ok) throw new Error("reindex_failed");
+    const data = await r.json();
     await loadFirstPage();
+    setHint(formatReindexHint(data));
   } catch {
     setHint("自动同步失败，已展示本地索引，可点“刷新索引”重试。");
     await loadFirstPage();
@@ -6535,8 +6563,10 @@ refreshBtn.addEventListener("click", async () => {
   try {
     const r = await fetch("/api/reindex", { method: "POST" });
     if (!r.ok) throw new Error("reindex_failed");
+    const data = await r.json();
     await loadFirstPage();
     newsList.scrollTo({ top: 0, behavior: "auto" });
+    setHint(formatReindexHint(data));
   } catch {
     setHint("同步失败，可稍后重试。");
   } finally {

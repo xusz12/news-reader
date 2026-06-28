@@ -5,7 +5,9 @@ CREATE TABLE IF NOT EXISTS source_files (
   mtime REAL NOT NULL,
   size INTEGER NOT NULL,
   last_scanned_at TEXT NOT NULL,
-  item_count INTEGER DEFAULT 0
+  item_count INTEGER DEFAULT 0,
+  ingest_mode TEXT,
+  ingest_warning TEXT
 );
 
 CREATE TABLE IF NOT EXISTS items (

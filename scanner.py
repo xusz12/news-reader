@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from parser import parse_daily_file, parse_daily_json_file, sidecar_path_for_daily
+
+INGEST_MODE_SIDECAR_JSON = "sidecar_json"
+INGEST_MODE_MARKDOWN_FALLBACK = "markdown_fallback"
+INGEST_MODE_MARKDOWN_ONLY = "markdown_only"
 
 
 @dataclass
@@ -15,6 +19,32 @@ class ReindexStats:
     changed_files: int = 0
     upserted: int = 0
     deleted_stale: int = 0
+    ingest_counts: dict[str, int] = field(
+        default_factory=lambda: {
+            INGEST_MODE_SIDECAR_JSON: 0,
+            INGEST_MODE_MARKDOWN_FALLBACK: 0,
+            INGEST_MODE_MARKDOWN_ONLY: 0,
+        }
+    )
+
+    def record_ingest_mode(self, ingest_mode: str | None) -> None:
+        mode = ingest_mode if ingest_mode in self.ingest_counts else INGEST_MODE_MARKDOWN_ONLY
+        self.ingest_counts[mode] += 1
+
+
+@dataclass
+class ParsedSource:
+    items: list
+    ingest_mode: str
+    ingest_warning: str | None = None
+
+
+@dataclass
+class SourceRecord:
+    mtime: float
+    size: int
+    ingest_mode: str | None
+    ingest_warning: str | None
 
 
 def now_iso() -> str:
@@ -28,6 +58,14 @@ def make_item_id(date: str, source: str, title: str, url: str) -> str:
 
 def apply_schema(conn: sqlite3.Connection, schema_path: Path) -> None:
     conn.executescript(schema_path.read_text(encoding="utf-8"))
+    source_file_cols = {
+        r[1]
+        for r in conn.execute("PRAGMA table_info(source_files)").fetchall()
+    }
+    if "ingest_mode" not in source_file_cols:
+        conn.execute("ALTER TABLE source_files ADD COLUMN ingest_mode TEXT")
+    if "ingest_warning" not in source_file_cols:
+        conn.execute("ALTER TABLE source_files ADD COLUMN ingest_warning TEXT")
     cols = {
         r[1]
         for r in conn.execute("PRAGMA table_info(item_state)").fetchall()
@@ -81,24 +119,39 @@ def file_signature(path: Path, sidecar_path: Path | None = None) -> tuple[float,
     return latest_mtime, signature
 
 
-def parse_daily_source(path: Path) -> list:
+def parse_daily_source(path: Path) -> ParsedSource:
     sidecar_path = sidecar_path_for_daily(path)
     if sidecar_path.exists():
         try:
-            return parse_daily_json_file(sidecar_path)
-        except Exception:
-            pass
-    return parse_daily_file(path)
+            return ParsedSource(
+                items=parse_daily_json_file(sidecar_path),
+                ingest_mode=INGEST_MODE_SIDECAR_JSON,
+            )
+        except Exception as exc:
+            return ParsedSource(
+                items=parse_daily_file(path),
+                ingest_mode=INGEST_MODE_MARKDOWN_FALLBACK,
+                ingest_warning=str(exc) or exc.__class__.__name__,
+            )
+    return ParsedSource(
+        items=parse_daily_file(path),
+        ingest_mode=INGEST_MODE_MARKDOWN_ONLY,
+    )
 
 
-def load_source_record(conn: sqlite3.Connection, rel_path: str) -> tuple[float, int] | None:
+def load_source_record(conn: sqlite3.Connection, rel_path: str) -> SourceRecord | None:
     row = conn.execute(
-        "SELECT mtime, size FROM source_files WHERE path = ?",
+        "SELECT mtime, size, ingest_mode, ingest_warning FROM source_files WHERE path = ?",
         (rel_path,),
     ).fetchone()
     if not row:
         return None
-    return float(row[0]), int(row[1])
+    return SourceRecord(
+        mtime=float(row[0]),
+        size=int(row[1]),
+        ingest_mode=row[2],
+        ingest_warning=row[3],
+    )
 
 
 def reindex(
@@ -121,13 +174,16 @@ def reindex(
         sidecar_path = sidecar_path_for_daily(path)
         current = file_signature(path, sidecar_path)
         old = load_source_record(conn, rel_path)
-        if old == current:
+        if old and (old.mtime, old.size) == current and old.ingest_mode:
+            stats.record_ingest_mode(old.ingest_mode)
             continue
 
         stats.changed_files += 1
-        parsed = parse_daily_source(path)
+        parsed_source = parse_daily_source(path)
+        parsed = parsed_source.items
         ts = now_iso()
         new_ids: list[str] = []
+        stats.record_ingest_mode(parsed_source.ingest_mode)
 
         with conn:
             for it in parsed:
@@ -185,15 +241,25 @@ def reindex(
 
             conn.execute(
                 """
-                INSERT INTO source_files (path, mtime, size, last_scanned_at, item_count)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO source_files (path, mtime, size, last_scanned_at, item_count, ingest_mode, ingest_warning)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                   mtime=excluded.mtime,
                   size=excluded.size,
                   last_scanned_at=excluded.last_scanned_at,
-                  item_count=excluded.item_count
+                  item_count=excluded.item_count,
+                  ingest_mode=excluded.ingest_mode,
+                  ingest_warning=excluded.ingest_warning
                 """,
-                (rel_path, current[0], current[1], ts, len(parsed)),
+                (
+                    rel_path,
+                    current[0],
+                    current[1],
+                    ts,
+                    len(parsed),
+                    parsed_source.ingest_mode,
+                    parsed_source.ingest_warning,
+                ),
             )
 
     conn.commit()

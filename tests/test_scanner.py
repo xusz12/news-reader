@@ -123,6 +123,8 @@ def test_reindex_prefers_valid_sidecar_json(tmp_path: Path):
 
     row = conn.execute("SELECT source_file, title, summary FROM items").fetchone()
     assert row == ("2026年5月/dailyFreshNews_2026-05-25.md", "JSON 标题", "JSON 摘要")
+    source_row = conn.execute("SELECT ingest_mode, ingest_warning FROM source_files").fetchone()
+    assert source_row == ("sidecar_json", None)
 
 
 def test_reindex_falls_back_to_markdown_when_sidecar_invalid(tmp_path: Path):
@@ -139,6 +141,28 @@ def test_reindex_falls_back_to_markdown_when_sidecar_invalid(tmp_path: Path):
 
     row = conn.execute("SELECT title FROM items").fetchone()
     assert row == ("Markdown 标题",)
+    source_row = conn.execute("SELECT ingest_mode, ingest_warning FROM source_files").fetchone()
+    assert source_row[0] == "markdown_fallback"
+    assert source_row[1] == "unsupported_newsreader_daily_schema"
+
+
+def test_reindex_tracks_markdown_only_when_sidecar_missing(tmp_path: Path):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    md_path = daily_dir / "dailyFreshNews_2026-05-25.md"
+    make_daily(md_path, "Markdown 标题", "https://example.com/a")
+
+    conn = sqlite3.connect(":memory:")
+    apply_schema(conn, Path(__file__).resolve().parents[1] / "schema.sql")
+    stats = reindex(conn, tmp_path / "DailyNews")
+
+    source_row = conn.execute("SELECT ingest_mode, ingest_warning FROM source_files").fetchone()
+    assert source_row == ("markdown_only", None)
+    assert stats.ingest_counts == {
+        "sidecar_json": 0,
+        "markdown_fallback": 0,
+        "markdown_only": 1,
+    }
 
 
 def test_reindex_detects_sidecar_update_when_markdown_unchanged(tmp_path: Path):

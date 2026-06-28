@@ -5744,6 +5744,7 @@ def api_reindex():
             "changed_files": stats.changed_files,
             "upserted": stats.upserted,
             "deleted_stale": stats.deleted_stale,
+            "ingest_counts": stats.ingest_counts,
             "tracked_incremental_matches": tracked_incremental_matches,
         }
     )
@@ -5841,7 +5842,22 @@ def api_news_detail(item_id: str):
     conn = db_conn()
     try:
         item = conn.execute(
-            "SELECT id, title, url, source, source_name, source_type, summary, published_at FROM items WHERE id=?",
+            """
+            SELECT
+              items.id,
+              items.title,
+              items.url,
+              items.source,
+              items.source_name,
+              items.source_type,
+              items.summary,
+              items.published_at,
+              source_files.ingest_mode,
+              source_files.ingest_warning
+            FROM items
+            LEFT JOIN source_files ON source_files.path = items.source_file
+            WHERE items.id=?
+            """,
             (item_id,),
         ).fetchone()
         if not item:
@@ -5924,6 +5940,8 @@ def api_news_detail(item_id: str):
             "tracked_topic_choices": tracked_topic_choices,
             "reminders": reminders,
             "reminder_summary": reminder_summary,
+            "ingest_mode": item["ingest_mode"],
+            "ingest_warning": item["ingest_warning"],
             "chat_context": build_news_chat_context(
                 item=item,
                 detail=detail,
