@@ -5894,7 +5894,33 @@ function appendNewsRow(item, row) {
   newsList.appendChild(row);
 }
 
-async function loadFirstPage() {
+async function loadFeedPage(page = 1) {
+  const normalizedPage = Math.max(1, Number(page) || 1);
+  const data = await fetchNewsPage(normalizedPage);
+  state.total = data.total;
+  setDateCounts(data.date_counts);
+  state.pages = data.pages;
+  state.page = Number(data.page || normalizedPage);
+  state.feedUnreadCursor = isFeedUnreadCursorMode() ? (data.next_cursor || null) : null;
+  state.hasMore = isFeedUnreadCursorMode() ? !!data.has_more : state.page < state.pages;
+
+  data.items.forEach((item) => appendNewsRow(item, buildItemRow(item)));
+  renderMeta();
+
+  if (state.total === 0) {
+    setHint("暂无数据");
+  } else if (state.hasMore) {
+    setHint("继续下滑加载更多");
+  } else {
+    setHint("已加载全部新闻");
+  }
+
+  scheduleFeedEndAutoReadIfNeeded();
+  setupReadObserver();
+  ensureRowStatusPolling();
+}
+
+async function loadFirstPage(page = 1) {
   clearFeedEndAutoReadTimer();
   startReminderSummaryTimer();
   await refreshReminderSummary().catch(() => {});
@@ -6094,29 +6120,7 @@ async function loadFirstPage() {
     }
     renderSourceFilters(sourceList);
 
-    const data = await fetchNewsPage(1);
-    state.total = data.total;
-    setDateCounts(data.date_counts);
-    state.pages = data.pages;
-    state.page = 1;
-    state.feedUnreadCursor = isFeedUnreadCursorMode() ? (data.next_cursor || null) : null;
-    state.hasMore = isFeedUnreadCursorMode() ? !!data.has_more : state.page < state.pages;
-
-    data.items.forEach((item) => appendNewsRow(item, buildItemRow(item)));
-    renderMeta();
-
-    if (state.total === 0) {
-      setHint("暂无数据");
-    } else if (state.hasMore) {
-      setHint("继续下滑加载更多");
-    } else {
-      setHint("已加载全部新闻");
-    }
-
-    scheduleFeedEndAutoReadIfNeeded();
-
-    setupReadObserver();
-    ensureRowStatusPolling();
+    await loadFeedPage(page);
   } finally {
     state.loading = false;
     syncSearchPageControls();
@@ -6214,7 +6218,7 @@ async function loadNextPage() {
       appendNewsRow(item, row);
       if (readObserver) readObserver.observe(row);
     });
-    state.page = next;
+    state.page = Number(data.page || next);
     state.pages = data.pages;
     state.total = data.total;
     state.feedUnreadCursor = isFeedUnreadCursorMode() ? (data.next_cursor || null) : null;
@@ -6361,10 +6365,7 @@ resumeAnchorBtn.addEventListener("click", async () => {
     state.readFilter = "all";
     state.feedReadFilter = "all";
     state.sourceFilter = "all";
-    await loadFirstPage();
-    while (state.page < located.page && state.hasMore) {
-      await loadNextPage();
-    }
+    await loadFirstPage(located.page);
 
     const row = newsList.querySelector(`.news-item[data-id="${located.item_id}"]`);
     if (!row) {
