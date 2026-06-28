@@ -806,6 +806,25 @@ button.active {
   flex-wrap: wrap;
 }
 
+.market-pin-card {
+  margin-bottom: 10px;
+}
+
+.market-pin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.market-pin-title-wrap {
+  min-width: 0;
+}
+
+.market-pin-textarea {
+  width: 100%;
+}
+
 .search-page-input {
   flex: 1 1 auto;
   min-width: 0;

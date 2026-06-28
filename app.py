@@ -170,6 +170,7 @@ MARKET_WORKBENCH_SUMMARY_SUMMARY_LIMIT = 800
 MARKET_WORKBENCH_SUMMARY_NOTE_LIMIT = 1200
 MARKET_WORKBENCH_SUMMARY_BODY_LIMIT = 2000
 MARKET_WORKBENCH_CONTENT_FILTERS = {"all", "ideas", "bullish", "bearish"}
+MARKET_PIN_NOTE_MAX_LEN = 5000
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -3256,6 +3257,48 @@ def load_market_tag_summary_sources(
     return [dict(row) for row in news_rows], [dict(row) for row in note_rows]
 
 
+def market_pin_scope_and_tag(tag_key: str | None) -> tuple[str, str]:
+    normalized = (tag_key or "").strip()
+    return ("overview", "") if not normalized else ("tag", normalized)
+
+
+def load_market_pinned_note(conn: sqlite3.Connection, tag_key: str | None) -> dict:
+    scope, normalized_tag_key = market_pin_scope_and_tag(tag_key)
+    row = conn.execute(
+        """
+        SELECT scope, tag_key, note, collapsed, created_at, updated_at
+        FROM market_pinned_notes
+        WHERE scope = ? AND tag_key = ?
+        """,
+        (scope, normalized_tag_key),
+    ).fetchone()
+    return {
+        "scope": scope,
+        "tag_key": normalized_tag_key,
+        "note": (row["note"] if row else "") or "",
+        "collapsed": int((row["collapsed"] if row else 0) or 0),
+        "created_at": row["created_at"] if row else None,
+        "updated_at": row["updated_at"] if row else None,
+    }
+
+
+def serialize_market_pinned_note(pin_row: dict, tag_def: dict | None = None) -> dict:
+    scope = pin_row.get("scope") or "overview"
+    tag_key = pin_row.get("tag_key") or ""
+    tag_label = tag_def["display_name"] if tag_def else ""
+    return {
+        "scope": scope,
+        "tag_key": tag_key,
+        "tag_label": tag_label,
+        "title": "板块集合置顶" if scope == "overview" else f"{tag_label or tag_key} · 置顶信息",
+        "scope_label": "全部板块" if scope == "overview" else (tag_label or tag_key),
+        "note": pin_row.get("note") or "",
+        "collapsed": int(pin_row.get("collapsed") or 0),
+        "updated_at": pin_row.get("updated_at"),
+        "created_at": pin_row.get("created_at"),
+    }
+
+
 def build_market_tag_summary_hash(news_rows: list[dict], note_rows: list[dict], range_days: int) -> str:
     basis = [f"version={MARKET_TAG_SUMMARY_VERSION}", f"range_days={range_days}"]
     for row in news_rows:
@@ -5311,6 +5354,7 @@ def api_market_workbench():
         tags = load_market_tag_definitions(conn, active_only=True)
         if not tag_key:
             feed = load_market_tag_feed(conn, tag_key=None, content_filter=content_filter, sort_order=sort_order, page=page, per=per)
+            pin_payload = serialize_market_pinned_note(load_market_pinned_note(conn, None))
             return jsonify(
                 {
                     "ok": True,
@@ -5324,6 +5368,7 @@ def api_market_workbench():
                     "page": feed["page"],
                     "pages": feed["pages"],
                     "has_more": feed["has_more"],
+                    "pin": pin_payload,
                 }
             )
 
@@ -5346,6 +5391,7 @@ def api_market_workbench():
             summary_note_rows,
             summary_row,
         )
+        pin_payload = serialize_market_pinned_note(load_market_pinned_note(conn, tag_key), tag_def)
     finally:
         conn.close()
 
@@ -5363,8 +5409,71 @@ def api_market_workbench():
             "pages": feed["pages"],
             "has_more": feed["has_more"],
             "summary": summary_payload,
+            "pin": pin_payload,
         }
     )
+
+
+@app.put("/api/market-workbench/pin")
+def api_market_workbench_pin_save():
+    body = request.get_json(silent=True) or {}
+    tag_key_value = body.get("tag_key")
+    if tag_key_value is None:
+        normalized_tag_key = ""
+    elif isinstance(tag_key_value, str):
+        normalized_tag_key = tag_key_value.strip()
+    else:
+        return jsonify({"ok": False, "error": "invalid_tag"}), 400
+
+    note_value = body.get("note")
+    if note_value is None:
+        note_text = ""
+    elif isinstance(note_value, str):
+        note_text = note_value.strip()
+    else:
+        return jsonify({"ok": False, "error": "invalid_note"}), 400
+    if len(note_text) > MARKET_PIN_NOTE_MAX_LEN:
+        return jsonify({"ok": False, "error": "note_too_long"}), 400
+
+    collapsed_value = body.get("collapsed", False)
+    if isinstance(collapsed_value, bool):
+        collapsed = 1 if collapsed_value else 0
+    elif collapsed_value in (0, 1):
+        collapsed = int(collapsed_value)
+    else:
+        return jsonify({"ok": False, "error": "invalid_collapsed"}), 400
+
+    conn = db_conn()
+    try:
+        tag_def = None
+        if normalized_tag_key:
+            tag_def = conn.execute(
+                "SELECT key, display_name FROM market_tag_definitions WHERE key=? AND active=1",
+                (normalized_tag_key,),
+            ).fetchone()
+            if not tag_def:
+                return jsonify({"ok": False, "error": "invalid_tag"}), 400
+
+        scope, scope_tag_key = market_pin_scope_and_tag(normalized_tag_key)
+        existing = load_market_pinned_note(conn, scope_tag_key)
+        ts = now_ts()
+        created_at = existing.get("created_at") or ts
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO market_pinned_notes(scope, tag_key, note, collapsed, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(scope, tag_key) DO UPDATE SET
+                  note=excluded.note,
+                  collapsed=excluded.collapsed,
+                  updated_at=excluded.updated_at
+                """,
+                (scope, scope_tag_key, note_text, collapsed, created_at, ts),
+            )
+        payload = serialize_market_pinned_note(load_market_pinned_note(conn, scope_tag_key), dict(tag_def) if tag_def else None)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "pin": payload})
 
 
 @app.get("/api/market-tags/<tag_key>/summary")

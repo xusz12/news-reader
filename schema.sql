@@ -160,6 +160,16 @@ CREATE TABLE IF NOT EXISTS market_tag_summaries (
 CREATE INDEX IF NOT EXISTS idx_market_tag_summaries_tag_range
 ON market_tag_summaries(tag_key, range_days);
 
+CREATE TABLE IF NOT EXISTS market_pinned_notes (
+  scope TEXT NOT NULL,
+  tag_key TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  collapsed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (scope, tag_key)
+);
+
 CREATE TABLE IF NOT EXISTS news_reminders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id TEXT,

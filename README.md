@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-06-28 — v1.9.9.4 fix: 板块集合置顶信息
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*tests/test_api.py（+）*
+    - 新增独立 `market_pinned_notes` 表，支持 `全部板块` 总置顶与单板块专区置顶，和趋势想法/新闻想法分离
+    - `GET /api/market-workbench` 现在会返回当前 scope 的置顶信息；新增 `PUT /api/market-workbench/pin` 支持保存正文与折叠状态
+    - 校验单板块 `tag_key` 必须是 active tag，空字符串表示 `全部板块`
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
+    - 在板块工作台筛选栏下方新增置顶信息卡片：支持空态添加、编辑保存、取消、展开/收起与折叠预览
+    - 切换 `全部板块 / 单板块` 时，卡片自动切到对应 scope，保存后仅刷新当前卡片，不影响新闻列表排序/分页
+    - 顶栏版本号、页面 `<title>` 与静态资源版本参数同步更新到 `v1.9.9.4`
+- **影响**：板块集合现在可以维护长期说明/判断/操作备忘，但不混入新闻条目、趋势想法或近期趋势总结语义。
+
 ### 2026-06-28 — v1.9.9.3 feat: news-reader 优先读取 newsflow sidecar JSON
 - **文件**
   - *parser.py（+）*、*scanner.py（+）*、*tests/test_parser.py（+）*、*tests/test_scanner.py（+）*

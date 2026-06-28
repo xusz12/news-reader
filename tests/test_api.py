@@ -2768,6 +2768,97 @@ def test_market_tags_crud_and_collection_filter(tmp_path: Path, monkeypatch):
     assert r1_after["important_at"] is not None
 
 
+def test_market_workbench_pinned_notes(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-01.md").write_text(
+        """## Reuters · World（1条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-01 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    items = client.get("/api/news?per=20").get_json()["items"]
+    reuters_item = items[0]
+    assert client.put(
+        f"/api/news/{reuters_item['id']}/market-tag",
+        json={"tag": "AI", "direction": "bullish"},
+    ).status_code == 200
+
+    overview = client.get("/api/market-workbench")
+    assert overview.status_code == 200
+    overview_payload = overview.get_json()
+    assert overview_payload["pin"]["scope"] == "overview"
+    assert overview_payload["pin"]["tag_key"] == ""
+    assert overview_payload["pin"]["note"] == ""
+    assert overview_payload["pin"]["collapsed"] == 0
+
+    save_overview = client.put(
+        "/api/market-workbench/pin",
+        json={"tag_key": "", "note": "总置顶说明", "collapsed": True},
+    )
+    assert save_overview.status_code == 200
+    save_overview_payload = save_overview.get_json()["pin"]
+    assert save_overview_payload["scope"] == "overview"
+    assert save_overview_payload["note"] == "总置顶说明"
+    assert save_overview_payload["collapsed"] == 1
+
+    overview_after = client.get("/api/market-workbench").get_json()
+    assert overview_after["pin"]["note"] == "总置顶说明"
+    assert overview_after["pin"]["collapsed"] == 1
+
+    tag_view = client.get("/api/market-workbench?tag=AI")
+    assert tag_view.status_code == 200
+    tag_payload = tag_view.get_json()
+    assert tag_payload["pin"]["scope"] == "tag"
+    assert tag_payload["pin"]["tag_key"] == "AI"
+    assert tag_payload["pin"]["tag_label"] == "AI"
+    assert tag_payload["pin"]["note"] == ""
+
+    save_tag = client.put(
+        "/api/market-workbench/pin",
+        json={"tag_key": "AI", "note": "AI 板块置顶", "collapsed": False},
+    )
+    assert save_tag.status_code == 200
+    save_tag_payload = save_tag.get_json()["pin"]
+    assert save_tag_payload["scope"] == "tag"
+    assert save_tag_payload["tag_key"] == "AI"
+    assert save_tag_payload["note"] == "AI 板块置顶"
+    assert save_tag_payload["collapsed"] == 0
+
+    tag_after = client.get("/api/market-workbench?tag=AI").get_json()
+    assert tag_after["pin"]["note"] == "AI 板块置顶"
+    assert tag_after["pin"]["collapsed"] == 0
+    assert client.get("/api/market-workbench").get_json()["pin"]["note"] == "总置顶说明"
+
+    clear_tag = client.put(
+        "/api/market-workbench/pin",
+        json={"tag_key": "AI", "note": "", "collapsed": True},
+    )
+    assert clear_tag.status_code == 200
+    clear_tag_payload = clear_tag.get_json()["pin"]
+    assert clear_tag_payload["note"] == ""
+    assert clear_tag_payload["collapsed"] == 1
+
+    invalid = client.put(
+        "/api/market-workbench/pin",
+        json={"tag_key": "NOT_FOUND", "note": "bad", "collapsed": False},
+    )
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"] == "invalid_tag"
+
+
 def test_market_trends_matrix_and_detail(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)

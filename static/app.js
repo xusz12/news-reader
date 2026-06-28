@@ -45,6 +45,9 @@ let state = {
   marketWorkbenchTag: "",
   marketWorkbenchFilter: "all",
   marketWorkbenchSummary: null,
+  marketWorkbenchPin: null,
+  marketWorkbenchPinEditing: false,
+  marketWorkbenchPinSaving: false,
   selectedTagAdminKey: "",
   tagAdminOpen: false,
   trendComposeOpen: false,
@@ -155,6 +158,7 @@ const marketWorkbenchTagSelect = document.getElementById("marketWorkbenchTagSele
 const marketWorkbenchFilterSelect = document.getElementById("marketWorkbenchFilterSelect");
 const marketWorkbenchSummaryBtn = document.getElementById("marketWorkbenchSummaryBtn");
 const marketWorkbenchComposeBtn = document.getElementById("marketWorkbenchComposeBtn");
+const marketWorkbenchPinCard = document.getElementById("marketWorkbenchPinCard");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 const workspace = document.getElementById("workspace");
@@ -641,6 +645,18 @@ async function fetchMarketWorkbenchPage(page = 1) {
   if (!data.ok) throw new Error(data.error || "market_workbench_fetch_failed");
   state.marketTagChoices = Array.isArray(data.tags) ? data.tags : state.marketTagChoices;
   return data;
+}
+
+async function saveMarketWorkbenchPin(payload) {
+  const res = await fetch("/api/market-workbench/pin", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error("market_workbench_pin_save_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_workbench_pin_save_failed");
+  return data.pin || null;
 }
 
 async function generateMarketTagSummary(tagKey) {
@@ -1735,18 +1751,201 @@ function renderMarketWorkbenchControls() {
   marketWorkbenchFilterSelect.value = state.marketWorkbenchFilter || "all";
 }
 
+function activeMarketWorkbenchPinTitle() {
+  if (!state.marketWorkbenchTag) return "板块集合置顶";
+  const selected = activeMarketTagChoices().find((tag) => tag.key === state.marketWorkbenchTag);
+  return `${selected?.display_name || state.marketWorkbenchTag} · 置顶信息`;
+}
+
+function activeMarketWorkbenchPinScopeLabel() {
+  if (!state.marketWorkbenchTag) return "全部板块";
+  const selected = activeMarketTagChoices().find((tag) => tag.key === state.marketWorkbenchTag);
+  return selected?.display_name || state.marketWorkbenchTag;
+}
+
+function marketWorkbenchPinPreview(note) {
+  const text = String(note || "").trim().replace(/\s+/g, " ");
+  if (!text) return "添加置顶信息";
+  return text.length > 80 ? `${text.slice(0, 80)}...` : text;
+}
+
+function renderMarketWorkbenchPinCard() {
+  if (!marketWorkbenchPinCard) return;
+  const visible = state.collection === "market_tags";
+  marketWorkbenchPinCard.classList.toggle("hidden", !visible);
+  if (!visible) {
+    marketWorkbenchPinCard.innerHTML = "";
+    return;
+  }
+
+  const pin = state.marketWorkbenchPin || {
+    note: "",
+    collapsed: 0,
+    title: activeMarketWorkbenchPinTitle(),
+    scope_label: activeMarketWorkbenchPinScopeLabel(),
+  };
+  const note = String(pin.note || "");
+  const collapsed = Number(pin.collapsed || 0) === 1;
+  const titleText = pin.title || activeMarketWorkbenchPinTitle();
+  const scopeLabel = pin.scope_label || activeMarketWorkbenchPinScopeLabel();
+  const updatedText = pin.updated_at ? `更新 ${pin.updated_at}` : "尚未保存";
+
+  marketWorkbenchPinCard.innerHTML = "";
+
+  if (state.marketWorkbenchPinEditing) {
+    const title = document.createElement("h4");
+    title.textContent = titleText;
+    const meta = document.createElement("div");
+    meta.className = "detail-meta";
+    meta.textContent = `${scopeLabel} · 最多 5000 字`;
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "detail-note-input market-pin-textarea";
+    textarea.rows = 5;
+    textarea.maxLength = 5000;
+    textarea.placeholder = "记录这个板块工作台的长期说明、判断或操作备忘...";
+    textarea.value = note;
+
+    const collapsedLabel = document.createElement("label");
+    collapsedLabel.className = "detail-inline-checkbox";
+    const collapsedText = document.createElement("span");
+    collapsedText.textContent = "默认折叠";
+    const collapsedInput = document.createElement("input");
+    collapsedInput.type = "checkbox";
+    collapsedInput.checked = collapsed;
+    collapsedLabel.appendChild(collapsedText);
+    collapsedLabel.appendChild(collapsedInput);
+
+    const actions = document.createElement("div");
+    actions.className = "detail-note-actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "detail-retry-btn";
+    saveBtn.type = "button";
+    saveBtn.textContent = state.marketWorkbenchPinSaving ? "保存中..." : "保存";
+    saveBtn.disabled = state.marketWorkbenchPinSaving;
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "detail-retry-btn";
+    cancelBtn.type = "button";
+    cancelBtn.textContent = "取消";
+    cancelBtn.disabled = state.marketWorkbenchPinSaving;
+
+    saveBtn.addEventListener("click", async () => {
+      state.marketWorkbenchPinSaving = true;
+      renderMarketWorkbenchPinCard();
+      try {
+        const saved = await saveMarketWorkbenchPin({
+          tag_key: state.marketWorkbenchTag || "",
+          note: textarea.value || "",
+          collapsed: collapsedInput.checked,
+        });
+        state.marketWorkbenchPin = saved;
+        state.marketWorkbenchPinEditing = false;
+        setHint("置顶信息已保存");
+      } catch (error) {
+        setHint(`保存置顶信息失败：${error?.message || error}`);
+      } finally {
+        state.marketWorkbenchPinSaving = false;
+        renderMarketWorkbenchPinCard();
+      }
+    });
+
+    cancelBtn.addEventListener("click", () => {
+      state.marketWorkbenchPinEditing = false;
+      state.marketWorkbenchPinSaving = false;
+      renderMarketWorkbenchPinCard();
+    });
+
+    actions.appendChild(saveBtn);
+    actions.appendChild(cancelBtn);
+    marketWorkbenchPinCard.appendChild(title);
+    marketWorkbenchPinCard.appendChild(meta);
+    marketWorkbenchPinCard.appendChild(textarea);
+    marketWorkbenchPinCard.appendChild(collapsedLabel);
+    marketWorkbenchPinCard.appendChild(actions);
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "market-pin-header";
+  const titleWrap = document.createElement("div");
+  titleWrap.className = "market-pin-title-wrap";
+  const title = document.createElement("h4");
+  title.textContent = titleText;
+  const meta = document.createElement("div");
+  meta.className = "detail-meta";
+  meta.textContent = `${scopeLabel} · ${updatedText}`;
+  titleWrap.appendChild(title);
+  titleWrap.appendChild(meta);
+
+  const editBtn = document.createElement("button");
+  editBtn.className = "detail-retry-btn";
+  editBtn.type = "button";
+  editBtn.textContent = note ? "编辑" : "添加置顶信息";
+  editBtn.addEventListener("click", () => {
+    state.marketWorkbenchPinEditing = true;
+    renderMarketWorkbenchPinCard();
+  });
+  header.appendChild(titleWrap);
+  header.appendChild(editBtn);
+
+  const details = document.createElement("details");
+  details.className = "market-summary-details";
+  details.open = !collapsed;
+  details.addEventListener("toggle", async () => {
+    const nextCollapsed = details.open ? 0 : 1;
+    if (nextCollapsed === Number((state.marketWorkbenchPin?.collapsed || 0))) return;
+    try {
+      const saved = await saveMarketWorkbenchPin({
+        tag_key: state.marketWorkbenchTag || "",
+        note,
+        collapsed: nextCollapsed === 1,
+      });
+      state.marketWorkbenchPin = saved;
+      renderMarketWorkbenchPinCard();
+    } catch (error) {
+      details.open = !details.open;
+      setHint(`保存折叠状态失败：${error?.message || error}`);
+    }
+  });
+
+  const detailsSummary = document.createElement("summary");
+  detailsSummary.className = "market-summary-toggle";
+  const summaryMeta = document.createElement("div");
+  summaryMeta.className = "market-summary-toggle-text";
+  const preview = document.createElement("div");
+  preview.className = "detail-meta";
+  preview.textContent = marketWorkbenchPinPreview(note);
+  summaryMeta.appendChild(preview);
+  detailsSummary.appendChild(summaryMeta);
+  const caret = document.createElement("span");
+  caret.className = "market-summary-caret";
+  caret.textContent = collapsed ? "展开" : "收起";
+  detailsSummary.appendChild(caret);
+  details.appendChild(detailsSummary);
+
+  const text = document.createElement("p");
+  text.className = "detail-note-text";
+  text.textContent = note || "当前还没有置顶信息。";
+  details.appendChild(text);
+
+  marketWorkbenchPinCard.appendChild(header);
+  marketWorkbenchPinCard.appendChild(details);
+}
+
 function updateMarketWorkbenchBar() {
   if (!marketWorkbenchBar) return;
   const visible = state.collection === "market_tags";
   marketWorkbenchBar.classList.toggle("hidden", !visible);
   if (!visible) {
     removeMarketWorkbenchSummaryInline();
+    renderMarketWorkbenchPinCard();
     return;
   }
   renderMarketWorkbenchControls();
   if (marketWorkbenchSummaryBtn) {
     marketWorkbenchSummaryBtn.classList.toggle("hidden", !state.marketWorkbenchTag);
   }
+  renderMarketWorkbenchPinCard();
 }
 
 function updateReminderFilterBar() {
@@ -5859,8 +6058,11 @@ async function loadFirstPage() {
       state.page = Number(data.page || 1);
       state.hasMore = !!data.has_more;
       state.marketWorkbenchSummary = data.summary || null;
+      state.marketWorkbenchPin = data.pin || null;
+      state.marketWorkbenchPinEditing = false;
       showTrendsView(false);
       renderMeta();
+      renderMarketWorkbenchPinCard();
       (data.items || []).forEach((item) => {
         const row = item.entry_type === "trend_note" ? buildIdeaRow(item) : buildItemRow(item);
         appendNewsRow(item, row);
@@ -5967,7 +6169,9 @@ async function loadNextPage() {
       state.total = Number(data.total || state.total);
       state.hasMore = !!data.has_more;
       state.marketWorkbenchSummary = data.summary || state.marketWorkbenchSummary;
+      state.marketWorkbenchPin = data.pin || state.marketWorkbenchPin;
       renderMeta();
+      renderMarketWorkbenchPinCard();
       if (state.marketWorkbenchTag) {
         renderMarketWorkbenchSummaryInline();
       } else {
@@ -6075,6 +6279,8 @@ if (marketWorkbenchTagSelect) {
     removeMarketWorkbenchSummaryInline();
     state.marketWorkbenchTag = marketWorkbenchTagSelect.value || "";
     state.marketWorkbenchSummary = null;
+    state.marketWorkbenchPin = null;
+    state.marketWorkbenchPinEditing = false;
     await loadFirstPage();
   });
 }
@@ -6084,6 +6290,7 @@ if (marketWorkbenchFilterSelect) {
     removeMarketWorkbenchSummaryInline();
     state.marketWorkbenchFilter = marketWorkbenchFilterSelect.value || "all";
     state.marketWorkbenchSummary = null;
+    state.marketWorkbenchPinEditing = false;
     await loadFirstPage();
   });
 }
