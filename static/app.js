@@ -79,11 +79,17 @@ let state = {
   settingsMessageTone: "muted",
 };
 
-const mediaIconMap = {
-  Reuters: "/static/source-icons/reuters.ico",
-  Bloomberg: "/static/source-icons/bloomberg.png",
-  TechCrunch: "/static/source-icons/techcrunch.png",
-  "Ars Technica": "/static/source-icons/arstechnica.ico",
+const TITLE_CHAR_LIMIT = 100;
+const sourceIconMap = {
+  reuters: "/static/source-icons/reuters.ico",
+  bloomberg: "/static/source-icons/bloomberg.png",
+  techcrunch: "/static/source-icons/techcrunch.png",
+  ars: "/static/source-icons/arstechnica.ico",
+  x: "/static/source-icons/x.svg",
+};
+const sourceIconAliases = {
+  "ars technica": "ars",
+  twitter: "x",
 };
 const SETTINGS_CUSTOM_MODEL_VALUE = "__custom__";
 const TRACKED_SYSTEM_DEFAULT_RULE_PARAMS = {
@@ -130,6 +136,7 @@ const mobileCollectionSheet = document.getElementById("mobileCollectionSheet");
 const mobileCollectionBackdrop = document.getElementById("mobileCollectionBackdrop");
 const mobileCollectionCloseBtn = document.getElementById("mobileCollectionCloseBtn");
 const mobileCollectionOptions = document.getElementById("mobileCollectionOptions");
+const topbarViewMenu = document.getElementById("topbarViewMenu");
 const themeModeSelect = document.getElementById("themeModeSelect");
 const detailFontSelect = document.getElementById("detailFontSelect");
 const settingsBtn = document.getElementById("settingsBtn");
@@ -144,6 +151,9 @@ const searchPageSubmitBtn = document.getElementById("searchPageSubmitBtn");
 
 const newsList = document.getElementById("newsList");
 const meta = document.getElementById("meta");
+const feedKicker = document.getElementById("feedKicker");
+const feedTitle = document.getElementById("feedTitle");
+const sourceFilterCount = document.getElementById("sourceFilterCount");
 const pageInfo = document.getElementById("pageInfo");
 const reminderFilterBar = document.getElementById("reminderFilterBar");
 const reminderFilterActiveBtn = document.getElementById("reminderFilterActiveBtn");
@@ -589,7 +599,7 @@ function updateWorkspaceLayout() {
 
 function updateSourceFilterVisibility() {
   const visible = state.collection !== "trends" && state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes" && state.collection !== "market_tags";
-  document.querySelectorAll(".sources-title, #sourceFilters").forEach((node) => {
+  document.querySelectorAll("#sourceFilterPanel").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
   if (!visible) closeMobileFilterSheet();
@@ -1559,6 +1569,43 @@ function sourcePrefix(source) {
   return source.split("·")[0].trim();
 }
 
+function canonicalSourceIconKey(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (sourceIconMap[raw]) return raw;
+  if (sourceIconAliases[raw]) return sourceIconAliases[raw];
+  const prefix = raw.split(/[·•-]/)[0].trim();
+  if (sourceIconMap[prefix]) return prefix;
+  return sourceIconAliases[prefix] || "";
+}
+
+function sourceIconKeyFromUrl(url) {
+  if (!url) return "";
+  try {
+    let host = new URL(url).hostname.toLowerCase();
+    if (host.startsWith("www.")) host = host.slice(4);
+    if (host === "x.com" || host === "twitter.com") return "x";
+    if (host.endsWith("reuters.com")) return "reuters";
+    if (host.endsWith("bloomberg.com")) return "bloomberg";
+    if (host.endsWith("techcrunch.com")) return "techcrunch";
+    if (host.endsWith("arstechnica.com")) return "ars";
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function sourceIconKey(item) {
+  return (
+    canonicalSourceIconKey(item?.source_key) ||
+    canonicalSourceIconKey(item?.source_type) ||
+    canonicalSourceIconKey(item?.source_name) ||
+    sourceIconKeyFromUrl(item?.url) ||
+    canonicalSourceIconKey(sourcePrefix(item?.source)) ||
+    canonicalSourceIconKey(item?.source)
+  );
+}
+
 function isBloombergVideoUrl(url) {
   if (!url) return false;
   try {
@@ -1573,18 +1620,13 @@ function createSourceIcon(item) {
   const wrap = document.createElement("span");
   wrap.className = "source-icon";
 
-  let iconSrc = "";
-  if (item.source_type === "twitter") {
-    iconSrc = "/static/source-icons/x.svg";
-  } else {
-    iconSrc = mediaIconMap[sourcePrefix(item.source)] || "";
-  }
+  const iconSrc = sourceIconMap[sourceIconKey(item)] || "";
 
   if (iconSrc) {
     const img = document.createElement("img");
     img.className = "source-icon-img";
     img.src = iconSrc;
-    img.alt = sourcePrefix(item.source) || "来源图标";
+    img.alt = item.source_name || sourcePrefix(item.source) || "来源图标";
     img.loading = "lazy";
     img.decoding = "async";
     img.addEventListener("error", () => {
@@ -1600,10 +1642,16 @@ function createSourceIcon(item) {
   return wrap;
 }
 
+function truncateTitleText(value, limit = TITLE_CHAR_LIMIT) {
+  const title = String(value || "");
+  if (title.length <= limit) return title;
+  return `${title.slice(0, limit).trimEnd()}...`;
+}
+
 function rowTitleText(item) {
   const title = String(item?.title || "");
   if (item?.source_type === "twitter" && title.length > 100) {
-    return `${title.slice(0, 100).trimEnd()}...`;
+    return truncateTitleText(title);
   }
   return title;
 }
@@ -2176,15 +2224,38 @@ function sourceLabel(key) {
 
 function renderSourceFilters(options) {
   latestSourceOptions = Array.isArray(options) ? options : [];
+  const totalCount = latestSourceOptions.reduce((sum, src) => sum + Number(src.count || 0), 0);
+  if (sourceFilterCount) {
+    sourceFilterCount.textContent = latestSourceOptions.length ? `${latestSourceOptions.length} 个源` : "";
+  }
 
-  const fillContainer = (container, className) => {
+  const setButtonContent = (btn, label, count, desktop) => {
+    if (!desktop) {
+      btn.textContent = count == null ? label : `${label} (${count})`;
+      return;
+    }
+    const labelEl = document.createElement("span");
+    labelEl.className = "source-filter-label";
+    labelEl.textContent = label;
+    btn.appendChild(labelEl);
+    if (count != null) {
+      const countEl = document.createElement("span");
+      countEl.className = "source-filter-badge";
+      countEl.textContent = String(count);
+      btn.appendChild(countEl);
+    }
+  };
+
+  const fillContainer = (container, className, desktop = false) => {
     if (!container) return;
     container.innerHTML = "";
 
     const allBtn = document.createElement("button");
     allBtn.type = "button";
     allBtn.className = className;
-    allBtn.textContent = "全部来源";
+    allBtn.dataset.sourceKey = "all";
+    setButtonContent(allBtn, "全部来源", null, desktop);
+    allBtn.setAttribute("aria-label", totalCount ? `全部来源，${totalCount} 条` : "全部来源");
     allBtn.classList.toggle("active", state.sourceFilter === "all");
     allBtn.addEventListener("click", async () => {
       if (state.sourceFilter === "all") return;
@@ -2199,7 +2270,8 @@ function renderSourceFilters(options) {
       btn.type = "button";
       btn.className = className;
       btn.dataset.sourceKey = src.key;
-      btn.textContent = `${sourceLabel(src.key) || src.label} (${src.count})`;
+      setButtonContent(btn, sourceLabel(src.key) || src.label, src.count, desktop);
+      btn.setAttribute("aria-label", `${sourceLabel(src.key) || src.label}，${src.count} 条`);
       btn.classList.toggle("active", state.sourceFilter === src.key);
       btn.addEventListener("click", async () => {
         if (state.sourceFilter === src.key) return;
@@ -2211,7 +2283,7 @@ function renderSourceFilters(options) {
     }
   };
 
-  fillContainer(sourceFilters, "nav-btn source-btn");
+  fillContainer(sourceFilters, "source-filter-btn", true);
   fillContainer(mobileSourceFilters, "mobile-source-btn");
   updateMobileFilterCollectionText();
 }
@@ -2543,8 +2615,7 @@ function renderTrackedTopicEmpty(message = "选择一个跟踪主题，右栏会
   if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
   if (detailChatBody) detailChatBody.classList.add("hidden");
-  detailEmpty.classList.remove("hidden");
-  detailEmpty.textContent = message;
+  renderDetailEmpty(message);
   updateWorkspaceLayout();
 }
 
@@ -2772,7 +2843,27 @@ async function fetchSources() {
   return Array.isArray(data.sources) ? data.sources : [];
 }
 
+function updateFeedHeader() {
+  if (!feedKicker || !feedTitle) return;
+  const headers = {
+    search: ["全局检索", "搜索"],
+    feed: ["今日阅读队列", "新闻流"],
+    favorites: ["长期收藏", "收藏"],
+    reminders: ["待回访事项", "提醒"],
+    important: ["重点追踪", "重要新闻"],
+    read_later: ["个人队列", "稍后再看"],
+    notes: ["个人判断", "想法"],
+    tracked: ["主题时间线", "跟踪"],
+    market_tags: ["板块工作台", "板块"],
+    trends: ["市场信号", "趋势"],
+  };
+  const [kicker, title] = headers[state.collection] || headers.feed;
+  feedKicker.textContent = kicker;
+  feedTitle.textContent = title;
+}
+
 function renderMeta() {
+  updateFeedHeader();
   if (state.collection === "search") {
     const rangeNames = {
       all: "全部新闻",
@@ -2885,8 +2976,7 @@ function restoreMarketWorkbenchDetailState() {
   if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
   if (detailEmpty) {
-    detailEmpty.textContent = emptyDetailMessage();
-    detailEmpty.classList.remove("hidden");
+    renderDetailEmpty();
   }
   updateWorkspaceLayout();
 }
@@ -2907,6 +2997,12 @@ function emptyDetailMessage() {
   if (state.collection === "notes") return "选择一条想法查看详情";
   if (state.collection === "market_tags") return state.marketWorkbenchTag ? "选择一条板块内容查看详情" : "选择一条板块新闻查看详情";
   return "选择一条新闻查看摘要与正文";
+}
+
+function renderDetailEmpty(message = emptyDetailMessage()) {
+  if (!detailEmpty) return;
+  detailEmpty.textContent = message;
+  detailEmpty.classList.remove("hidden");
 }
 
 function closeTrendNoteEditor() {
@@ -3368,8 +3464,7 @@ function renderTrendDetail(payload) {
     detailTrendBody.classList.add("hidden");
     detailTrendNoteCard.classList.add("hidden");
     detailTrendList.innerHTML = "";
-    detailEmpty.classList.remove("hidden");
-    detailEmpty.textContent = emptyDetailMessage();
+    renderDetailEmpty();
     updateWorkspaceLayout();
     return;
   }
@@ -4571,11 +4666,55 @@ function openReminderEditor(item, reminder = null) {
   detailReminderEditor.classList.remove("hidden");
 }
 
+function detailReminderCardKey(item) {
+  return String(item?.id || item?.url || "");
+}
+
+function ensureDetailReminderToggle() {
+  if (!detailReminderCard) return null;
+  const heading = detailReminderCard.querySelector("h4");
+  if (!heading) return null;
+  heading.classList.add("detail-reminder-heading");
+  let toggle = heading.querySelector(".detail-reminder-toggle");
+  if (!toggle) {
+    heading.textContent = "";
+    toggle = document.createElement("button");
+    toggle.className = "detail-reminder-toggle";
+    toggle.type = "button";
+    heading.appendChild(toggle);
+  }
+  return toggle;
+}
+
+function setDetailReminderCardExpanded(expanded) {
+  if (!detailReminderCard) return;
+  detailReminderCard.dataset.expanded = expanded ? "1" : "0";
+  detailReminderCard.classList.toggle("is-expanded", expanded);
+  const toggle = detailReminderCard.querySelector(".detail-reminder-toggle");
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+}
+
 function refreshDetailReminderUI(item) {
   if (!detailReminderCard || !detailReminderList || !detailReminderSummary) return;
   const reminders = normalizeReminderItems(currentDetailReminders(item));
   const summary = currentDetailReminderSummary(item);
-  detailReminderSummary.textContent = `进行中 ${summary.active_total || 0} · 到期 ${summary.due_total || 0} · 已完成 ${summary.done_total || 0}`;
+  const summaryText = `进行中 ${summary.active_total || 0} · 到期 ${summary.due_total || 0} · 已完成 ${summary.done_total || 0}`;
+  const cardKey = detailReminderCardKey(item);
+  const isSameCard = detailReminderCard.dataset.itemKey === cardKey;
+  if (!isSameCard) {
+    detailReminderCard.dataset.expanded = "0";
+  }
+  detailReminderCard.dataset.itemKey = cardKey;
+  const toggle = ensureDetailReminderToggle();
+  if (toggle) {
+    toggle.innerHTML = `<span>新闻事件提醒</span><span class="detail-reminder-toggle-meta">${summaryText}</span>`;
+    toggle.onclick = () => {
+      setDetailReminderCardExpanded(detailReminderCard.dataset.expanded !== "1");
+    };
+  }
+  detailReminderSummary.textContent = summaryText;
   detailReminderList.innerHTML = "";
   if (!reminders.length) {
     detailReminderCard.classList.add("hidden");
@@ -4662,6 +4801,7 @@ function refreshDetailReminderUI(item) {
     });
     detailReminderList.appendChild(card);
   });
+  setDetailReminderCardExpanded(isSameCard && detailReminderCard.dataset.expanded === "1");
   detailReminderCard.classList.remove("hidden");
 }
 
@@ -4847,8 +4987,7 @@ function renderDetail(item) {
     if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
     detailBody.classList.add("hidden");
     detailChatBody.classList.add("hidden");
-    detailEmpty.classList.remove("hidden");
-    detailEmpty.textContent = emptyDetailMessage();
+    renderDetailEmpty();
     updateWorkspaceLayout();
     return;
   }
@@ -4859,8 +4998,9 @@ function renderDetail(item) {
   detailBody.classList.remove("hidden");
   syncDetailReturnButton();
 
-  document.getElementById("detailTitle").textContent = item.title || "";
+  document.getElementById("detailTitle").textContent = rowTitleText(item);
   const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
+  const detail = cached?.detail || null;
   const ingestMode = cached?.ingest_mode || item.ingest_mode || "";
   const ingestWarning = cached?.ingest_warning || item.ingest_warning || "";
   const metaLines = [`${item.source || "未知来源"} · ${item.published_at || ""}`];
@@ -4873,7 +5013,8 @@ function renderDetail(item) {
   }
   document.getElementById("detailMeta").innerHTML = metaLines.join("<br>");
   const summaryEl = document.getElementById("detailSummary");
-  const hasSummary = typeof item.summary === "string" && item.summary.trim().length > 0;
+  const hasDetailContent = !!(detail && detail.content);
+  const hasSummary = !hasDetailContent && typeof item.summary === "string" && item.summary.trim().length > 0;
   if (hasSummary) {
     summaryEl.textContent = item.summary.trim();
     summaryEl.classList.remove("hidden");
@@ -4901,7 +5042,6 @@ function renderDetail(item) {
     detailNoteToggleBtn.disabled = true;
   }
 
-  const detail = cached?.detail || null;
   const status = cached?.detail_status || item.detail_status || "none";
   const detailErr = cached?.job?.last_error || item.detail_error || "";
   const ai = cached?.ai || null;
@@ -5333,13 +5473,13 @@ function buildItemRow(item) {
     actions.appendChild(btnReadLater);
   }
   actions.appendChild(btnFavorite);
+  line1.appendChild(actions);
 
   li.appendChild(line1);
   li.appendChild(title);
   if (item.summary) li.appendChild(summary);
   li.appendChild(notePreview);
   li.appendChild(marketTagsWrap);
-  li.appendChild(actions);
 
   li.addEventListener("click", () => {
     if (state.selectedId === item.id) {
@@ -5590,8 +5730,7 @@ function renderTrendIdeaDetail(item) {
   detailChatBody.classList.add("hidden");
   if (!item) {
     clearTrendIdeaDetailState();
-    detailEmpty.classList.remove("hidden");
-    detailEmpty.textContent = emptyDetailMessage();
+    renderDetailEmpty();
     updateWorkspaceLayout();
     return;
   }
@@ -6815,8 +6954,11 @@ if (errorStatsBtn) {
   });
 }
 document.addEventListener("click", (event) => {
-  if (!errorStatsPanel || errorStatsPanel.classList.contains("hidden")) return;
   const target = event.target;
+  if (topbarViewMenu?.open && target instanceof Node && !topbarViewMenu.contains(target)) {
+    topbarViewMenu.removeAttribute("open");
+  }
+  if (!errorStatsPanel || errorStatsPanel.classList.contains("hidden")) return;
   if (!(target instanceof Node)) return;
   if (errorStatsPanel.contains(target) || errorStatsBtn?.contains(target)) return;
   closeErrorStatsPanel();

@@ -171,6 +171,51 @@ def test_reindex_and_detail_return_ingest_provenance(tmp_path: Path, monkeypatch
     assert detail_2["ingest_warning"] == "unsupported_newsreader_daily_schema"
 
 
+def test_sidecar_source_identity_survives_section_only_source(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    md_path = daily_dir / "dailyFreshNews_2026-06-30.md"
+    sidecar_path = daily_dir / "dailyFreshNews_2026-06-30.newsreader.json"
+    md_path.write_text("", encoding="utf-8")
+    sidecar_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "newsreader.daily.v1",
+                "items": [
+                    {
+                        "item_order": 1,
+                        "section": "world",
+                        "source_type": "reuters",
+                        "source_name": "Reuters",
+                        "title": "Sidecar section source",
+                        "summary": "JSON 摘要",
+                        "published_at": "2026-06-30 09:30:00",
+                        "url": "https://www.reuters.com/world/example-2026-06-30/",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?read_filter=all&per=20").get_json()["items"][0]
+    assert item["source"] == "world"
+    assert item["source_type"] == "reuters"
+    assert item["source_name"] == "Reuters"
+    assert item["source_key"] == "reuters"
+
+
 def test_global_search_mvp(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -4349,9 +4394,31 @@ def test_process_pending_ai_once_twitter_generates_body_only(tmp_path: Path, mon
 def test_row_title_text_truncates_twitter_titles():
     path = Path("/Users/x/news-reader/news-reader/static/app.js")
     source = path.read_text(encoding="utf-8")
+    assert "const TITLE_CHAR_LIMIT = 100" in source
     assert "function rowTitleText(item)" in source
     assert "item?.source_type === \"twitter\"" in source
-    assert "title.slice(0, 100)" in source
+    assert "return truncateTitleText(title)" in source
+    assert "document.getElementById(\"detailTitle\").textContent = rowTitleText(item)" in source
+
+
+def test_frontend_uses_stable_source_identity_for_icons_and_detail_layout():
+    path = Path("/Users/x/news-reader/news-reader/static/app.js")
+    source = path.read_text(encoding="utf-8")
+    assert "function sourceIconKey(item)" in source
+    assert "canonicalSourceIconKey(item?.source_type)" in source
+    assert "canonicalSourceIconKey(item?.source_name)" in source
+    assert "sourceIconKeyFromUrl(item?.url)" in source
+    assert "sourceIconMap[sourceIconKey(item)]" in source
+    assert "const hasSummary = !hasDetailContent" in source
+    assert "function setDetailReminderCardExpanded(expanded)" in source
+
+
+def test_scrollbars_are_theme_colored():
+    path = Path("/Users/x/news-reader/news-reader/static/style.css")
+    source = path.read_text(encoding="utf-8")
+    assert "--scrollbar-thumb" in source
+    assert "scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track)" in source
+    assert "*::-webkit-scrollbar-thumb" in source
 
 
 def test_process_pending_jobs_once_twitter_success_does_not_enqueue_ai_job(tmp_path: Path, monkeypatch):
