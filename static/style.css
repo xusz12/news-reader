@@ -3805,7 +3805,8 @@ html[data-detail-font="large"] {
 
   .detail-scroll-area {
     margin-top: 10px;
-    padding-bottom: calc(14px + var(--mobile-safe-bottom));
+    padding: 12px 0 calc(14px + var(--mobile-safe-bottom));
+    scrollbar-gutter: auto;
   }
 
   .detail-actions {
@@ -3851,11 +3852,12 @@ html[data-detail-font="large"] {
 
   .detail-ai-box {
     margin-top: 12px;
-    padding: 12px 14px;
+    padding: 12px;
   }
 
   .detail-ai-points {
-    line-height: 1.58;
+    padding-left: 1.15rem;
+    line-height: 1.62;
   }
 
   .detail-ai-points li + li {
@@ -3864,7 +3866,7 @@ html[data-detail-font="large"] {
 
   .detail-ai-conclusion {
     margin-top: 10px;
-    line-height: 1.58;
+    line-height: 1.62;
   }
 
   .detail-status {
@@ -3874,7 +3876,7 @@ html[data-detail-font="large"] {
 
   .detail-content {
     margin-top: 12px;
-    line-height: 1.72;
+    line-height: 1.74;
   }
 
   .detail-original {
@@ -3885,6 +3887,26 @@ html[data-detail-font="large"] {
   .detail-original-content {
     margin-top: 10px;
     line-height: 1.65;
+  }
+
+  .detail-summary,
+  .detail-ai-points,
+  .detail-ai-conclusion,
+  .detail-content,
+  .detail-original-content,
+  .detail-note-text {
+    text-wrap: auto;
+    line-break: loose;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  .detail-ai-points li,
+  .detail-ai-conclusion,
+  .detail-content {
+    text-align: justify;
+    text-align-last: start;
+    text-justify: inter-character;
   }
 
   .mobile-filter-sheet {
