@@ -4,6 +4,16 @@
 
 ## What's Changed
 
+### 2026-06-30 — v1.9.10.0 ui: 电脑端 UI Phase 1 视觉重构
+- **文件**
+  - *static/index.html（+）*、*static/style.css（+）*、*static/app.js（+）*
+    - 重构电脑端阅读工作台视觉层级：顶栏显示选项、左侧集合与来源筛选、中栏新闻列表、右侧详情阅读面板
+    - 优化来源图标识别、来源筛选 badge、新闻标题截断、详情提醒卡片展开收起与滚动条主题色
+    - 顶栏版本号、页面 `<title>` 与静态资源版本参数同步更新到 `v1.9.10.0`
+  - *tests/test_api.py（+）*
+    - 补充 source identity、前端来源图标/详情布局和滚动条静态检测
+- **影响**：本轮未修改 `app.py`、`schema.sql`、`scanner.py`、`parser.py`、`llm_client.py`、`secret_store.py`、`settings.py`；属于前端 UI 与测试更新，拉取后刷新页面即可。
+
 ### 2026-06-28 — v1.9.9.5 fix: 回到上次阅读直接加载目标页
 - **文件**
   - *static/app.js（+）*
