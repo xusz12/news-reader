@@ -2692,6 +2692,26 @@ button.active {
   font-size: max(0.8125rem, calc(var(--detail-font-base) * var(--detail-font-scale)));
 }
 
+.detail-summary,
+.detail-ai-points,
+.detail-ai-conclusion,
+.detail-content,
+.detail-original-content,
+.detail-note-text {
+  text-wrap: auto;
+  line-break: loose;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.detail-ai-points li,
+.detail-ai-conclusion,
+.detail-content {
+  text-align: justify;
+  text-align-last: start;
+  text-justify: inter-character;
+}
+
 html[data-detail-font="small"] {
   --detail-font-scale: 0.93;
 }
@@ -2804,8 +2824,6 @@ html[data-detail-font="large"] {
   color: var(--detail-soft);
   line-height: 1.66;
   white-space: pre-wrap;
-  text-wrap: pretty;
-  overflow-wrap: break-word;
 }
 
 .detail-ai-box {
@@ -2840,8 +2858,6 @@ html[data-detail-font="large"] {
   color: var(--row-note-preview-text);
   line-height: 1.62;
   white-space: pre-wrap;
-  text-wrap: pretty;
-  overflow-wrap: break-word;
 }
 
 .detail-note-editor {
@@ -3056,8 +3072,6 @@ html[data-detail-font="large"] {
   padding-left: 18px;
   color: var(--detail-text);
   line-height: 1.6;
-  text-wrap: pretty;
-  overflow-wrap: break-word;
 }
 
 .detail-ai-points li + li {
@@ -3068,8 +3082,6 @@ html[data-detail-font="large"] {
   margin: 8px 0 0;
   color: var(--detail-soft);
   line-height: 1.62;
-  text-wrap: pretty;
-  overflow-wrap: break-word;
 }
 
 .detail-status {
@@ -3103,8 +3115,6 @@ html[data-detail-font="large"] {
   color: var(--detail-text);
   line-height: 1.72;
   white-space: pre-wrap;
-  text-wrap: pretty;
-  overflow-wrap: break-word;
 }
 
 .detail-body {
@@ -3183,8 +3193,6 @@ html[data-detail-font="large"] {
   color: var(--detail-soft);
   line-height: 1.68;
   white-space: pre-wrap;
-  text-wrap: pretty;
-  overflow-wrap: break-word;
 }
 
 .detail-scroll-area {
