@@ -124,8 +124,9 @@ const navTrackedBtn = document.getElementById("navTrackedBtn");
 const navMarketTagsBtn = document.getElementById("navMarketTagsBtn");
 const navTrendsBtn = document.getElementById("navTrendsBtn");
 const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
-const mobileTabFilterBtn = document.getElementById("mobileTabFilterBtn");
-const mobileTrendsTabBtn = document.getElementById("mobileTrendsTabBtn");
+const mobileReadLaterTabBtn = document.getElementById("mobileReadLaterTabBtn");
+const mobileMoreTabBtn = document.getElementById("mobileMoreTabBtn");
+const mobileSourceEntryBtn = document.getElementById("mobileSourceEntryBtn");
 const sourceFilters = document.getElementById("sourceFilters");
 const mobileFilterSheet = document.getElementById("mobileFilterSheet");
 const mobileFilterBackdrop = document.getElementById("mobileFilterBackdrop");
@@ -2085,6 +2086,21 @@ function updateTrackedCreateButton() {
   if (trackedDefaultsInlineBtn) trackedDefaultsInlineBtn.classList.toggle("hidden", state.collection !== "tracked");
 }
 
+function mobileFilterAvailable(collection = state.collection) {
+  return ["feed", "read_later", "important", "favorites"].includes(collection);
+}
+
+function updateMobileSourceEntryButton() {
+  if (!mobileSourceEntryBtn) return;
+  const visible = mobileFilterAvailable();
+  const label = state.sourceFilter === "all" ? "来源" : sourceLabel(state.sourceFilter);
+  mobileSourceEntryBtn.classList.toggle("hidden", !visible);
+  mobileSourceEntryBtn.classList.toggle("active", visible && state.sourceFilter !== "all");
+  mobileSourceEntryBtn.textContent = label;
+  mobileSourceEntryBtn.title = `来源筛选：${sourceLabel(state.sourceFilter)}`;
+  mobileSourceEntryBtn.setAttribute("aria-label", `来源筛选，当前 ${sourceLabel(state.sourceFilter)}`);
+}
+
 function updateCollectionButtons() {
   if (navSearchBtn) navSearchBtn.classList.toggle("active", state.collection === "search");
   navFeedBtn.classList.toggle("active", state.collection === "feed");
@@ -2097,30 +2113,16 @@ function updateCollectionButtons() {
   if (navMarketTagsBtn) navMarketTagsBtn.classList.toggle("active", state.collection === "market_tags");
   if (navTrendsBtn) navTrendsBtn.classList.toggle("active", state.collection === "trends");
   if (mobileCollectionTriggerBtn) {
-    mobileCollectionTriggerBtn.classList.toggle("active", state.collection !== "trends");
-    const names = {
-      search: "搜索",
-      feed: "新闻流",
-      favorites: "收藏",
-      reminders: reminderNavLabel(),
-      important: "重要",
-      read_later: "稍后",
-      notes: "想法",
-      tracked: "跟踪",
-      market_tags: "板块",
-      trends: "趋势",
-    };
-    const remembered = names[state.lastNewsCollectionBeforeTrends] || "新闻流";
-    mobileCollectionTriggerBtn.textContent = state.collection === "trends"
-      ? remembered
-      : (names[state.collection] || "新闻流");
+    mobileCollectionTriggerBtn.classList.toggle("active", state.collection === "feed");
+    mobileCollectionTriggerBtn.textContent = "新闻";
   }
-  if (mobileTrendsTabBtn) {
-    mobileTrendsTabBtn.classList.toggle("active", state.collection === "trends");
+  if (mobileReadLaterTabBtn) {
+    mobileReadLaterTabBtn.classList.toggle("active", state.collection === "read_later");
   }
-  if (mobileTabFilterBtn) {
-    mobileTabFilterBtn.classList.toggle("hidden", state.collection === "search" || state.collection === "reminders" || state.collection === "notes" || state.collection === "tracked" || state.collection === "market_tags");
+  if (mobileMoreTabBtn) {
+    mobileMoreTabBtn.classList.toggle("active", state.collection !== "feed" && state.collection !== "read_later");
   }
+  updateMobileSourceEntryButton();
   if (manageMarketTagsBtn) {
     manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends" && state.collection !== "market_tags");
     if (state.collection === "trends" || state.collection === "market_tags") {
@@ -2140,17 +2142,16 @@ function updateMobileFilterCollectionText() {
   if (!mobileFilterCollection) return;
   const names = {
     search: "搜索",
-    feed: "新闻流",
+    feed: "新闻",
     favorites: "收藏",
     reminders: "提醒",
     important: "重要新闻",
-    read_later: "稍后再看",
+    read_later: "稍后阅读",
     notes: "想法",
     tracked: "跟踪",
     market_tags: "板块",
-    trends: "趋势",
   };
-  mobileFilterCollection.textContent = `当前集合：${names[state.collection] || "新闻流"}`;
+  mobileFilterCollection.textContent = `当前视图：${names[state.collection] || "新闻"}`;
 }
 
 function closeMobileFilterSheet() {
@@ -2163,46 +2164,163 @@ function closeMobileCollectionSheet() {
   if (!mobileCollectionSheet) return;
   mobileCollectionSheet.classList.add("hidden");
   mobileCollectionSheet.setAttribute("aria-hidden", "true");
+  updateCollectionButtons();
 }
 
-function renderMobileCollectionOptions() {
+function appendMobileMoreAction(container, item) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "mobile-more-row";
+  btn.classList.toggle("active", !!item.active);
+  const label = document.createElement("span");
+  label.className = "mobile-more-label";
+  label.textContent = item.label;
+  const desc = document.createElement("span");
+  desc.className = "mobile-more-desc";
+  desc.textContent = item.desc || "";
+  btn.appendChild(label);
+  btn.appendChild(desc);
+  btn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await item.onClick();
+  });
+  container.appendChild(btn);
+}
+
+function appendMobileMoreSelect(container, config) {
+  const label = document.createElement("label");
+  label.className = "mobile-more-select-row";
+  const text = document.createElement("span");
+  text.className = "mobile-more-label";
+  text.textContent = config.label;
+  const select = document.createElement("select");
+  select.className = "pref-select mobile-more-select";
+  config.options.forEach((option) => {
+    const opt = document.createElement("option");
+    opt.value = option.value;
+    opt.textContent = option.label;
+    select.appendChild(opt);
+  });
+  select.value = config.value;
+  select.addEventListener("change", () => config.onChange(select.value));
+  label.appendChild(text);
+  label.appendChild(select);
+  container.appendChild(label);
+}
+
+function renderMobileMoreOptions() {
   if (!mobileCollectionOptions) return;
   mobileCollectionOptions.innerHTML = "";
-  const options = [
-    { key: "search", label: "搜索" },
-    { key: "feed", label: "新闻流" },
-    { key: "read_later", label: "稍后阅读" },
-    { key: "important", label: "重要" },
-    { key: "reminders", label: reminderNavLabel() },
-    { key: "favorites", label: "收藏" },
-    { key: "notes", label: "想法" },
-    { key: "tracked", label: "跟踪" },
-    { key: "market_tags", label: "板块" },
+  const groups = [
+    {
+      title: "阅读集合",
+      items: [
+        { key: "search", label: "搜索", desc: "标题、正文、AI、想法与板块" },
+        { key: "important", label: "重要", desc: "已标记的重要新闻" },
+        { key: "favorites", label: "收藏", desc: "长期保留的新闻" },
+        { key: "reminders", label: reminderNavLabel(), desc: "待处理与已完成提醒" },
+        { key: "notes", label: "想法", desc: "新闻想法与板块想法" },
+      ],
+    },
+    {
+      title: "研究工作",
+      items: [
+        { key: "tracked", label: "跟踪", desc: "长期主题与时间线" },
+        { key: "market_tags", label: "板块", desc: "板块工作台与置顶信息" },
+      ],
+    },
   ];
-  for (const option of options) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "mobile-source-btn";
-    btn.textContent = option.label;
-    btn.classList.toggle("active", state.collection === option.key);
-    btn.addEventListener("click", async () => {
-      await switchCollection(option.key);
-      closeMobileCollectionSheet();
+
+  for (const group of groups) {
+    const section = document.createElement("section");
+    section.className = "mobile-more-group";
+    const title = document.createElement("h4");
+    title.textContent = group.title;
+    section.appendChild(title);
+    group.items.forEach((item) => {
+      appendMobileMoreAction(section, {
+        ...item,
+        active: state.collection === item.key,
+        onClick: async () => {
+          await switchCollection(item.key);
+          closeMobileCollectionSheet();
+        },
+      });
     });
-    mobileCollectionOptions.appendChild(btn);
+    mobileCollectionOptions.appendChild(section);
   }
+
+  const system = document.createElement("section");
+  system.className = "mobile-more-group";
+  const systemTitle = document.createElement("h4");
+  systemTitle.textContent = "系统";
+  system.appendChild(systemTitle);
+  appendMobileMoreAction(system, {
+    label: "设置",
+    desc: "模型、服务与运行配置",
+    onClick: async () => {
+      closeMobileCollectionSheet();
+      state.settingsSection = "services";
+      await openSettingsOverlay();
+    },
+  });
+  appendMobileMoreSelect(system, {
+    label: "外观",
+    value: themeModeSelect?.value || "system",
+    options: [
+      { value: "system", label: "跟随系统" },
+      { value: "light", label: "浅色" },
+      { value: "dark", label: "深色" },
+    ],
+    onChange: applyThemeMode,
+  });
+  appendMobileMoreSelect(system, {
+    label: "正文字体",
+    value: detailFontSelect?.value || "medium",
+    options: [
+      { value: "small", label: "小" },
+      { value: "medium", label: "中" },
+      { value: "large", label: "大" },
+    ],
+    onChange: applyDetailFontMode,
+  });
+  appendMobileMoreAction(system, {
+    label: "错误统计",
+    desc: "查看当日导入与处理错误",
+    onClick: async () => {
+      closeMobileCollectionSheet();
+      await openErrorStatsPanel();
+    },
+  });
+  appendMobileMoreAction(system, {
+    label: "Release Notes",
+    desc: "查看 README 中的版本记录",
+    onClick: async () => {
+      closeMobileCollectionSheet();
+      state.settingsSection = "release";
+      await openSettingsOverlay();
+    },
+  });
+  const version = document.createElement("div");
+  version.className = "mobile-more-version";
+  version.textContent = "News Reader v2.0.1.0";
+  system.appendChild(version);
+  mobileCollectionOptions.appendChild(system);
 }
 
 function openMobileCollectionSheet() {
   if (!mobileCollectionSheet) return;
   closeMobileFilterSheet();
-  renderMobileCollectionOptions();
+  renderMobileMoreOptions();
   mobileCollectionSheet.classList.remove("hidden");
   mobileCollectionSheet.setAttribute("aria-hidden", "false");
+  if (mobileCollectionTriggerBtn) mobileCollectionTriggerBtn.classList.remove("active");
+  if (mobileReadLaterTabBtn) mobileReadLaterTabBtn.classList.remove("active");
+  if (mobileMoreTabBtn) mobileMoreTabBtn.classList.add("active");
 }
 
 function openMobileFilterSheet() {
-  if (!mobileFilterSheet || state.collection === "search" || state.collection === "reminders" || state.collection === "notes" || state.collection === "tracked" || state.collection === "market_tags") return;
+  if (!mobileFilterSheet || !mobileFilterAvailable()) return;
   closeMobileCollectionSheet();
   updateMobileFilterCollectionText();
   renderSourceFilters(latestSourceOptions);
@@ -6590,24 +6708,25 @@ if (navTrendsBtn) {
 
 if (mobileCollectionTriggerBtn) {
   mobileCollectionTriggerBtn.addEventListener("click", async () => {
-    if (state.collection === "trends") {
-      await switchCollection(state.lastNewsCollectionBeforeTrends || "feed");
-      return;
-    }
+    await switchCollection("feed");
+  });
+}
+
+if (mobileReadLaterTabBtn) {
+  mobileReadLaterTabBtn.addEventListener("click", async () => {
+    await switchCollection("read_later");
+  });
+}
+
+if (mobileMoreTabBtn) {
+  mobileMoreTabBtn.addEventListener("click", () => {
     openMobileCollectionSheet();
   });
 }
 
-if (mobileTabFilterBtn) {
-  mobileTabFilterBtn.addEventListener("click", () => {
-    if (state.collection === "search") return;
+if (mobileSourceEntryBtn) {
+  mobileSourceEntryBtn.addEventListener("click", () => {
     openMobileFilterSheet();
-  });
-}
-
-if (mobileTrendsTabBtn) {
-  mobileTrendsTabBtn.addEventListener("click", async () => {
-    await switchCollection("trends");
   });
 }
 

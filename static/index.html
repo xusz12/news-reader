@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.0.0</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.0.0" />
+    <title>News Reader v2.0.1.0</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.1.0" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.0.0</span>
+          <span class="topbar-version">v2.0.1.0</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -43,14 +43,14 @@
           <button id="settingsBtn" class="icon-btn" type="button" title="打开设置" aria-label="打开设置"></button>
           <div class="topbar-bell-wrap">
             <button id="errorStatsBtn" class="icon-btn" type="button" title="查看当日错误统计" aria-label="查看当日错误统计"></button>
-            <section id="errorStatsPanel" class="error-stats-panel hidden" aria-live="polite">
-              <div class="error-stats-header">当日错误统计</div>
-              <div id="errorStatsBody" class="error-stats-body"></div>
-            </section>
           </div>
         </div>
       </div>
     </header>
+    <section id="errorStatsPanel" class="error-stats-panel hidden" aria-live="polite">
+      <div class="error-stats-header">当日错误统计</div>
+      <div id="errorStatsBody" class="error-stats-body"></div>
+    </section>
 
     <main id="workspace" class="workspace">
       <aside class="left-nav">
@@ -91,6 +91,7 @@
           </div>
         </div>
         <div class="controls feed-controls panel-toolbar">
+          <button id="mobileSourceEntryBtn" class="mobile-source-entry-btn hidden" type="button">来源</button>
           <button id="resumeAnchorBtn" class="icon-btn hidden" type="button"></button>
           <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
           <button id="sortOrderBtn" class="icon-btn hidden" type="button"></button>
@@ -547,24 +548,24 @@
     </div>
 
     <div id="mobileCollectionSheet" class="mobile-filter-sheet hidden" aria-hidden="true">
-      <button id="mobileCollectionBackdrop" class="mobile-filter-backdrop" type="button" aria-label="关闭集合面板"></button>
-      <section class="mobile-filter-panel" aria-label="集合选择">
+      <button id="mobileCollectionBackdrop" class="mobile-filter-backdrop" type="button" aria-label="关闭更多面板"></button>
+      <section class="mobile-filter-panel mobile-more-panel" aria-label="更多">
         <div class="mobile-filter-header">
-          <h3>选择集合</h3>
+          <h3>更多</h3>
           <button id="mobileCollectionCloseBtn" class="mobile-filter-close" type="button">完成</button>
         </div>
         <div class="mobile-filter-block">
-          <div id="mobileCollectionOptions" class="mobile-source-filters"></div>
+          <div id="mobileCollectionOptions" class="mobile-more-options"></div>
         </div>
       </section>
     </div>
 
-    <nav class="mobile-collection-tabs" aria-label="集合切换">
-      <button id="mobileCollectionTriggerBtn" class="mobile-tab active" type="button">新闻流</button>
-      <button id="mobileTabFilterBtn" class="mobile-tab mobile-filter-tab" type="button">新闻源</button>
-      <button id="mobileTrendsTabBtn" class="mobile-tab hidden" type="button">趋势</button>
+    <nav class="mobile-collection-tabs" aria-label="移动端主导航">
+      <button id="mobileCollectionTriggerBtn" class="mobile-tab active" type="button">新闻</button>
+      <button id="mobileReadLaterTabBtn" class="mobile-tab" type="button">稍后</button>
+      <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.0.0"></script>
+    <script src="/static/app.js?v=2.0.1.0"></script>
   </body>
 </html>
