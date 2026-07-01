@@ -51,7 +51,7 @@ html {
   --detail-card-border: rgba(148, 163, 184, 0.32);
   --detail-divider: rgba(148, 163, 184, 0.32);
   --detail-font-base: 0.875rem;
-  --detail-measure: 72ch;
+  --detail-measure: min(100%, 120ch);
   --status-pending: #b45309;
   --status-ready: #065f46;
   --status-failed: #b91c1c;
