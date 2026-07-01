@@ -4413,12 +4413,14 @@ def test_frontend_uses_stable_source_identity_for_icons_and_detail_layout():
     assert "function setDetailReminderCardExpanded(expanded)" in source
 
 
-def test_scrollbars_are_theme_colored():
+def test_scrollbars_are_hidden_but_scrollable():
     path = Path("/Users/x/news-reader/news-reader/static/style.css")
     source = path.read_text(encoding="utf-8")
     assert "--scrollbar-thumb" in source
-    assert "scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track)" in source
-    assert "*::-webkit-scrollbar-thumb" in source
+    assert "scrollbar-width: none" in source
+    assert "-ms-overflow-style: none" in source
+    assert "*::-webkit-scrollbar" in source
+    assert "display: none" in source
 
 
 def test_process_pending_jobs_once_twitter_success_does_not_enqueue_ai_job(tmp_path: Path, monkeypatch):

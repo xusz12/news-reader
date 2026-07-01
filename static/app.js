@@ -378,18 +378,12 @@ function setHint(text) {
   listHint.textContent = text || "";
 }
 
-function ingestModeLabel(mode) {
-  if (mode === "sidecar_json") return "JSON sidecar";
-  if (mode === "markdown_fallback") return "Markdown fallback";
-  return "Markdown";
-}
-
 function formatReindexHint(payload) {
-  const counts = payload?.ingest_counts || {};
-  const jsonCount = Number(counts.sidecar_json || 0);
-  const fallbackCount = Number(counts.markdown_fallback || 0);
-  const markdownCount = Number(counts.markdown_only || 0);
-  return `同步完成：JSON ${jsonCount}，fallback ${fallbackCount}，Markdown ${markdownCount}`;
+  const scanned = Number(payload?.scanned_files || 0);
+  const changed = Number(payload?.changed_files || 0);
+  const upserted = Number(payload?.upserted || 0);
+  const deleted = Number(payload?.deleted_stale || 0);
+  return `同步完成：扫描 ${scanned} 个文件，更新 ${changed} 个文件，写入 ${upserted} 条，清理 ${deleted} 条失效新闻`;
 }
 
 function closeErrorStatsPanel() {
@@ -2286,7 +2280,7 @@ function renderMobileMoreOptions() {
   });
   appendMobileMoreAction(system, {
     label: "错误统计",
-    desc: "查看当日导入与处理错误",
+    desc: "查看当日处理错误",
     onClick: async () => {
       closeMobileCollectionSheet();
       await openErrorStatsPanel();
@@ -2303,7 +2297,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.1.0";
+  version.textContent = "News Reader v2.0.1.2";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5119,17 +5113,7 @@ function renderDetail(item) {
   document.getElementById("detailTitle").textContent = rowTitleText(item);
   const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
   const detail = cached?.detail || null;
-  const ingestMode = cached?.ingest_mode || item.ingest_mode || "";
-  const ingestWarning = cached?.ingest_warning || item.ingest_warning || "";
-  const metaLines = [`${item.source || "未知来源"} · ${item.published_at || ""}`];
-  if (ingestMode) {
-    let ingestText = `导入路径：${ingestModeLabel(ingestMode)}`;
-    if (ingestMode === "markdown_fallback" && ingestWarning) {
-      ingestText += `（原因：${ingestWarning}）`;
-    }
-    metaLines.push(ingestText);
-  }
-  document.getElementById("detailMeta").innerHTML = metaLines.join("<br>");
+  document.getElementById("detailMeta").textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
   const summaryEl = document.getElementById("detailSummary");
   const hasDetailContent = !!(detail && detail.content);
   const hasSummary = !hasDetailContent && typeof item.summary === "string" && item.summary.trim().length > 0;

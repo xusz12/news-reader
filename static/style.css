@@ -205,12 +205,14 @@ html[data-theme="dark"] {
 }
 
 * {
-  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 *::-webkit-scrollbar-track {
@@ -1878,12 +1880,11 @@ button.active {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin: 4px 0 2px;
-  padding: 5px 6px 5px 8px;
+  margin: 5px 0 3px;
+  padding: 5px 8px 5px 10px;
   background: color-mix(in srgb, var(--panel-strong) 58%, transparent);
-  border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 58%, transparent);
-  border-radius: 0;
+  border: 1px solid color-mix(in srgb, var(--hairline) 58%, transparent);
+  border-radius: var(--radius-control);
   box-shadow: none;
   backdrop-filter: blur(12px) saturate(1.06);
   -webkit-backdrop-filter: blur(12px) saturate(1.06);
@@ -3203,7 +3204,7 @@ html[data-detail-font="large"] {
   padding: 13px 6px 16px 1px;
   border-top: 1px solid color-mix(in srgb, var(--detail-divider) 68%, transparent);
   background: transparent;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
 }
 
 .detail-scroll-area > .detail-note-card {
