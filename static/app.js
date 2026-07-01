@@ -6,7 +6,7 @@ let state = {
   readFilter: "unread", // all | unread
   feedReadFilter: "unread", // 仅新闻流记忆 all | unread
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
-  collection: "feed", // search | feed | favorites | reminders | important | read_later | notes | tracked | market_tags | trends
+  collection: "feed", // search | feed | daily | favorites | reminders | important | read_later | notes | tracked | market_tags | trends
   total: 0,
   loading: false,
   hasMore: true,
@@ -19,6 +19,10 @@ let state = {
   ideaFilter: "all", // all | article | trend
   itemsById: new Map(),
   reminderItems: [],
+  dailyBriefings: [],
+  dailyExpandedMonths: {},
+  selectedDailyDate: "",
+  selectedDailyBriefing: null,
   trackedTopics: [],
   trackedTimelineItems: [],
   trackedDailySummaries: [],
@@ -115,6 +119,7 @@ const manageMarketTagsBtn = document.getElementById("manageMarketTagsBtn");
 
 const navSearchBtn = document.getElementById("navSearchBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
+const navDailyBtn = document.getElementById("navDailyBtn");
 const navFavoritesBtn = document.getElementById("navFavoritesBtn");
 const navRemindersBtn = document.getElementById("navRemindersBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
@@ -271,6 +276,11 @@ const trackedDefaultsExcludePenaltyInput = document.getElementById("trackedDefau
 const trackedDefaultsSaveBtn = document.getElementById("trackedDefaultsSaveBtn");
 const trackedDefaultsRestoreBtn = document.getElementById("trackedDefaultsRestoreBtn");
 const detailBody = document.getElementById("detailBody");
+const detailDailyBody = document.getElementById("detailDailyBody");
+const detailDailyTitle = document.getElementById("detailDailyTitle");
+const detailDailyMeta = document.getElementById("detailDailyMeta");
+const detailDailyStatus = document.getElementById("detailDailyStatus");
+const detailDailyContent = document.getElementById("detailDailyContent");
 const detailChatBody = document.getElementById("detailChatBody");
 const detailAskBtn = document.getElementById("detailAskBtn");
 const detailChatBackBtn = document.getElementById("detailChatBackBtn");
@@ -593,7 +603,7 @@ function updateWorkspaceLayout() {
 }
 
 function updateSourceFilterVisibility() {
-  const visible = state.collection !== "trends" && state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes" && state.collection !== "market_tags";
+  const visible = state.collection !== "trends" && state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes" && state.collection !== "market_tags" && state.collection !== "daily";
   document.querySelectorAll("#sourceFilterPanel").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
@@ -2056,6 +2066,7 @@ function updateSortOrderButton() {
 function updateBatchActionButton() {
   if (
     state.collection === "search" ||
+    state.collection === "daily" ||
     state.collection === "favorites" ||
     state.collection === "reminders" ||
     state.collection === "important" ||
@@ -2098,6 +2109,7 @@ function updateMobileSourceEntryButton() {
 function updateCollectionButtons() {
   if (navSearchBtn) navSearchBtn.classList.toggle("active", state.collection === "search");
   navFeedBtn.classList.toggle("active", state.collection === "feed");
+  if (navDailyBtn) navDailyBtn.classList.toggle("active", state.collection === "daily");
   if (navFavoritesBtn) navFavoritesBtn.classList.toggle("active", state.collection === "favorites");
   if (navRemindersBtn) navRemindersBtn.classList.toggle("active", state.collection === "reminders");
   navImportantBtn.classList.toggle("active", state.collection === "important");
@@ -2137,6 +2149,7 @@ function updateMobileFilterCollectionText() {
   const names = {
     search: "搜索",
     feed: "新闻",
+    daily: "日报",
     favorites: "收藏",
     reminders: "提醒",
     important: "重要新闻",
@@ -2210,6 +2223,7 @@ function renderMobileMoreOptions() {
       title: "阅读集合",
       items: [
         { key: "search", label: "搜索", desc: "标题、正文、AI、想法与板块" },
+        { key: "daily", label: "日报", desc: "查看日报集合与结构化简报" },
         { key: "important", label: "重要", desc: "已标记的重要新闻" },
         { key: "favorites", label: "收藏", desc: "长期保留的新闻" },
         { key: "reminders", label: reminderNavLabel(), desc: "待处理与已完成提醒" },
@@ -2297,7 +2311,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.1.4";
+  version.textContent = "News Reader v2.0.2.0";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -2960,6 +2974,7 @@ function updateFeedHeader() {
   const headers = {
     search: ["全局检索", "搜索"],
     feed: ["今日阅读队列", "新闻流"],
+    daily: ["日报集合", "日报"],
     favorites: ["长期收藏", "收藏"],
     reminders: ["待回访事项", "提醒"],
     important: ["重点追踪", "重要新闻"],
@@ -3000,6 +3015,7 @@ function renderMeta() {
   }
   const names = {
     feed: "新闻流",
+    daily: "日报",
     favorites: "收藏",
     reminders: "提醒",
     important: "重要新闻",
@@ -3011,6 +3027,11 @@ function renderMeta() {
   };
   if (state.collection === "trends") {
     meta.textContent = `趋势 · 近 ${state.trendDays} 天 · ${state.trendRows.length} 个板块 · ${state.total} 条标记`;
+    pageInfo.textContent = "- / -";
+    return;
+  }
+  if (state.collection === "daily") {
+    meta.textContent = `日报 · 共 ${state.total} 份 · ${state.dailyBriefings.length} 个月`;
     pageInfo.textContent = "- / -";
     return;
   }
@@ -3086,6 +3107,7 @@ function closeTrendComposerView() {
 function restoreMarketWorkbenchDetailState() {
   if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
+  if (detailDailyBody) detailDailyBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
   if (detailEmpty) {
     renderDetailEmpty();
@@ -3106,6 +3128,7 @@ function clearTrendIdeaDetailState() {
 
 function emptyDetailMessage() {
   if (state.collection === "trends") return "选择一个趋势单元格查看新闻明细";
+  if (state.collection === "daily") return "选择一份日报查看详情";
   if (state.collection === "notes") return "选择一条想法查看详情";
   if (state.collection === "market_tags") return state.marketWorkbenchTag ? "选择一条板块内容查看详情" : "选择一条板块新闻查看详情";
   return "选择一条新闻查看摘要与正文";
@@ -5097,6 +5120,7 @@ function renderDetail(item) {
     detailTrendBody.classList.add("hidden");
     if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
     if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+    if (detailDailyBody) detailDailyBody.classList.add("hidden");
     detailBody.classList.add("hidden");
     detailChatBody.classList.add("hidden");
     renderDetailEmpty();
@@ -5106,6 +5130,7 @@ function renderDetail(item) {
   detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  if (detailDailyBody) detailDailyBody.classList.add("hidden");
   detailEmpty.classList.add("hidden");
   detailBody.classList.remove("hidden");
   syncDetailReturnButton();
@@ -5829,6 +5854,7 @@ function renderTrendIdeaDetail(item) {
   syncDetailReturnButton();
   detailBody.classList.add("hidden");
   detailTrendBody.classList.add("hidden");
+  if (detailDailyBody) detailDailyBody.classList.add("hidden");
   detailChatBody.classList.add("hidden");
   if (!item) {
     clearTrendIdeaDetailState();
@@ -5845,6 +5871,258 @@ function renderTrendIdeaDetail(item) {
   detailTrendIdeaMeta.textContent = `${item.trend_date_key || ""} · 创建 ${item.created_at || "-"} · 更新 ${item.updated_at || "-"}`;
   detailTrendIdeaText.textContent = item.note || "";
   updateWorkspaceLayout();
+}
+
+async function fetchDailyBriefingsIndex() {
+  const res = await fetch("/api/daily-briefings");
+  const data = await res.json().catch(() => ({ ok: false, error: "daily_briefings_fetch_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "daily_briefings_fetch_failed");
+  return data;
+}
+
+async function fetchDailyBriefingDetail(date) {
+  const res = await fetch(`/api/daily-briefings/${encodeURIComponent(date)}`);
+  const data = await res.json().catch(() => ({ ok: false, error: "daily_briefing_detail_fetch_failed" }));
+  if (!res.ok || !data.ok) throw new Error(data.error || "daily_briefing_detail_fetch_failed");
+  return data.briefing;
+}
+
+function syncDailyRowSelection() {
+  newsList.querySelectorAll(".daily-briefing-row").forEach((row) => {
+    row.classList.toggle("selected", row.dataset.date === state.selectedDailyDate);
+  });
+}
+
+function toggleDailyMonth(monthKey) {
+  state.dailyExpandedMonths[monthKey] = !state.dailyExpandedMonths[monthKey];
+  renderDailyBriefingsList();
+}
+
+function ensureDailyMonthState(months) {
+  let initialized = false;
+  months.forEach((month, index) => {
+    if (typeof state.dailyExpandedMonths[month.month] === "boolean") return;
+    state.dailyExpandedMonths[month.month] = index === 0;
+    initialized = true;
+  });
+  if (initialized) {
+    Object.keys(state.dailyExpandedMonths).forEach((monthKey) => {
+      if (!months.some((month) => month.month === monthKey)) {
+        delete state.dailyExpandedMonths[monthKey];
+      }
+    });
+  }
+}
+
+function buildDailyMonthRow(month) {
+  const li = document.createElement("li");
+  li.className = "daily-month-section";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "daily-month-toggle";
+  button.dataset.month = month.month || "";
+  const title = document.createElement("span");
+  title.className = "daily-month-title";
+  title.textContent = month.label || month.month || "未知月份";
+  const meta = document.createElement("span");
+  meta.className = "daily-month-meta";
+  const expanded = !!state.dailyExpandedMonths[month.month];
+  meta.textContent = `${month.count || 0} 份 · ${expanded ? "收起" : "展开"}`;
+  button.appendChild(title);
+  button.appendChild(meta);
+  button.addEventListener("click", () => toggleDailyMonth(month.month));
+  li.appendChild(button);
+  return li;
+}
+
+function buildDailyBriefingRow(item) {
+  const li = document.createElement("li");
+  li.className = "news-item daily-briefing-row";
+  li.dataset.date = item.date || "";
+
+  const line1 = document.createElement("div");
+  line1.className = "line1";
+  const badge = document.createElement("span");
+  badge.className = "note-badge";
+  badge.textContent = item.weekday_label || "日报";
+  const text = document.createElement("span");
+  text.className = "line1-text";
+  text.textContent = item.date_label || item.date || "";
+  line1.appendChild(badge);
+  line1.appendChild(text);
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = item.title || item.page_title || `${item.date_label || item.date || ""} 日报`;
+
+  const summary = document.createElement("p");
+  summary.className = "summary";
+  summary.textContent = item.metadata_summary || "无额外元数据";
+
+  li.appendChild(line1);
+  li.appendChild(title);
+  li.appendChild(summary);
+  li.addEventListener("click", async () => {
+    if (state.selectedDailyDate === item.date) {
+      state.selectedDailyDate = "";
+      state.selectedDailyBriefing = null;
+      syncDailyRowSelection();
+      closeDetailOnMobile();
+      renderDetail(null);
+      return;
+    }
+    state.selectedDailyDate = item.date || "";
+    syncDailyRowSelection();
+    await openDailyBriefingDetail(item.date, item);
+  });
+  li.classList.toggle("selected", state.selectedDailyDate === item.date);
+  return li;
+}
+
+function renderDailyBriefingsList() {
+  newsList.querySelectorAll(".daily-month-section, .daily-briefing-row").forEach((node) => node.remove());
+  ensureDailyMonthState(state.dailyBriefings);
+  const anchor = listHint && listHint.parentElement === newsList ? listHint : loadMoreSentinel;
+  state.dailyBriefings.forEach((month) => {
+    const monthRow = buildDailyMonthRow(month);
+    newsList.insertBefore(monthRow, anchor);
+    if (!state.dailyExpandedMonths[month.month]) return;
+    (month.items || []).forEach((item) => {
+      newsList.insertBefore(buildDailyBriefingRow(item), anchor);
+    });
+  });
+  syncDailyRowSelection();
+}
+
+function renderDailyInlineParts(parts, container) {
+  (parts || []).forEach((part) => {
+    const text = part?.text || "";
+    if (!text) return;
+    let node;
+    if (part.type === "bold") {
+      node = document.createElement("strong");
+      node.textContent = text;
+    } else if (part.type === "code") {
+      node = document.createElement("code");
+      node.textContent = text;
+    } else {
+      node = document.createTextNode(text);
+    }
+    container.appendChild(node);
+  });
+}
+
+function renderDailyBriefingDetailLoading(item) {
+  if (!detailDailyBody || !detailDailyTitle || !detailDailyMeta || !detailDailyStatus || !detailDailyContent) return;
+  detailTrendBody.classList.add("hidden");
+  if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+  if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  detailBody.classList.add("hidden");
+  detailChatBody.classList.add("hidden");
+  detailEmpty.classList.add("hidden");
+  detailDailyBody.classList.remove("hidden");
+  detailDailyTitle.textContent = "";
+  detailDailyMeta.textContent = "";
+  detailDailyStatus.textContent = "";
+  detailDailyTitle.classList.add("hidden");
+  detailDailyMeta.classList.add("hidden");
+  detailDailyStatus.classList.add("hidden");
+  detailDailyContent.innerHTML = "";
+  updateWorkspaceLayout();
+}
+
+function renderDailyBriefingDetail(briefing) {
+  if (!detailDailyBody || !detailDailyTitle || !detailDailyMeta || !detailDailyStatus || !detailDailyContent) return;
+  closeTagAdminView();
+  closeTrendComposerView();
+  clearTrendIdeaDetailState();
+  resetDetailChatState({ keepProvider: true });
+  stopDetailPolling();
+  closeMarketPicker();
+  closeReminderEditor();
+  closeDetailTrackEditor();
+  if (detailReminderCard) detailReminderCard.classList.add("hidden");
+  state.detailReturnToTrend = false;
+  state.detailReturnToTrackedTopicId = null;
+  syncDetailReturnButton();
+
+  detailTrendBody.classList.add("hidden");
+  if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+  if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  detailBody.classList.add("hidden");
+  detailChatBody.classList.add("hidden");
+  detailEmpty.classList.add("hidden");
+  detailDailyBody.classList.remove("hidden");
+  detailDailyTitle.textContent = "";
+  detailDailyMeta.textContent = "";
+  detailDailyStatus.textContent = "";
+  detailDailyTitle.classList.add("hidden");
+  detailDailyMeta.classList.add("hidden");
+  detailDailyStatus.classList.add("hidden");
+  detailDailyContent.innerHTML = "";
+
+  if (briefing.page_title) {
+    const pageTitle = document.createElement("h3");
+    pageTitle.className = "detail-title";
+    pageTitle.textContent = briefing.page_title;
+    detailDailyContent.appendChild(pageTitle);
+  }
+
+  if (briefing.parse_mode === "fallback" && briefing.parse_warning) {
+    const notice = document.createElement("p");
+    notice.className = "detail-daily-notice";
+    notice.textContent = "当前日报结构已退化为安全文本块展示";
+    detailDailyContent.appendChild(notice);
+  }
+
+  (briefing.sections || []).forEach((section) => {
+    const block = document.createElement("section");
+    block.className = "detail-daily-section";
+    const title = document.createElement("h4");
+    title.className = "detail-daily-section-title";
+    title.textContent = section.title || "内容";
+    block.appendChild(title);
+
+    const list = document.createElement("div");
+    list.className = "detail-daily-items";
+    (section.items || []).forEach((item) => {
+      const row = document.createElement("div");
+      row.className = item.type === "bullet" ? "detail-daily-bullet" : "detail-daily-paragraph";
+      renderDailyInlineParts(item.parts || [], row);
+      list.appendChild(row);
+    });
+    block.appendChild(list);
+    detailDailyContent.appendChild(block);
+  });
+
+  if (briefing.footer_note) {
+    const footer = document.createElement("p");
+    footer.className = "detail-daily-footer";
+    footer.textContent = briefing.footer_note;
+    detailDailyContent.appendChild(footer);
+  }
+
+  updateWorkspaceLayout();
+}
+
+async function openDailyBriefingDetail(date, seedItem = null) {
+  if (!date) return;
+  renderDailyBriefingDetailLoading(seedItem || { date });
+  try {
+    const briefing = await fetchDailyBriefingDetail(date);
+    if (state.collection !== "daily" || state.selectedDailyDate !== date) return;
+    state.selectedDailyBriefing = briefing;
+    renderDailyBriefingDetail(briefing);
+    openDetailOnMobile();
+  } catch (error) {
+    if (state.collection !== "daily" || state.selectedDailyDate !== date) return;
+    if (detailDailyStatus) {
+      detailDailyStatus.textContent = `读取失败：${error?.message || error}`;
+      detailDailyStatus.className = "detail-status failed";
+    }
+    if (detailDailyContent) detailDailyContent.innerHTML = "";
+    updateWorkspaceLayout();
+  }
 }
 
 async function fetchNewsPage(page) {
@@ -6059,7 +6337,7 @@ async function fetchSearchPage(page) {
 }
 
 function resetList() {
-  newsList.querySelectorAll(".news-item, .date-section, .market-summary-row").forEach((node) => node.remove());
+  newsList.querySelectorAll(".news-item, .date-section, .market-summary-row, .daily-month-section").forEach((node) => node.remove());
   enteredViewport.clear();
   state.itemsById.clear();
   state.detailCacheByUrl.clear();
@@ -6073,6 +6351,9 @@ function resetList() {
   state.selectedReminderId = null;
   state.selectedReminderDraftId = null;
   state.reminderItems = [];
+  state.dailyBriefings = [];
+  state.selectedDailyDate = "";
+  state.selectedDailyBriefing = null;
   state.trackedTimelineItems = [];
   stopDetailPolling();
   stopRowStatusPolling();
@@ -6192,6 +6473,31 @@ async function loadFirstPage(page = 1) {
         setHint("继续下滑加载更多");
       } else {
         setHint(`已显示与“${state.q}”相关的全部新闻`);
+      }
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      stopRowStatusPolling();
+      return;
+    }
+
+    if (state.collection === "daily") {
+      const data = await fetchDailyBriefingsIndex();
+      state.dailyBriefings = Array.isArray(data.months) ? data.months : [];
+      state.total = Number(data.total || 0);
+      state.pages = 1;
+      state.page = 1;
+      state.hasMore = false;
+      state.dateCounts = new Map();
+      showTrendsView(false);
+      showTrackedView(false);
+      renderDailyBriefingsList();
+      renderMeta();
+      if (state.total === 0) {
+        setHint("当前日报目录下还没有可用简报。");
+      } else {
+        setHint("选择一份日报，在右栏查看结构化内容。");
       }
       if (readObserver) {
         readObserver.disconnect();
@@ -6398,6 +6704,7 @@ async function loadNextPage() {
     }
     return;
   }
+  if (state.collection === "daily") return;
   if (state.collection === "trends") return;
   if (state.collection === "market_tags") {
     if (!state.hasMore || !state.marketWorkbenchTag) return;
@@ -6649,6 +6956,12 @@ if (navSearchBtn) {
 navFeedBtn.addEventListener("click", async () => {
   await switchCollection("feed");
 });
+
+if (navDailyBtn) {
+  navDailyBtn.addEventListener("click", async () => {
+    await switchCollection("daily");
+  });
+}
 
 if (navFavoritesBtn) {
   navFavoritesBtn.addEventListener("click", async () => {

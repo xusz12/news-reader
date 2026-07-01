@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from daily_briefings import list_daily_briefing_files, parse_daily_briefing_date, parse_daily_briefing_file
 from llm_client import (
     LLMClientError,
     generate_codex_fallback_translation,
@@ -33,13 +34,21 @@ from llm_client import (
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
 from secret_store import SecretStoreError, delete_secret, has_secret, read_secret, write_secret
-from settings import default_app_settings, load_app_settings, resolve_daily_news_dir, resolve_db_path, save_app_settings
+from settings import (
+    default_app_settings,
+    load_app_settings,
+    resolve_daily_briefing_dir,
+    resolve_daily_news_dir,
+    resolve_db_path,
+    save_app_settings,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
 SCHEMA_PATH = BASE_DIR / "schema.sql"
 STATIC_DIR = BASE_DIR / "static"
 DAILY_NEWS_DIR = resolve_daily_news_dir()
+DAILY_BRIEFING_DIR = resolve_daily_briefing_dir()
 DB_PATH = resolve_db_path()
 README_PATH = BASE_DIR / "README.md"
 
@@ -1784,6 +1793,64 @@ def load_error_stats(day: str) -> list[dict]:
         for time_key, labels in grouped.items()
     ]
     return [{"date": day, "groups": ordered}]
+
+
+def load_daily_briefing_index() -> tuple[list[dict], int]:
+    months: list[dict] = []
+    current_month = ""
+    current_items: list[dict] = []
+    total = 0
+    for path in list_daily_briefing_files(DAILY_BRIEFING_DIR):
+        parsed = parse_daily_briefing_file(path)
+        month_key = parsed.get("month") or ""
+        if month_key != current_month:
+            if current_month:
+                months.append(
+                    {
+                        "month": current_month,
+                        "label": current_items[0]["month_label"] if current_items else current_month,
+                        "count": len(current_items),
+                        "items": current_items,
+                    }
+                )
+            current_month = month_key
+            current_items = []
+        current_items.append(
+            {
+                "date": parsed["date"],
+                "filename": parsed.get("filename") or "",
+                "mtime": parsed.get("mtime") or "",
+                "date_label": parsed["date_label"],
+                "weekday_label": parsed["weekday_label"],
+                "month": parsed["month"],
+                "month_label": parsed["month_label"],
+                "title": parsed["title"],
+                "page_title": parsed.get("page_title") or "",
+                "metadata": parsed.get("metadata") or [],
+                "metadata_summary": parsed.get("metadata_summary") or "",
+                "parse_mode": parsed.get("parse_mode") or "structured",
+                "parse_warning": parsed.get("parse_warning") or "",
+            }
+        )
+        total += 1
+    if current_month:
+        months.append(
+            {
+                "month": current_month,
+                "label": current_items[0]["month_label"] if current_items else current_month,
+                "count": len(current_items),
+                "items": current_items,
+            }
+        )
+    return months, total
+
+
+def find_daily_briefing_path(date_key: str) -> Path | None:
+    target = f"{date_key}_daily.md"
+    for path in list_daily_briefing_files(DAILY_BRIEFING_DIR):
+        if path.name == target:
+            return path
+    return None
 
 
 def serialize_news_rows(items: list[dict], market_tags_map: dict[str, list[dict]]) -> list[dict]:
@@ -4120,6 +4187,32 @@ def start_detail_worker() -> None:
 @app.get("/")
 def index():
     return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.get("/api/daily-briefings")
+def api_daily_briefings():
+    months, total = load_daily_briefing_index()
+    return jsonify(
+        {
+            "ok": True,
+            "months": months,
+            "total": total,
+        }
+    )
+
+
+@app.get("/api/daily-briefings/<date_key>")
+def api_daily_briefing_detail(date_key: str):
+    try:
+        normalized = parse_daily_briefing_date(date_key)
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid_date"}), 400
+
+    path = find_daily_briefing_path(normalized)
+    if not path:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+
+    return jsonify({"ok": True, "briefing": parse_daily_briefing_file(path)})
 
 
 @app.get("/api/news")

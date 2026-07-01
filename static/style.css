@@ -1940,6 +1940,42 @@ button.active {
   background: transparent;
 }
 
+.daily-month-section {
+  position: sticky;
+  top: 2px;
+  z-index: 5;
+  margin: 7px 0 4px;
+  list-style: none;
+}
+
+.daily-month-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--panel-strong) 64%, transparent);
+  border: 1px solid color-mix(in srgb, var(--hairline) 58%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.daily-month-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--muted) 80%, var(--text));
+}
+
+.daily-month-meta {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--muted) 76%, var(--text));
+}
+
+.daily-briefing-row .summary {
+  color: color-mix(in srgb, var(--row-summary) 90%, var(--muted));
+}
+
 .news-item.selected {
   outline: none;
   background:
@@ -3151,6 +3187,91 @@ html[data-detail-font="large"] {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.detail-daily-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.detail-daily-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.detail-daily-content {
+  max-width: var(--detail-measure);
+  margin-top: 0;
+  display: grid;
+  gap: 14px;
+  color: var(--detail-text);
+}
+
+.detail-daily-notice {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.detail-daily-section {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--detail-divider) 82%, transparent);
+}
+
+.detail-daily-section-title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.detail-daily-content > .detail-daily-section:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.detail-daily-items {
+  display: grid;
+  gap: 10px;
+}
+
+.detail-daily-items code {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-soft) 72%, transparent);
+  font-size: 0.92em;
+}
+
+.detail-daily-bullet,
+.detail-daily-paragraph {
+  margin: 0;
+  color: var(--detail-text);
+  line-height: calc(1.7 * var(--detail-font-scale));
+}
+
+.detail-daily-bullet {
+  position: relative;
+  padding-left: 18px;
+}
+
+.detail-daily-bullet::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: color-mix(in srgb, var(--accent) 54%, var(--text));
+}
+
+.detail-daily-footer {
+  margin: 0;
+  padding-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .detail-actions {

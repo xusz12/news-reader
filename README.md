@@ -4,6 +4,16 @@
 
 ## What's Changed
 
+### 2026-07-01 — v2.0.2.0 feat: 日报集合与安全 Markdown 渲染
+- **文件**
+  - *daily_briefings.py（+）*、*settings.py（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*、*README.md（+）*
+    - 新增 `NEWS_READER_DAILY_BRIEFING_DIR` 与只读日报目录扫描，提供 `/api/daily-briefings`、`/api/daily-briefings/<date>` 两个接口
+    - 新增安全 Markdown 子集解析：支持 `## / ###` 分段、普通 bullet、裸文本段落、`**加粗**`、行内代码与尾部统计脚注；结构异常时退化为安全文本块，不使用不安全 HTML
+    - 左侧导航新增 `日报`，中栏按月份折叠展示日报集合，右栏新增日报详情面板；日报视图不再暴露普通新闻流的来源筛选、已读/稍后、抓正文、AI 翻译与提问语义
+    - 覆盖三类真实模板样本，并补充缺目录、非法日期与路径穿越场景测试
+    - 顶栏版本号、页面 `<title>`、静态资源版本参数与移动端更多面板版本文案同步更新到 `v2.0.2.0`
+- **影响**：本轮新增日报集合只读浏览能力，不写数据库、不改 schema、不混入普通 `items` 流；因涉及 `app.py` 新接口，部署后需重启 Flask。
+
 ### 2026-07-01 — v2.0.1.4 fix: 桌面端右栏大屏正文宽度修复
 - **文件**
   - *static/index.html（+）*、*static/style.css（+）*、*static/app.js（+）*、*README.md（+）*

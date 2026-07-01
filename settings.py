@@ -8,6 +8,7 @@ from pathlib import Path
 DEFAULT_DAILY_NEWS_DIR = Path(
     "/Users/x/Library/Mobile Documents/iCloud~md~obsidian/Documents/DailyNews"
 )
+DEFAULT_DAILY_BRIEFING_DIR = DEFAULT_DAILY_NEWS_DIR / "briefings" / "daily"
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "news_index.sqlite3"
 DEFAULT_APP_SETTINGS_PATH = Path(__file__).resolve().parent / "app_settings.json"
 
@@ -40,6 +41,11 @@ DEFAULT_APP_SETTINGS = {
 def resolve_daily_news_dir() -> Path:
     raw = os.environ.get("NEWS_READER_DAILY_NEWS_DIR", "").strip()
     return Path(raw) if raw else DEFAULT_DAILY_NEWS_DIR
+
+
+def resolve_daily_briefing_dir() -> Path:
+    raw = os.environ.get("NEWS_READER_DAILY_BRIEFING_DIR", "").strip()
+    return Path(raw) if raw else DEFAULT_DAILY_BRIEFING_DIR
 
 
 def resolve_db_path() -> Path:

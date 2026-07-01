@@ -41,6 +41,71 @@ def make_api_sidecar(path: Path, *, title: str, url: str, summary: str | None = 
     )
 
 
+def make_daily_briefing(path: Path, body: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body.strip() + "\n", encoding="utf-8")
+
+
+DAILY_BRIEFING_0629 = """
+## 简报信息
+- 执行模式：`daily`
+- 使用文件：`dailyFreshNews_2026-06-29.md`
+- 执行时间：`6月29日 21:03`
+
+## 当前关注
+
+- 特朗普称伊朗已提出会谈请求，明日将于卡塔尔多哈举行——外交窗口开启
+
+## 地缘政治
+
+- **中东**：特朗普称伊朗提出会谈请求，明日多哈会谈
+"""
+
+
+DAILY_BRIEFING_0630 = """
+## 简报信息
+- 执行模式：daily（今日终版）
+- 使用文件：dailyFreshNews_2026-06-30.md
+- 执行时间：6月30日 21:02
+- 全日采集：197条，10轮运行（14/14源全部成功，0错误）
+
+---
+
+## 📋 6月30日 全日摘要
+
+### 💾 存储/AI芯片（全日主线）
+- **韩国芯片风暴**：科技巨头承诺超5500亿美元缓解"内存末日"
+
+### 🔍 关注追踪
+【市场】韩国芯片巨投：内存末日应对+李在明8800亿AI豪赌
+【科技】内存短缺推动AI基础设施投资，韩国核电建设加速
+
+---
+
+*今日数据：197条，10轮运行（00:01→21:00），14/14源全部成功*
+"""
+
+
+DAILY_BRIEFING_0701 = """
+## 简报信息
+- 执行模式：daily
+- 使用文件：dailyFreshNews_2026-07-01.md
+- 执行时间：7月1日 8:03
+- 全日累计：102条（含00:01/04:00夜间轮），29条新增（14/14源全部成功）
+
+---
+
+## 📋 7月1日 晨间简报
+
+### 🤖 AI动态
+- **美国解除对Anthropic Fable和Mythos AI模型的出口管制**
+- **Anthropic推出Claude Science**用于科学研究自动化；同时发布`Claude Sonnet 5`
+
+### 💰 市场/金融
+- **耐克业绩超预期**，Q2收官
+"""
+
+
 def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"
     daily_dir.mkdir(parents=True)
@@ -125,6 +190,91 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     combo = client.get("/api/news?collection=important&read_filter=unread")
     assert combo.status_code == 200
     assert combo.get_json()["total"] == 1
+
+
+def test_daily_briefings_index_and_detail(tmp_path: Path, monkeypatch):
+    briefing_dir = tmp_path / "briefings" / "daily"
+    make_daily_briefing(briefing_dir / "2026-06-29_daily.md", DAILY_BRIEFING_0629)
+    make_daily_briefing(briefing_dir / "2026-06-30_daily.md", DAILY_BRIEFING_0630)
+    make_daily_briefing(briefing_dir / "2026-07-01_daily.md", DAILY_BRIEFING_0701)
+    daily_root = tmp_path / "DailyNews"
+    daily_root.mkdir()
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_root))
+    monkeypatch.setenv("NEWS_READER_DAILY_BRIEFING_DIR", str(briefing_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    index = client.get("/api/daily-briefings")
+    assert index.status_code == 200
+    payload = index.get_json()
+    assert payload["ok"] is True
+    assert payload["total"] == 3
+    assert [month["month"] for month in payload["months"]] == ["2026-07", "2026-06"]
+    assert payload["months"][0]["items"][0]["title"] == "📋 7月1日 晨间简报"
+    assert "执行模式：daily" in payload["months"][0]["items"][0]["metadata_summary"]
+
+    june29 = client.get("/api/daily-briefings/2026-06-29")
+    assert june29.status_code == 200
+    june29_payload = june29.get_json()["briefing"]
+    assert june29_payload["metadata"][0]["value"] == "daily"
+    assert june29_payload["title"] == "6月29日 日报"
+    assert june29_payload["sections"][0]["title"] == "当前关注"
+    assert june29_payload["sections"][1]["items"][0]["parts"][0] == {"type": "bold", "text": "中东"}
+
+    june30 = client.get("/api/daily-briefings/2026-06-30")
+    assert june30.status_code == 200
+    june30_payload = june30.get_json()["briefing"]
+    assert june30_payload["title"] == "📋 6月30日 全日摘要"
+    assert june30_payload["footer_note"].startswith("今日数据：197条")
+    tracking = next(section for section in june30_payload["sections"] if section["title"] == "🔍 关注追踪")
+    assert [item["type"] for item in tracking["items"]] == ["paragraph", "paragraph"]
+
+    july01 = client.get("/api/daily-briefings/2026-07-01")
+    assert july01.status_code == 200
+    july01_payload = july01.get_json()["briefing"]
+    ai_section = next(section for section in july01_payload["sections"] if section["title"] == "🤖 AI动态")
+    assert any(part["type"] == "code" and part["text"] == "Claude Sonnet 5" for part in ai_section["items"][1]["parts"])
+
+
+def test_daily_briefings_missing_dir_and_invalid_date(tmp_path: Path, monkeypatch):
+    missing_briefing_dir = tmp_path / "missing-briefings"
+    daily_root = tmp_path / "DailyNews"
+    daily_root.mkdir()
+    db_path = tmp_path / "news_index.sqlite3"
+
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_root))
+    monkeypatch.setenv("NEWS_READER_DAILY_BRIEFING_DIR", str(missing_briefing_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    empty_index = client.get("/api/daily-briefings")
+    assert empty_index.status_code == 200
+    assert empty_index.get_json()["months"] == []
+    assert empty_index.get_json()["total"] == 0
+
+    invalid = client.get("/api/daily-briefings/2026-99-99")
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"] == "invalid_date"
+
+    traversal = client.get("/api/daily-briefings/..")
+    assert traversal.status_code == 400
+    assert traversal.get_json()["error"] == "invalid_date"
+
+    missing = client.get("/api/daily-briefings/2026-07-31")
+    assert missing.status_code == 404
+    assert missing.get_json()["error"] == "not_found"
 
 
 def test_reindex_and_detail_return_ingest_provenance(tmp_path: Path, monkeypatch):

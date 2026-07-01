@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.1.4</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.1.4" />
+    <title>News Reader v2.0.2.0</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.2.0" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.1.4</span>
+          <span class="topbar-version">v2.0.2.0</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -58,6 +58,7 @@
           <h2>阅读</h2>
           <button id="navSearchBtn" class="nav-btn">搜索</button>
           <button id="navFeedBtn" class="nav-btn active">新闻流</button>
+          <button id="navDailyBtn" class="nav-btn">日报</button>
           <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
           <button id="navImportantBtn" class="nav-btn">重要新闻</button>
           <button id="navRemindersBtn" class="nav-btn">提醒</button>
@@ -373,6 +374,16 @@
             </div>
           </section>
         </div>
+        <div id="detailDailyBody" class="detail-body detail-daily-body hidden">
+          <div class="detail-daily-header">
+            <div>
+              <h3 id="detailDailyTitle" class="detail-title">日报</h3>
+              <div id="detailDailyMeta" class="detail-meta"></div>
+            </div>
+          </div>
+          <div id="detailDailyStatus" class="detail-status muted">选择一份日报查看详情</div>
+          <div id="detailDailyContent" class="detail-daily-content"></div>
+        </div>
         <div id="detailBody" class="detail-body hidden">
           <button id="detailReturnToTrendBtn" class="detail-return-btn hidden" type="button">返回趋势明细</button>
           <button id="detailReturnToTrackedBtn" class="detail-return-btn hidden" type="button">返回跟踪主题</button>
@@ -568,6 +579,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.1.4"></script>
+    <script src="/static/app.js?v=2.0.2.0"></script>
   </body>
 </html>
