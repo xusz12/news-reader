@@ -180,6 +180,7 @@ MARKET_WORKBENCH_SUMMARY_NOTE_LIMIT = 1200
 MARKET_WORKBENCH_SUMMARY_BODY_LIMIT = 2000
 MARKET_WORKBENCH_CONTENT_FILTERS = {"all", "ideas", "bullish", "bearish"}
 MARKET_PIN_NOTE_MAX_LEN = 5000
+CHAT_ARCHIVE_SUMMARY_MAX_LEN = 200
 RELEASE_NOTE_HEADING_RE = re.compile(r"^###\s+(?P<date>\d{4}-\d{2}-\d{2})\s+—\s+(?P<title>.+?)\s*$")
 VERSION_RE = re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE)
 SECRET_PROVIDER_MAP = {
@@ -1687,7 +1688,7 @@ def build_chat_archive_prompt(*, title: str, source: str, published_at: str, mes
         "你是一名新闻研究助手。请把下面这轮围绕同一篇新闻的对话压缩成一条中文归档结论。\n"
         "硬性要求：\n"
         "1. 只输出最终归档内容，不要任何前后缀。\n"
-        "2. 必须是中文，且不超过100字。\n"
+        f"2. 必须是中文，且不超过{CHAT_ARCHIVE_SUMMARY_MAX_LEN}字。\n"
         "3. 不复述问答过程，不列Q/A。\n"
         "4. 不写“用户问了”“助手回答了”“本轮对话”。\n"
         "5. 只保留最终解决的核心信息、判断或行动线索。\n"
@@ -6495,7 +6496,7 @@ def api_news_chat_archive(item_id: str):
     summary = " ".join((payload.get("summary") or "").split()).strip()
     if not summary:
         return jsonify({"ok": False, "error": "empty_archive_summary"}), 502
-    if len(summary) > 100:
+    if len(summary) > CHAT_ARCHIVE_SUMMARY_MAX_LEN:
         return jsonify({"ok": False, "error": "invalid_archive_summary"}), 502
 
     stamp = now_ts()[:16]

@@ -4881,6 +4881,47 @@ def test_news_chat_archive_provider_failure_does_not_write_note(tmp_path: Path, 
     assert detail["note"] is None
 
 
+def test_news_chat_archive_accepts_200_chars(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Archive 200](https://example.com/chat-archive-200)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    summary = "甲" * 150
+    monkeypatch.setattr(
+        app_module,
+        "run_codex_chat_archive",
+        lambda **kwargs: {"provider": "codex", "model": kwargs["model"], "summary": summary},
+    )
+    res = client.post(
+        f"/api/news/{item['id']}/chat/archive",
+        json={
+            "messages": [
+                {"role": "user", "content": "总结一下"},
+                {"role": "assistant", "content": "好的。"},
+            ]
+        },
+    )
+    assert res.status_code == 200
+    assert res.get_json()["archive_summary"] == summary
+
+
 def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 

@@ -4,6 +4,14 @@
 
 ## What's Changed
 
+### 2026-07-02 — v2.0.2.1 fix: 列表行高稳定与 chat 归档扩容
+- **文件**
+  - *app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*
+    - 中栏新闻行默认标题与摘要统一按 3 行截断，选中前后不再因为 clamp 从 2 行放宽到 3 行而挤压其他新闻
+    - chat 归档长度上限从 `100` 字调整为 `200` 字，并同步 prompt 与后端校验
+    - 顶栏版本号、页面 `<title>`、静态资源版本参数与移动端更多面板版本文案同步更新到 `v2.0.2.1`
+- **影响**：本轮不新增 schema；仅更新前端列表展示与 chat 归档长度限制。因涉及 `app.py` 归档接口口径调整，部署后需重启 Flask。
+
 ### 2026-07-01 — v2.0.2.0 feat: 日报集合与安全 Markdown 渲染
 - **文件**
   - *daily_briefings.py（+）*、*settings.py（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*、*README.md（+）*
