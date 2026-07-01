@@ -1167,11 +1167,22 @@ button.active {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
   margin: -13px -13px 11px;
   padding: 8px 13px;
   position: relative;
+  row-gap: 8px;
+}
+
+.feed-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
 }
 
 .mobile-source-entry-btn {
@@ -1198,6 +1209,11 @@ button.active {
   padding: 4px 0 8px;
 }
 
+.feed-controls .search-page-controls {
+  margin: 0;
+  padding: 0;
+}
+
 .reminder-filter-bar {
   flex: 0 0 auto;
   display: flex;
@@ -1205,6 +1221,14 @@ button.active {
   margin: 2px 6px 8px;
   padding: 0 0 9px;
   border-bottom: 1px solid var(--hairline);
+}
+
+.feed-controls .reminder-filter-bar {
+  margin: 0;
+  padding: 0;
+  border-bottom: 0;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .reminder-filter-btn {
@@ -1231,6 +1255,10 @@ button.active {
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.feed-controls .search-page-form {
+  margin-bottom: 0;
 }
 
 .market-workbench-form {
@@ -3698,12 +3726,23 @@ html[data-detail-font="large"] {
     margin: 0;
     padding: 6px 8px;
     justify-content: flex-start;
+    flex-wrap: nowrap;
     border-radius: 0;
     border-bottom: 1px solid var(--hairline);
     background: color-mix(in srgb, var(--bg) 92%, var(--panel));
     box-shadow: none;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+
+  .feed-toolbar-actions {
+    margin-left: 0;
+    flex-wrap: nowrap;
+  }
+
+  .feed-controls .reminder-filter-bar,
+  .feed-controls .search-page-controls {
+    flex-wrap: nowrap;
   }
 
   .feed-controls::-webkit-scrollbar {

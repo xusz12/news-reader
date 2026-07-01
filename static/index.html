@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.1.2</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.1.2" />
+    <title>News Reader v2.0.1.3</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.1.3" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.1.2</span>
+          <span class="topbar-version">v2.0.1.3</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -92,38 +92,40 @@
         </div>
         <div class="controls feed-controls panel-toolbar">
           <button id="mobileSourceEntryBtn" class="mobile-source-entry-btn hidden" type="button">来源</button>
-          <button id="resumeAnchorBtn" class="icon-btn hidden" type="button"></button>
-          <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
-          <button id="sortOrderBtn" class="icon-btn hidden" type="button"></button>
           <button id="trackedCreateInlineBtn" class="detail-retry-btn hidden" type="button">新建跟踪</button>
           <button id="trackedDefaultsInlineBtn" class="detail-retry-btn hidden" type="button">默认参数</button>
-          <button id="markAllReadBtn" class="icon-btn" type="button"></button>
-          <button id="refreshBtn" class="icon-btn" type="button"></button>
-          <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
-        </div>
-        <div id="reminderFilterBar" class="reminder-filter-bar hidden" aria-label="提醒状态筛选">
-          <button id="reminderFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
-          <button id="reminderFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
-          <button id="reminderFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
-        </div>
-        <div id="ideaFilterBar" class="reminder-filter-bar hidden" aria-label="想法类型筛选">
-          <button id="ideaFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
-          <button id="ideaFilterArticleBtn" class="reminder-filter-btn" type="button">新闻想法</button>
-          <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">趋势想法</button>
-        </div>
-        <section id="marketWorkbenchBar" class="search-page-controls hidden" aria-label="板块工作台筛选">
-          <div class="search-page-form market-workbench-form">
-            <select id="marketWorkbenchTagSelect" class="pref-select search-page-select" aria-label="板块选择"></select>
-            <select id="marketWorkbenchFilterSelect" class="pref-select search-page-select" aria-label="内容筛选">
-              <option value="all">全部</option>
-              <option value="ideas">仅想法</option>
-              <option value="bullish">看多</option>
-              <option value="bearish">看空</option>
-            </select>
-            <button id="marketWorkbenchSummaryBtn" class="detail-retry-btn hidden" type="button">总结近期趋势</button>
-            <button id="marketWorkbenchComposeBtn" class="detail-retry-btn" type="button">添加独立想法</button>
+          <div id="reminderFilterBar" class="reminder-filter-bar hidden" aria-label="提醒状态筛选">
+            <button id="reminderFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
+            <button id="reminderFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
+            <button id="reminderFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
           </div>
-        </section>
+          <div id="ideaFilterBar" class="reminder-filter-bar hidden" aria-label="想法类型筛选">
+            <button id="ideaFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+            <button id="ideaFilterArticleBtn" class="reminder-filter-btn" type="button">新闻想法</button>
+            <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">趋势想法</button>
+          </div>
+          <section id="marketWorkbenchBar" class="search-page-controls hidden" aria-label="板块工作台筛选">
+            <div class="search-page-form market-workbench-form">
+              <select id="marketWorkbenchTagSelect" class="pref-select search-page-select" aria-label="板块选择"></select>
+              <select id="marketWorkbenchFilterSelect" class="pref-select search-page-select" aria-label="内容筛选">
+                <option value="all">全部</option>
+                <option value="ideas">仅想法</option>
+                <option value="bullish">看多</option>
+                <option value="bearish">看空</option>
+              </select>
+              <button id="marketWorkbenchSummaryBtn" class="detail-retry-btn hidden" type="button">总结近期趋势</button>
+              <button id="marketWorkbenchComposeBtn" class="detail-retry-btn" type="button">添加独立想法</button>
+            </div>
+          </section>
+          <div class="feed-toolbar-actions">
+            <button id="resumeAnchorBtn" class="icon-btn hidden" type="button"></button>
+            <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
+            <button id="sortOrderBtn" class="icon-btn hidden" type="button"></button>
+            <button id="markAllReadBtn" class="icon-btn" type="button"></button>
+            <button id="refreshBtn" class="icon-btn" type="button"></button>
+            <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
+          </div>
+        </div>
         <section id="marketWorkbenchPinCard" class="detail-note-card market-pin-card hidden" aria-label="板块置顶信息"></section>
         <section id="searchPageControls" class="search-page-controls hidden" aria-label="搜索条件">
           <div class="search-page-form" role="search">
@@ -566,6 +568,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.1.2"></script>
+    <script src="/static/app.js?v=2.0.1.3"></script>
   </body>
 </html>
