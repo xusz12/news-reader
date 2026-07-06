@@ -354,14 +354,20 @@ def _build_news_where_clause(
         where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")
         like = f"%{q}%"
         args.extend([like, like, like])
-    if read_filter == "unread":
-        where.append("st.read_at IS NULL")
-    elif read_filter == "read":
-        where.append("st.read_at IS NOT NULL")
+    if collection == "read_later":
+        if read_filter == "unread":
+            where.append("st.read_later_at IS NOT NULL")
+        elif read_filter == "read":
+            where.append("(ad.url IS NOT NULL AND st.read_later_at IS NULL)")
+        else:
+            where.append("(st.read_later_at IS NOT NULL OR ad.url IS NOT NULL)")
+    else:
+        if read_filter == "unread":
+            where.append("st.read_at IS NULL")
+        elif read_filter == "read":
+            where.append("st.read_at IS NOT NULL")
     if collection == "important":
         where.append("st.important_at IS NOT NULL")
-    elif collection == "read_later":
-        where.append("st.read_later_at IS NOT NULL")
     elif collection == "favorites":
         where.append("st.favorite_at IS NOT NULL")
     elif collection == "notes":
@@ -1909,7 +1915,7 @@ def load_news_item_map(conn: sqlite3.Connection, item_ids: list[str]) -> dict[st
         SELECT items.id, items.source_file, items.item_order, items.published_at,
                items.date, items.time, items.source, items.source_type,
                items.source_name, items.title, items.summary, items.url,
-               st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+               st.read_at, st.important_at, st.read_later_at, st.read_later_done_at, st.favorite_at,
                dj.status AS detail_status,
                dj.last_error AS detail_error,
                CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
@@ -1962,7 +1968,7 @@ def load_idea_rows(conn: sqlite3.Connection, idea_type: str, sort_order: str) ->
             SELECT items.id, items.source_file, items.item_order, items.published_at,
                    items.date, items.time, items.source, items.source_type,
                    items.source_name, items.title, items.summary, items.url,
-                   st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+                   st.read_at, st.important_at, st.read_later_at, st.read_later_done_at, st.favorite_at,
                    dj.status AS detail_status,
                    dj.last_error AS detail_error,
                    CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
@@ -2388,6 +2394,7 @@ def tracked_topic_timeline_items(conn: sqlite3.Connection, topic_id: int) -> lis
                    st.read_at,
                    st.important_at,
                    st.read_later_at,
+                   st.read_later_done_at,
                    st.favorite_at,
                    dj.status AS detail_status,
                    dj.last_error AS detail_error,
@@ -3151,7 +3158,7 @@ def load_market_tag_feed(
             SELECT items.id, items.source_file, items.item_order, items.published_at,
                    items.date, items.time, items.source, items.source_type,
                    items.source_name, items.title, items.summary, items.url,
-                   st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+                   st.read_at, st.important_at, st.read_later_at, st.read_later_done_at, st.favorite_at,
                    dj.status AS detail_status,
                    dj.last_error AS detail_error,
                    CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
@@ -4266,7 +4273,7 @@ def api_news():
         SELECT DISTINCT items.id, items.source_file, items.item_order, items.published_at,
                items.date, items.time, items.source, items.source_type,
                items.source_name, items.title, items.summary, items.url,
-               st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+               st.read_at, st.important_at, st.read_later_at, st.read_later_done_at, st.favorite_at,
                dj.status AS detail_status,
                dj.last_error AS detail_error,
                CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
@@ -4420,6 +4427,7 @@ def api_news_status():
             SELECT items.id,
                    st.favorite_at,
                    st.read_later_at,
+                   st.read_later_done_at,
                    (
                      SELECT COUNT(*)
                      FROM news_reminders nr
@@ -4952,7 +4960,7 @@ def api_search():
             SELECT DISTINCT items.id, items.source_file, items.item_order, items.published_at,
                    items.date, items.time, items.source, items.source_type,
                    items.source_name, items.title, items.summary, items.url,
-                   st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+                   st.read_at, st.important_at, st.read_later_at, st.read_later_done_at, st.favorite_at,
                    dj.status AS detail_status,
                    dj.last_error AS detail_error,
                    CASE WHEN ad.url IS NULL THEN 0 ELSE 1 END AS detail_ready,
@@ -4988,19 +4996,28 @@ def api_sources():
 
     where = []
     args: list = []
-    join_sql = "LEFT JOIN item_state st ON st.item_id = items.id"
+    join_sql = """
+        LEFT JOIN item_state st ON st.item_id = items.id
+        LEFT JOIN article_details ad ON ad.url = items.url
+    """
     if q:
         where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")
         like = f"%{q}%"
         args.extend([like, like, like])
-    if read_filter == "unread":
-        where.append("st.read_at IS NULL")
-    elif read_filter == "read":
-        where.append("st.read_at IS NOT NULL")
+    if collection == "read_later":
+        if read_filter == "unread":
+            where.append("st.read_later_at IS NOT NULL")
+        elif read_filter == "read":
+            where.append("(ad.url IS NOT NULL AND st.read_later_at IS NULL)")
+        else:
+            where.append("(st.read_later_at IS NOT NULL OR ad.url IS NOT NULL)")
+    else:
+        if read_filter == "unread":
+            where.append("st.read_at IS NULL")
+        elif read_filter == "read":
+            where.append("st.read_at IS NOT NULL")
     if collection == "important":
         where.append("st.important_at IS NOT NULL")
-    elif collection == "read_later":
-        where.append("st.read_later_at IS NOT NULL")
     elif collection == "favorites":
         where.append("st.favorite_at IS NOT NULL")
     elif collection == "notes":
@@ -5279,7 +5296,7 @@ def api_market_trends_detail():
             SELECT items.id, items.source_file, items.item_order, items.published_at,
                    items.date, items.time, items.source, items.source_type,
                    items.source_name, items.title, items.summary, items.url,
-                   st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+                   st.read_at, st.important_at, st.read_later_at, st.read_later_done_at, st.favorite_at,
                    CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note
             FROM items
             JOIN article_market_tags mt ON mt.url = items.url
@@ -5349,7 +5366,7 @@ def api_market_trends_tag_detail():
             SELECT items.id, items.source_file, items.item_order, items.published_at,
                    items.date, items.time, items.source, items.source_type,
                    items.source_name, items.title, items.summary, items.url,
-                   st.read_at, st.important_at, st.read_later_at, st.favorite_at,
+                   st.read_at, st.important_at, st.read_later_at, st.read_later_done_at, st.favorite_at,
                    amt.direction,
                    CASE WHEN an.url IS NULL THEN 0 ELSE 1 END AS has_note
             FROM items
@@ -5970,13 +5987,14 @@ def api_update_item_state(item_id: str):
         if not row:
             return jsonify({"ok": False, "error": "item_not_found"}), 404
         old_state = conn.execute(
-            "SELECT read_at, important_at, read_later_at, favorite_at FROM item_state WHERE item_id=?",
+            "SELECT read_at, important_at, read_later_at, read_later_done_at, favorite_at FROM item_state WHERE item_id=?",
             (item_id,),
         ).fetchone()
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         read_at = old_state["read_at"] if old_state else None
         important_at = old_state["important_at"] if old_state else None
         read_later_at = old_state["read_later_at"] if old_state else None
+        read_later_done_at = old_state["read_later_done_at"] if old_state else None
         favorite_at = old_state["favorite_at"] if old_state else None
         if "read" in body:
             read_at = ts if body["read"] else None
@@ -5984,21 +6002,23 @@ def api_update_item_state(item_id: str):
             important_at = ts if body["important"] else None
         if "read_later" in body:
             read_later_at = ts if body["read_later"] else None
+            read_later_done_at = None if body["read_later"] else ts
         if "favorite" in body:
             favorite_at = ts if body["favorite"] else None
         with conn:
             conn.execute(
                 """
-                INSERT INTO item_state(item_id, read_at, important_at, read_later_at, favorite_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO item_state(item_id, read_at, important_at, read_later_at, read_later_done_at, favorite_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(item_id) DO UPDATE SET
                   read_at=excluded.read_at,
                   important_at=excluded.important_at,
                   read_later_at=excluded.read_later_at,
+                  read_later_done_at=excluded.read_later_done_at,
                   favorite_at=excluded.favorite_at,
                   updated_at=excluded.updated_at
                 """,
-                (item_id, read_at, important_at, read_later_at, favorite_at, ts),
+                (item_id, read_at, important_at, read_later_at, read_later_done_at, favorite_at, ts),
             )
             if "read_later" in body:
                 item_row = conn.execute(
@@ -6035,6 +6055,7 @@ def api_update_item_state(item_id: str):
             "read_at": read_at,
             "important_at": important_at,
             "read_later_at": read_later_at,
+            "read_later_done_at": read_later_done_at,
             "favorite_at": favorite_at,
         }
     )
@@ -6082,7 +6103,7 @@ def api_news_detail(item_id: str):
             "total": 0,
         }
         state_row = conn.execute(
-            "SELECT read_at, important_at, read_later_at, favorite_at FROM item_state WHERE item_id=?",
+            "SELECT read_at, important_at, read_later_at, read_later_done_at, favorite_at FROM item_state WHERE item_id=?",
             (item_id,),
         ).fetchone()
         market_tag_choices = load_market_tag_definitions(conn, active_only=True)
@@ -6128,6 +6149,7 @@ def api_news_detail(item_id: str):
             "read_at": (state_row["read_at"] if state_row else None),
             "important_at": (state_row["important_at"] if state_row else None),
             "read_later_at": (state_row["read_later_at"] if state_row else None),
+            "read_later_done_at": (state_row["read_later_done_at"] if state_row else None),
             "favorite_at": (state_row["favorite_at"] if state_row else None),
             "detail_status": (job["status"] if job else "none"),
             "job": dict(job) if job else None,
@@ -6901,27 +6923,29 @@ def api_news_market_tag_upsert(item_id: str):
                 (url, tag, direction, ts, ts),
             )
             row = conn.execute(
-                "SELECT read_at, important_at, read_later_at, favorite_at FROM item_state WHERE item_id=?",
+                "SELECT read_at, important_at, read_later_at, read_later_done_at, favorite_at FROM item_state WHERE item_id=?",
                 (item_id,),
             ).fetchone()
             read_at = row["read_at"] if row else None
             important_at = row["important_at"] if row else None
             read_later_at = row["read_later_at"] if row else None
+            read_later_done_at = row["read_later_done_at"] if row else None
             favorite_at = row["favorite_at"] if row else None
             if not important_at:
                 important_at = ts
                 conn.execute(
                     """
-                    INSERT INTO item_state(item_id, read_at, important_at, read_later_at, favorite_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO item_state(item_id, read_at, important_at, read_later_at, read_later_done_at, favorite_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(item_id) DO UPDATE SET
                       read_at=excluded.read_at,
                       important_at=excluded.important_at,
                       read_later_at=excluded.read_later_at,
+                      read_later_done_at=excluded.read_later_done_at,
                       favorite_at=excluded.favorite_at,
                       updated_at=excluded.updated_at
                     """,
-                    (item_id, read_at, important_at, read_later_at, favorite_at, ts),
+                    (item_id, read_at, important_at, read_later_at, read_later_done_at, favorite_at, ts),
                 )
         market_tags = load_market_tags_map(conn, [url]).get(url, [])
     finally:
@@ -7118,6 +7142,7 @@ def api_clear_read_later():
     body = request.get_json(silent=True) or {}
     q = (body.get("q") or "").strip()
     collection = (body.get("collection") or "read_later").strip().lower()
+    read_filter = (body.get("read_filter") or "all").strip().lower()
     source_filter = (body.get("source_filter") or "all").strip().lower()
 
     where = []
@@ -7135,7 +7160,10 @@ def api_clear_read_later():
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
     elif collection == "market_tags":
         where.append("EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)")
-    where.append("st.read_later_at IS NOT NULL")
+    if read_filter == "read":
+        where.append("0 = 1")
+    else:
+        where.append("st.read_later_at IS NOT NULL")
     source_clause, source_args = build_source_filter_clause(source_filter)
     if source_clause:
         where.append(source_clause)
@@ -7156,13 +7184,14 @@ def api_clear_read_later():
         with conn:
             conn.executemany(
                 """
-                INSERT INTO item_state(item_id, read_later_at, updated_at)
-                VALUES (?, NULL, ?)
+                INSERT INTO item_state(item_id, read_later_at, read_later_done_at, updated_at)
+                VALUES (?, NULL, ?, ?)
                 ON CONFLICT(item_id) DO UPDATE SET
                   read_later_at=NULL,
+                  read_later_done_at=excluded.read_later_done_at,
                   updated_at=excluded.updated_at
                 """,
-                [(item_id, ts) for item_id in item_ids],
+                [(item_id, ts, ts) for item_id in item_ids],
             )
             if urls:
                 placeholders = ",".join("?" for _ in urls)

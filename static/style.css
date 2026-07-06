@@ -1197,7 +1197,7 @@ button.active {
     color-mix(in srgb, var(--sidebar-bg) 32%, transparent);
   border: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
-  border-radius: calc(var(--radius-panel) - 1px) calc(var(--radius-panel) - 1px) var(--radius-row) var(--radius-row);
+  border-radius: 0;
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--panel) 42%, transparent),
     0 1px 0 color-mix(in srgb, var(--topbar-edge-highlight) 60%, transparent);
@@ -2667,6 +2667,11 @@ button.active {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
+.news-item[data-read-later-completed="1"] .btn-read-later {
+  background: color-mix(in srgb, var(--success) 10%, var(--panel-soft));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 28%, transparent);
+}
+
 .row-actions .glyph svg {
   width: 16px;
   height: 16px;
@@ -3293,7 +3298,7 @@ html[data-detail-font="large"] {
   padding: 7px 13px;
   border: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
-  border-radius: calc(var(--radius-panel) - 1px) calc(var(--radius-panel) - 1px) var(--radius-row) var(--radius-row);
+  border-radius: 0;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 88%, transparent), color-mix(in srgb, var(--panel-soft) 76%, transparent)),
     color-mix(in srgb, var(--sidebar-bg) 32%, transparent);

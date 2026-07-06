@@ -145,6 +145,7 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     assert data["items"][0]["favorite_at"] is None
     assert data["items"][0]["important_at"] is None
     assert data["items"][0]["read_later_at"] is None
+    assert data["items"][0].get("read_later_done_at") is None
 
     r3 = client.patch(f"/api/news/{item_id}/state", json={"read": True})
     assert r3.status_code == 200
@@ -174,6 +175,7 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     assert r7.get_json()["favorite_at"] is not None
     assert r7.get_json()["important_at"] is not None
     assert r7.get_json()["read_later_at"] is not None
+    assert r7.get_json()["read_later_done_at"] is None
 
     favorites = client.get("/api/news?collection=favorites")
     assert favorites.status_code == 200
@@ -186,6 +188,47 @@ def test_api_news_and_reindex(tmp_path: Path, monkeypatch):
     read_later = client.get("/api/news?collection=read_later")
     assert read_later.status_code == 200
     assert read_later.get_json()["total"] == 1
+
+    done = client.patch(f"/api/news/{item_id}/state", json={"read_later": False})
+    assert done.status_code == 200
+    assert done.get_json()["read_later_at"] is None
+    assert done.get_json()["read_later_done_at"] is not None
+
+    read_later_unread = client.get("/api/news?collection=read_later&read_filter=unread")
+    assert read_later_unread.status_code == 200
+    assert read_later_unread.get_json()["total"] == 0
+
+    read_later_read = client.get("/api/news?collection=read_later&read_filter=read")
+    assert read_later_read.status_code == 200
+    assert read_later_read.get_json()["total"] == 0
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO article_details(
+                url, source, title, published_at, content, content_length, raw_json, fetched_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/api",
+                "API Source",
+                "API News",
+                "2026-05-25 10:00:00",
+                "cached detail",
+                len("cached detail"),
+                "{}",
+                "2026-05-25 10:05:00",
+                "2026-05-25 10:05:00",
+            ),
+        )
+
+    read_later_read = client.get("/api/news?collection=read_later&read_filter=read")
+    assert read_later_read.status_code == 200
+    assert read_later_read.get_json()["total"] == 1
+
+    read_later_all = client.get("/api/news?collection=read_later&read_filter=all")
+    assert read_later_all.status_code == 200
+    assert read_later_all.get_json()["total"] == 1
 
     combo = client.get("/api/news?collection=important&read_filter=unread")
     assert combo.status_code == 200
@@ -639,7 +682,7 @@ def test_reminder_snapshot_survives_stale_item_deletion(tmp_path: Path, monkeypa
     assert reminders["items"][0]["item_url_snapshot"] == "https://example.com/snapshot-beta"
 
 
-def test_apply_schema_adds_favorite_at_and_migrates_legacy_bookmarked(tmp_path: Path, monkeypatch):
+def test_apply_schema_adds_favorite_at_and_read_later_done_at_and_migrates_legacy_bookmarked(tmp_path: Path, monkeypatch):
     daily_root = tmp_path / "DailyNews"
     daily_root.mkdir(parents=True)
     db_path = tmp_path / "news_index.sqlite3"
@@ -683,6 +726,7 @@ def test_apply_schema_adds_favorite_at_and_migrates_legacy_bookmarked(tmp_path: 
     try:
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(item_state)").fetchall()}
         assert "favorite_at" in cols
+        assert "read_later_done_at" in cols
         migrated = conn.execute(
             "SELECT favorite_at FROM item_state WHERE item_id='legacy-1'"
         ).fetchone()
@@ -2359,6 +2403,10 @@ def test_read_later_enqueues_detail_job_and_retry(tmp_path: Path, monkeypatch):
     cancel = client.patch(f"/api/news/{item_id}/state", json={"read_later": False})
     assert cancel.status_code == 200
     assert cancel.get_json()["read_later_at"] is None
+    assert cancel.get_json()["read_later_done_at"] is not None
+
+    read_later_done = client.get("/api/news?collection=read_later&read_filter=read").get_json()
+    assert read_later_done["total"] == 0
 
     detail_after_cancel = client.get(f"/api/news/{item_id}/detail")
     assert detail_after_cancel.status_code == 200
@@ -3580,15 +3628,18 @@ def test_market_workbench_overview_and_tag_feed(tmp_path: Path, monkeypatch):
 
 
 def test_market_tag_summary_generate_and_stale(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    today = datetime.now().date()
+    day_one = today - timedelta(days=2)
+    day_two = today - timedelta(days=3)
+    daily_dir = tmp_path / "DailyNews" / f"{day_one.year}年{day_one.month}月"
     daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-03.md").write_text(
-        """## Reuters · World（2条）
+    (daily_dir / f"dailyFreshNews_{day_one:%Y-%m-%d}.md").write_text(
+        f"""## Reuters · World（2条）
 ### [R1](https://www.reuters.com/world/r1)
-- 发布时间：2026-06-03 09:00:00
+- 发布时间：{day_one:%Y-%m-%d} 09:00:00
 - 摘要：AI 继续上涨
 ### [R2](https://www.reuters.com/world/r2)
-- 发布时间：2026-06-02 10:00:00
+- 发布时间：{day_two:%Y-%m-%d} 10:00:00
 - 摘要：算力继续扩张
 """,
         encoding="utf-8",
@@ -3612,7 +3663,7 @@ def test_market_tag_summary_generate_and_stale(tmp_path: Path, monkeypatch):
     assert client.put(f"/api/news/{r1['id']}/note", json={"note": "我倾向继续关注主线"}).status_code == 200
     assert client.put(
         "/api/market-trends/note",
-        json={"date_key": "2026-06-03", "tag_key": "AI", "direction": "bullish", "note": "独立趋势判断"},
+        json={"date_key": day_one.strftime("%Y-%m-%d"), "tag_key": "AI", "direction": "bullish", "note": "独立趋势判断"},
     ).status_code == 200
 
     captured = {}

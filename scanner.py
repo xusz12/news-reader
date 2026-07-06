@@ -74,6 +74,8 @@ def apply_schema(conn: sqlite3.Connection, schema_path: Path) -> None:
         conn.execute("ALTER TABLE item_state ADD COLUMN important_at TEXT")
     if "read_later_at" not in cols:
         conn.execute("ALTER TABLE item_state ADD COLUMN read_later_at TEXT")
+    if "read_later_done_at" not in cols:
+        conn.execute("ALTER TABLE item_state ADD COLUMN read_later_done_at TEXT")
     if "favorite_at" not in cols:
         conn.execute("ALTER TABLE item_state ADD COLUMN favorite_at TEXT")
     if "bookmarked" in cols:

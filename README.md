@@ -4,6 +4,17 @@
 
 ## What's Changed
 
+### 2026-07-06 — v2.0.2.2 improve: 工具栏直角与稍后阅读已读筛选
+- **文件**
+  - *schema.sql（+）*、*scanner.py（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*、*README.md（+）*
+    - 中栏顶部工具栏与右栏工具栏去掉自身圆角，保留 row、卡片、输入框与详情内容卡片的既有圆角
+    - `item_state` 新增 `read_later_done_at` 作为新版消费时间戳；但 `稍后再看` 集合主判据升级为“当前待消费队列 + 已获取详情内容”：`未读 = read_later_at IS NOT NULL`，`已读 = article_details 已存在且 read_later_at IS NULL`，`全部 = read_later_at IS NOT NULL OR article_details 已存在`
+    - 取消稍后再看时仍会清 `read_later_at` 并写 `read_later_done_at`；重新加入稍后再看时写 `read_later_at` 并清 `read_later_done_at`。`read_later_done_at` 主要用于记录新版后的完成时间，不再作为集合成员资格的唯一依据，因此也能兼容 v2.0.2.2 以前那些“已抓过详情、后来退出稍后再看”的历史新闻
+    - `稍后再看` 集合新增 `已读 / 未读 / 全部` 三态 tab，前端独立记忆 `readLaterReadFilter`，不污染新闻流原有 `feedReadFilter` 二态按钮；`已读` tab 下隐藏“全部看完”按钮
+    - 修复一个日期敏感旧测试：把板块总结 30 天窗口样本改为相对日期，避免测试自然过期
+    - 顶栏版本号、页面 `<title>`、静态资源版本参数与移动端更多面板版本文案同步更新到 `v2.0.2.2`
+- **影响**：本轮新增 `read_later_done_at`，并把 `app.py` / 前端对 `稍后再看` 的查询语义切到“队列状态 + 已抓取详情内容”；拉取后需重启 Flask，并刷新页面以获取新的前端与静态资源版本。
+
 ### 2026-07-02 — v2.0.2.1 fix: 列表行高稳定与 chat 归档扩容
 - **文件**
   - *app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*

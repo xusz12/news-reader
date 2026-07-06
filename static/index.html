@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.2.1</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.2.1" />
+    <title>News Reader v2.0.2.2</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.2.2" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.2.1</span>
+          <span class="topbar-version">v2.0.2.2</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -118,6 +118,11 @@
               <button id="marketWorkbenchComposeBtn" class="detail-retry-btn" type="button">添加独立想法</button>
             </div>
           </section>
+          <div id="readLaterFilterBar" class="reminder-filter-bar hidden" aria-label="稍后阅读已读状态筛选">
+            <button id="readLaterFilterUnreadBtn" class="reminder-filter-btn" type="button">未读</button>
+            <button id="readLaterFilterReadBtn" class="reminder-filter-btn" type="button">已读</button>
+            <button id="readLaterFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+          </div>
           <div class="feed-toolbar-actions">
             <button id="resumeAnchorBtn" class="icon-btn hidden" type="button"></button>
             <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
@@ -579,6 +584,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.2.1"></script>
+    <script src="/static/app.js?v=2.0.2.2"></script>
   </body>
 </html>

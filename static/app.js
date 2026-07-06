@@ -3,8 +3,9 @@ let state = {
   pages: 1,
   q: "",
   per: 30,
-  readFilter: "unread", // all | unread
+  readFilter: "unread", // all | unread | read
   feedReadFilter: "unread", // 仅新闻流记忆 all | unread
+  readLaterReadFilter: "unread", // 稍后阅读记忆 all | unread | read
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
   collection: "feed", // search | feed | daily | favorites | reminders | important | read_later | notes | tracked | market_tags | trends
   total: 0,
@@ -116,6 +117,10 @@ const trackedCreateInlineBtn = document.getElementById("trackedCreateInlineBtn")
 const trackedDefaultsInlineBtn = document.getElementById("trackedDefaultsInlineBtn");
 const markAllReadBtn = document.getElementById("markAllReadBtn");
 const manageMarketTagsBtn = document.getElementById("manageMarketTagsBtn");
+const readLaterFilterBar = document.getElementById("readLaterFilterBar");
+const readLaterFilterReadBtn = document.getElementById("readLaterFilterReadBtn");
+const readLaterFilterUnreadBtn = document.getElementById("readLaterFilterUnreadBtn");
+const readLaterFilterAllBtn = document.getElementById("readLaterFilterAllBtn");
 
 const navSearchBtn = document.getElementById("navSearchBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
@@ -826,10 +831,16 @@ function itemMatchesCurrentDateCountScope(item) {
   if (state.collection === "feed") inCollection = true;
   else if (state.collection === "favorites") inCollection = !!item.favorite_at;
   else if (state.collection === "important") inCollection = !!item.important_at;
-  else if (state.collection === "read_later") inCollection = !!item.read_later_at;
+  else if (state.collection === "read_later") {
+    const detailReady = Number(item.detail_ready || 0) === 1;
+    if (state.readFilter === "unread") inCollection = !!item.read_later_at;
+    else if (state.readFilter === "read") inCollection = detailReady && !item.read_later_at;
+    else inCollection = !!item.read_later_at || detailReady;
+  }
   else if (state.collection === "notes") inCollection = !!item.has_note;
   else if (state.collection === "market_tags") inCollection = !!item.has_market_tags;
   if (!inCollection) return false;
+  if (state.collection === "read_later") return true;
   if (state.readFilter === "unread") return !item.read_at;
   if (state.readFilter === "read") return !!item.read_at;
   return true;
@@ -1458,6 +1469,7 @@ async function pollRowStatusesOnce() {
     const item = state.itemsById.get(st.id);
     if (!item) return;
     item.read_later_at = st.read_later_at;
+    item.read_later_done_at = st.read_later_done_at;
     item.active_reminder_count = Number(st.active_reminder_count || 0);
     item.due_reminder_count = Number(st.due_reminder_count || 0);
     item.next_remind_at = st.next_remind_at || null;
@@ -1670,6 +1682,8 @@ function syncRowUI(li, item) {
   li.dataset.favorite = item.favorite_at ? "1" : "0";
   li.dataset.important = item.important_at ? "1" : "0";
   li.dataset.readLater = item.read_later_at ? "1" : "0";
+  li.dataset.readLaterCompleted = Number(item.detail_ready || 0) === 1 && !item.read_later_at ? "1" : "0";
+  li.dataset.readLaterDone = item.read_later_done_at ? "1" : "0";
   li.dataset.hasReminder = Number(item.active_reminder_count || 0) > 0 ? "1" : "0";
 
   const unreadDot = li.querySelector(".unread-dot");
@@ -1745,15 +1759,16 @@ function syncRowUI(li, item) {
   if (readLaterBtn) {
     const detailReady = Number(item.detail_ready || 0) === 1;
     const detailFailed = item.detail_status === "failed";
+    const completed = detailReady && !item.read_later_at;
     const tone = item.read_later_at
       ? (detailReady ? "success" : "warning")
-      : (detailReady ? "success" : "default");
+      : (completed ? "success" : (detailReady ? "success" : "default"));
     applyIcon(readLaterBtn, "bookmark", {
       filled: !!item.read_later_at,
       tone,
       label: item.read_later_at
         ? (detailReady ? "取消稍后再看（详情已就绪）" : (detailFailed ? "取消稍后再看（详情失败）" : "取消稍后再看（详情抓取中）"))
-        : (detailReady ? "详情已缓存，加入稍后再看" : "稍后再看"),
+        : (completed ? "重新加入稍后再看" : (detailReady ? "详情已缓存，加入稍后再看" : "稍后再看")),
     });
   }
 
@@ -1762,13 +1777,26 @@ function syncRowUI(li, item) {
 
 function updateFilterButtons() {
   const showReadFilter = state.collection === "feed";
+  const showReadLaterFilter = state.collection === "read_later";
   readFilterToggleBtn.classList.toggle("hidden", !showReadFilter);
-  if (!showReadFilter) return;
-  const isAll = state.readFilter === "all";
-  applyIcon(readFilterToggleBtn, "circle", {
-    filled: isAll,
-    tone: isAll ? "default" : "muted",
-    label: isAll ? "全部显示" : "仅未读",
+  if (showReadFilter) {
+    const isAll = state.readFilter === "all";
+    applyIcon(readFilterToggleBtn, "circle", {
+      filled: isAll,
+      tone: isAll ? "default" : "muted",
+      label: isAll ? "全部显示" : "仅未读",
+    });
+  }
+  if (!readLaterFilterBar) return;
+  readLaterFilterBar.classList.toggle("hidden", !showReadLaterFilter);
+  if (!showReadLaterFilter) return;
+  [
+    [readLaterFilterUnreadBtn, "unread"],
+    [readLaterFilterReadBtn, "read"],
+    [readLaterFilterAllBtn, "all"],
+  ].forEach(([button, value]) => {
+    if (!button) return;
+    button.classList.toggle("active", state.readFilter === value);
   });
 }
 
@@ -2080,7 +2108,13 @@ function updateBatchActionButton() {
   }
   markAllReadBtn.classList.remove("hidden");
   if (state.collection === "read_later") {
-    applyIcon(markAllReadBtn, "bookmark", { label: "全部看完（取消所有稍后阅读）" });
+    const hideForCompleted = state.readFilter === "read";
+    markAllReadBtn.classList.toggle("hidden", hideForCompleted);
+    if (hideForCompleted) {
+      markAllReadBtn.disabled = false;
+      return;
+    }
+    applyIcon(markAllReadBtn, "bookmark", { label: "全部看完（完成当前未读稍后阅读）" });
   } else {
     applyIcon(markAllReadBtn, "check-circle", { label: "当前结果全部标为已读" });
   }
@@ -2311,7 +2345,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.1";
+  version.textContent = "News Reader v2.0.2.2";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -2960,7 +2994,7 @@ async function fetchSources() {
   const params = new URLSearchParams({
     q: "",
     collection: state.collection,
-    read_filter: state.collection === "feed" ? state.readFilter : "all",
+    read_filter: ["feed", "read_later"].includes(state.collection) ? state.readFilter : "all",
   });
   const res = await fetch(`/api/sources?${params.toString()}`);
   if (!res.ok) return [];
@@ -3075,8 +3109,11 @@ function renderMeta() {
   const readNames = {
     all: "全部",
     unread: "仅未读",
+    read: "已读",
   };
-  const readFilterName = state.collection === "feed" ? readNames[state.readFilter] : readNames.all;
+  const readFilterName = ["feed", "read_later"].includes(state.collection)
+    ? (readNames[state.readFilter] || readNames.all)
+    : readNames.all;
   const sourceName = state.sourceFilter === "all" ? "全部来源" : sourceLabel(state.sourceFilter);
   meta.textContent = `${names[state.collection]} · ${readFilterName} · ${sourceName} · 共 ${state.total} 条`;
   pageInfo.textContent = `${state.page} / ${state.pages}`;
@@ -4048,6 +4085,7 @@ function applyPatchToItem(item, patchResult) {
   if ("favorite_at" in patchResult) item.favorite_at = patchResult.favorite_at;
   if ("important_at" in patchResult) item.important_at = patchResult.important_at;
   if ("read_later_at" in patchResult) item.read_later_at = patchResult.read_later_at;
+  if ("read_later_done_at" in patchResult) item.read_later_done_at = patchResult.read_later_done_at;
   state.itemsById.set(item.id, item);
 }
 
@@ -4072,6 +4110,7 @@ async function patchStateWithRollback(itemId, payload) {
     favorite_at: item.favorite_at,
     important_at: item.important_at,
     read_later_at: item.read_later_at,
+    read_later_done_at: item.read_later_done_at,
     has_note: item.has_note,
     has_market_tags: item.has_market_tags,
   };
@@ -4083,6 +4122,7 @@ async function patchStateWithRollback(itemId, payload) {
   if ("important" in payload) item.important_at = payload.important ? now : null;
   if ("read_later" in payload) {
     item.read_later_at = payload.read_later ? now : null;
+    item.read_later_done_at = payload.read_later ? null : now;
     if (payload.read_later) {
       item.detail_status = "pending";
       if (!Number(item.detail_ready || 0)) item.detail_ready = 0;
@@ -4122,6 +4162,7 @@ async function patchStateWithRollback(itemId, payload) {
     item.favorite_at = backup.favorite_at;
     item.important_at = backup.important_at;
     item.read_later_at = backup.read_later_at;
+    item.read_later_done_at = backup.read_later_done_at;
     rerenderOne(itemId);
   } finally {
     writeInFlight.delete(itemId);
@@ -5274,7 +5315,7 @@ function renderDetail(item) {
       stopDetailPolling();
     }
   } else if (!item.read_later_at) {
-    statusEl.textContent = "未加入稍后再看";
+    statusEl.textContent = Number(item.detail_ready || 0) === 1 ? "已完成稍后阅读" : "未加入稍后再看";
     statusEl.className = "detail-status muted";
     contentEl.classList.add("hidden");
     retryBtn.classList.add("hidden");
@@ -5378,6 +5419,7 @@ async function loadDetail(itemId) {
   item.favorite_at = payload.favorite_at;
   item.important_at = payload.important_at;
   item.read_later_at = payload.read_later_at;
+  item.read_later_done_at = payload.read_later_done_at;
   item.active_reminder_count = Number(payload.reminder_summary?.active_total || 0);
   item.due_reminder_count = Number(payload.reminder_summary?.due_total || 0);
   item.detail_ready = payload.detail ? 1 : 0;
@@ -6448,6 +6490,8 @@ async function loadFirstPage(page = 1) {
   await refreshReminderSummary().catch(() => {});
   if (state.collection === "feed") {
     state.readFilter = state.feedReadFilter;
+  } else if (state.collection === "read_later") {
+    state.readFilter = state.readLaterReadFilter;
   } else if (state.readFilter !== "all") {
     state.readFilter = "all";
   }
@@ -6801,6 +6845,20 @@ readFilterToggleBtn.addEventListener("click", async () => {
 });
 
 [
+  [readLaterFilterUnreadBtn, "unread"],
+  [readLaterFilterReadBtn, "read"],
+  [readLaterFilterAllBtn, "all"],
+].forEach(([button, filter]) => {
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    if (state.readLaterReadFilter === filter) return;
+    state.readLaterReadFilter = filter;
+    if (state.collection === "read_later") state.readFilter = filter;
+    await loadFirstPage();
+  });
+});
+
+[
   [reminderFilterActiveBtn, "active"],
   [reminderFilterDoneBtn, "done"],
   [reminderFilterAllBtn, "all"],
@@ -6912,6 +6970,7 @@ resumeAnchorBtn.addEventListener("click", async () => {
     state.q = "";
     state.readFilter = "all";
     state.feedReadFilter = "all";
+    state.readLaterReadFilter = "unread";
     state.sourceFilter = "all";
     await loadFirstPage(located.page);
 
@@ -7306,7 +7365,7 @@ markAllReadBtn.addEventListener("click", async () => {
       collection: state.collection,
       source_filter: state.sourceFilter,
     };
-    if (!readLaterMode) body.read_filter = state.readFilter;
+    body.read_filter = state.readFilter;
     const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

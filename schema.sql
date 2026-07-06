@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS item_state (
   read_at TEXT,
   important_at TEXT,
   read_later_at TEXT,
+  read_later_done_at TEXT,
   favorite_at TEXT,
   updated_at TEXT NOT NULL
 );
