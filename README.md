@@ -4,6 +4,23 @@
 
 ## What's Changed
 
+### 2026-07-07 — v2.0.2.3 fix: 日报集合右栏工具栏
+- **文件**
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*README.md（+）*
+    - 日报右栏新增工具栏区域，包含标题、meta、状态与内容区
+    - 提取 `setDailyBriefingHeader()` / `dailyBriefingTitle()` / `dailyBriefingMeta()` 统一管理日报头部渲染
+    - 加载态与详情展示态均通过同一 header 函数处理，首次进入或切换日报时不再残留旧标题
+- **影响**：日报详情右栏现在具备可复用的工具栏头部结构，为后续工具栏扩展提供统一入口
+
+### 2026-07-06 — v2.0.2.3 fix: 日报右栏工具栏
+- **文件**
+  - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*README.md（+）*
+    - 日报详情右栏重构为与普通新闻右栏一致的结构：工具栏 → 标题/meta → 状态 → 独立滚动内容区
+    - 解决日报右栏工具栏被父容器 `overflow-y: auto` 裁切成暗条的问题，使 `.detail-toolbar` 的负边距外扩生效
+    - 日报标题、日期标签、工具栏、加载状态与正文滚动区统一封装到 `setDailyBriefingHeader` / `dailyBriefingTitle`
+    - 顶栏版本号、页面 `<title>`、静态资源版本参数与移动端更多面板版本文案同步更新到 `v2.0.2.3`
+- **影响**：仅前端日报详情面板结构调整，无后端/schema/API 变更；刷新页面即可生效。
+
 ### 2026-07-06 — v2.0.2.2 improve: 工具栏直角与稍后阅读已读筛选
 - **文件**
   - *schema.sql（+）*、*scanner.py（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*、*README.md（+）*

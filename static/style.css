@@ -3194,24 +3194,25 @@ html[data-detail-font="large"] {
   height: 100%;
 }
 
-.detail-daily-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-}
-
 .detail-daily-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  padding-right: 4px;
+}
+
+.detail-daily-toolbar {
+  flex: 0 0 auto;
+  min-height: 51px;
+}
+
+.detail-daily-scroll-area {
+  display: block;
 }
 
 .detail-daily-content {
   max-width: var(--detail-measure);
   margin-top: 0;
   display: grid;
+  align-content: start;
   gap: 14px;
   color: var(--detail-text);
 }
