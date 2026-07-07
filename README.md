@@ -4,6 +4,17 @@
 
 ## What's Changed
 
+### 2026-07-07 — v2.0.2.6 fix: EMPTY_TWITTER_THREAD 短推文误判
+- **文件**
+  - *app.py（+）*、*tests/test_api.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*README.md（+）*
+    - 移除 `run_opencli_twitter_detail()` 的字符长度阈值：历史上以主推文 ≥20 字符作为 `EMPTY_TWITTER_THREAD` 的防呆启发式，误杀了大量合法短推文/纯图片推文
+    - 新增 `_has_substantial_twitter_content()`：改为纯内容存在性判断——`main_text`、引用推文文本、长文/卡片文本、有效 media_images 图片任一非空即视为有效推文
+    - 因此单字推文、纯图片推文、主推文很短但引用/长文有信息的推文都能正常展示详情，不再被误报为“空 thread”
+    - 只有四类内容全部为空（真正的空壳 thread）才返回 `EMPTY_TWITTER_THREAD`
+    - 补齐测试：单字推文通过、短推文+图片通过、短推文+引用推文通过、真空 thread 仍报错
+    - 版本同步到 `v2.0.2.6`
+- **影响**：仅调整 Twitter 详情有效性判断，无 schema/API 变更；拉取后需重启 Flask 并刷新页面。
+
 ### 2026-07-07 — v2.0.2.5 improve: Twitter/X 推文图片本地缓存与 30 天清理
 - **文件**
   - *app.py（+）*、*schema.sql（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*、*README.md（+）*

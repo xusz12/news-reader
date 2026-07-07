@@ -6486,3 +6486,118 @@ def test_cache_twitter_image_rejects_non_whitelisted_url(tmp_path: Path, monkeyp
         conn.close()
 
     assert not downloaded
+
+
+
+def test_run_opencli_twitter_detail_allows_short_tweet_with_media(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(tmp_path / "media-cache"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    thread_payload = [
+        {
+            "text": "看图。",
+            "media_urls": ["https://pbs.twimg.com/media/a.jpg"],
+        }
+    ]
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return False, None, "Article not found"
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+    def fake_download(url, dest_path):
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(b"img")
+        return True, "image/jpeg", 3
+
+    monkeypatch.setattr(app_module, "_download_media_file", fake_download)
+
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is True
+    assert error == ""
+    payload = json.loads(detail["raw_json"])
+    assert len(payload["media_images"]) == 1
+    assert payload["media_images"][0]["url"] == "https://pbs.twimg.com/media/a.jpg"
+
+
+def test_run_opencli_twitter_detail_allows_short_tweet_with_quoted_text(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(tmp_path / "media-cache"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    thread_payload = [
+        {
+            "text": "短评。",
+            "quoted_tweet": {"text": "这是一条内容足够长的引用推文，用来验证短主推文不会因为正文长度不足而被判定为空线程。"},
+        }
+    ]
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return False, None, "Article not found"
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is True
+    assert error == ""
+    assert "短评" in detail["content"]
+
+
+def test_run_opencli_twitter_detail_rejects_truly_empty_thread(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(tmp_path / "media-cache"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    thread_payload = [{"text": ""}]
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return False, None, "Article not found"
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is False
+    assert error == "EMPTY_TWITTER_THREAD"
+
+
+
+def test_run_opencli_twitter_detail_allows_single_character_tweet(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(tmp_path / "media-cache"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    thread_payload = [{"text": "早"}]
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return False, None, "Article not found"
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is True
+    assert error == ""
+    assert "早" in detail["content"]

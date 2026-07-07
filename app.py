@@ -3752,6 +3752,23 @@ def _is_cacheable_twitter_media_url(url: str) -> bool:
     return True
 
 
+def _has_substantial_twitter_content(
+    main_text: str,
+    quoted_text: str,
+    article_text: str,
+    media_images: list[dict],
+) -> bool:
+    if (main_text or "").strip():
+        return True
+    if (quoted_text or "").strip():
+        return True
+    if (article_text or "").strip():
+        return True
+    if media_images:
+        return True
+    return False
+
+
 def _is_twitter_image_url(url: str) -> bool:
     return _is_cacheable_twitter_media_url(url)
 
@@ -3981,8 +3998,6 @@ def run_opencli_twitter_detail(url: str) -> tuple[bool, dict, str]:
 
     main_tweet, comments = _extract_twitter_thread_payload(parsed_thread)
     main_text = _normalize_text(main_tweet.get("text") or main_tweet.get("content") or main_tweet.get("full_text") or main_tweet.get("body"))
-    if len(main_text) < 20:
-        return False, {}, "EMPTY_TWITTER_THREAD"
 
     quoted = main_tweet.get("quoted_tweet") if isinstance(main_tweet.get("quoted_tweet"), dict) else {}
     quoted_text = _normalize_text(quoted.get("text") or quoted.get("content") or quoted.get("full_text") or quoted.get("body"))
@@ -4008,6 +4023,10 @@ def run_opencli_twitter_detail(url: str) -> tuple[bool, dict, str]:
     article_text = _normalize_text(article_record.get("content") or article_record.get("body") or article_record.get("text") or article_record.get("full_text"))
     if _looks_like_same_content(main_text, article_text):
         article_text = ""
+
+    media_images = _build_twitter_media_images(main_tweet, quoted)
+    if not _has_substantial_twitter_content(main_text, quoted_text, article_text, media_images):
+        return False, {}, "EMPTY_TWITTER_THREAD"
 
     comment_count = len(comments)
     comment_summary_text = ""
@@ -4070,7 +4089,6 @@ def run_opencli_twitter_detail(url: str) -> tuple[bool, dict, str]:
         )
 
     content = "\n".join(part for part in lines if part is not None).strip()
-    media_images = _build_twitter_media_images(main_tweet, quoted)
     cached_images: list[dict] = []
     if media_images:
         conn = db_conn()
