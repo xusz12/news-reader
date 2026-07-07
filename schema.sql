@@ -247,3 +247,19 @@ CREATE TABLE IF NOT EXISTS tracked_topic_daily_summaries (
 
 CREATE INDEX IF NOT EXISTS idx_tracked_topic_daily_summaries_topic_date
 ON tracked_topic_daily_summaries(topic_id, date DESC);
+
+
+CREATE TABLE IF NOT EXISTS media_cache (
+  url TEXT PRIMARY KEY,
+  cache_key TEXT NOT NULL UNIQUE,
+  relative_path TEXT NOT NULL,
+  mime_type TEXT,
+  size_bytes INTEGER DEFAULT 0,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_cache_created_at ON media_cache(created_at);
+CREATE INDEX IF NOT EXISTS idx_media_cache_status ON media_cache(status);

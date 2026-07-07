@@ -2347,7 +2347,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.4";
+  version.textContent = "News Reader v2.0.2.5";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5327,7 +5327,10 @@ function renderDetail(item) {
 
     if (isTwitterDetail && detailMediaGallery) {
       const images = Array.isArray(detail.media_images) ? detail.media_images : [];
-      renderDetailMediaGallery(images);
+      const missingCache = renderDetailMediaGallery(images);
+      if (missingCache) {
+        statusEl.textContent += " · 部分图片未缓存，可重新抓取推文";
+      }
       if (detailRefreshTweetBtn) {
         detailRefreshTweetBtn.classList.remove("hidden");
         detailRefreshTweetBtn.disabled = status === "pending" || status === "running";
@@ -5425,15 +5428,23 @@ function renderDetail(item) {
 function renderDetailMediaGallery(images) {
   if (!detailMediaGallery) return;
   detailMediaGallery.innerHTML = "";
+  let missingCache = false;
   for (const image of images) {
-    const url = image && image.url;
-    if (!url) continue;
+    const url = image && (image.cached_url || image.url);
+    if (!url) {
+      if (image && image.url) missingCache = true;
+      continue;
+    }
+    if (!image.cached_url) {
+      missingCache = true;
+      continue;
+    }
     const a = document.createElement("a");
-    a.href = url;
+    a.href = image.cached_url;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     const img = document.createElement("img");
-    img.src = url;
+    img.src = image.cached_url;
     img.alt = "推文图片";
     img.loading = "lazy";
     img.onerror = () => {
@@ -5446,6 +5457,7 @@ function renderDetailMediaGallery(images) {
     detailMediaGallery.appendChild(a);
   }
   detailMediaGallery.classList.toggle("hidden", detailMediaGallery.childElementCount === 0);
+  return missingCache;
 }
 
 async function fetchDetail(itemId) {

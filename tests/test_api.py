@@ -5582,7 +5582,9 @@ def test_twitter_image_url_filtering():
     assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.jpg") is True
     assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.png") is True
     assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.webp?format=webp") is True
-    assert app_module._is_twitter_image_url("https://example.com/image.jpeg") is True
+    assert app_module._is_twitter_image_url("https://example.com/image.jpeg") is False
+    assert app_module._is_twitter_image_url("http://pbs.twimg.com/media/abc.jpg") is False
+    assert app_module._is_twitter_image_url("https://pbs.twimg.com/profile_images/abc.jpg") is False
     assert app_module._is_twitter_image_url("https://video.twimg.com/ext_tw_video/abc.mp4") is False
     assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.mp4") is False
     assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.m3u8") is False
@@ -6052,3 +6054,435 @@ def test_detail_retry_twitter_resets_detail_job_attempts_and_timestamps(tmp_path
         assert job["finished_at"] is None
     finally:
         conn.close()
+
+
+
+def test_media_cache_key_is_deterministic_sha256():
+    import app as app_module
+
+    key1 = app_module._media_cache_key_for_url("https://pbs.twimg.com/media/a.jpg")
+    key2 = app_module._media_cache_key_for_url("https://pbs.twimg.com/media/a.jpg")
+    assert isinstance(key1, str) and len(key1) == 64
+    assert key1 == key2
+    assert app_module._media_cache_key_for_url("https://pbs.twimg.com/media/b.jpg") != key1
+
+
+def test_extension_for_mime_type():
+    import app as app_module
+
+    assert app_module._extension_for_mime_type("image/jpeg") == ".jpg"
+    assert app_module._extension_for_mime_type("image/png") == ".png"
+    assert app_module._extension_for_mime_type("image/webp") == ".webp"
+    assert app_module._extension_for_mime_type("video/mp4") == ""
+    assert app_module._extension_for_mime_type(None) == ""
+
+
+def test_cache_twitter_image_downloads_and_records(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    def fake_download(url, dest_path):
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(b"fake-image")
+        return True, "image/jpeg", len(b"fake-image")
+
+    monkeypatch.setattr(app_module, "_download_media_file", fake_download)
+
+    url = "https://pbs.twimg.com/media/sample.jpg"
+    conn = app_module.db_conn()
+    try:
+        result = app_module._cache_twitter_image(conn, url)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert result is not None
+    assert result["cached_url"].startswith("/api/media-cache/")
+    cache_key = result["cache_key"]
+
+    conn = app_module.db_conn()
+    try:
+        row = conn.execute("SELECT * FROM media_cache WHERE url=?", (url,)).fetchone()
+        assert row["status"] == "success"
+        assert row["mime_type"] == "image/jpeg"
+        assert row["size_bytes"] == len(b"fake-image")
+        assert (media_dir / row["relative_path"]).exists()
+    finally:
+        conn.close()
+
+    # Second call should return existing cache without re-downloading.
+    conn = app_module.db_conn()
+    try:
+        result2 = app_module._cache_twitter_image(conn, url)
+    finally:
+        conn.close()
+    assert result2["cache_key"] == cache_key
+
+
+def test_cache_twitter_image_failure_records_failed_status(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    def fake_download(url, dest_path):
+        return False, "http_404", 0
+
+    monkeypatch.setattr(app_module, "_download_media_file", fake_download)
+
+    url = "https://pbs.twimg.com/media/missing.jpg"
+    conn = app_module.db_conn()
+    try:
+        result = app_module._cache_twitter_image(conn, url)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert result is None
+    conn = app_module.db_conn()
+    try:
+        row = conn.execute("SELECT status, last_error FROM media_cache WHERE url=?", (url,)).fetchone()
+        assert row["status"] == "failed"
+        assert "404" in row["last_error"]
+    finally:
+        conn.close()
+
+
+def test_cleanup_media_cache_removes_old_files_and_records(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    old_file = media_dir / "ab" / "cd" / "old.jpg"
+    old_file.parent.mkdir(parents=True, exist_ok=True)
+    old_file.write_bytes(b"old")
+    new_file = media_dir / "ef" / "gh" / "new.jpg"
+    new_file.parent.mkdir(parents=True, exist_ok=True)
+    new_file.write_bytes(b"new")
+
+    conn = app_module.db_conn()
+    try:
+        ts = app_module.now_ts()
+        old_ts = (datetime.now() - timedelta(days=31)).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            """
+            INSERT INTO media_cache(url, cache_key, relative_path, mime_type, size_bytes, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("https://pbs.twimg.com/media/old.jpg", "oldkey", "ab/cd/old.jpg", "image/jpeg", 3, "success", old_ts, old_ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO media_cache(url, cache_key, relative_path, mime_type, size_bytes, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("https://pbs.twimg.com/media/new.jpg", "newkey", "ef/gh/new.jpg", "image/jpeg", 3, "success", ts, ts),
+        )
+        conn.commit()
+        app_module._cleanup_media_cache(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+    conn = app_module.db_conn()
+    try:
+        rows = conn.execute("SELECT url FROM media_cache").fetchall()
+        assert [r["url"] for r in rows] == ["https://pbs.twimg.com/media/new.jpg"]
+    finally:
+        conn.close()
+    assert not old_file.exists()
+    assert new_file.exists()
+
+
+def test_run_opencli_twitter_detail_caches_images(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(tmp_path / "media-cache"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    thread_payload = [
+        {
+            "text": "主推文内容比较完整，足够通过正文长度校验。",
+            "media_urls": [
+                "https://pbs.twimg.com/media/a.jpg",
+                "https://video.twimg.com/v.mp4",
+            ],
+            "quoted_tweet": {"text": "引用内容", "media_urls": ["https://pbs.twimg.com/media/b.png"]},
+        }
+    ]
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return False, None, "Article not found"
+
+    downloaded: set[str] = set()
+
+    def fake_download(url, dest_path):
+        downloaded.add(url)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(b"img")
+        return True, "image/jpeg", 3
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+    monkeypatch.setattr(app_module, "_download_media_file", fake_download)
+
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is True
+    payload = json.loads(detail["raw_json"])
+    assert len(payload["media_images"]) == 2
+    for img in payload["media_images"]:
+        assert "cache_key" in img
+        assert img["cached_url"].startswith("/api/media-cache/")
+    assert "https://video.twimg.com/v.mp4" not in downloaded
+
+
+def test_detail_api_returns_cached_urls_for_twitter_images(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    url = "https://x.com/example/status/123"
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        f"""## X · Social（1条）
+### [Tweet Update]({url})
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    cache_key = app_module._media_cache_key_for_url("https://pbs.twimg.com/media/a.jpg")
+    raw = json.dumps(
+        {
+            "media_images": [
+                {"url": "https://pbs.twimg.com/media/a.jpg", "source": "tweet"},
+                {"url": "https://video.twimg.com/v.mp4", "source": "tweet"},
+                {"url": "https://pbs.twimg.com/media/missing.jpg", "source": "tweet"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", item["id"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, "Twitter/X", "Tweet Update", "alice", "2026-06-11 09:00:00", "content", len("content"), raw, ts, ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO media_cache(url, cache_key, relative_path, mime_type, size_bytes, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("https://pbs.twimg.com/media/a.jpg", cache_key, f"{cache_key}.jpg", "image/jpeg", 3, "success", ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["ok"] is True
+    images = detail["detail"]["media_images"]
+    assert len(images) == 2  # video dropped, missing not sanitized to valid because no cache
+    valid = [img for img in images if img["url"] == "https://pbs.twimg.com/media/a.jpg"][0]
+    assert valid["cached_url"] == f"/api/media-cache/{cache_key}"
+    assert "raw_json" not in detail["detail"]
+
+
+def test_media_cache_route_serves_cached_file(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    url = "https://pbs.twimg.com/media/route.jpg"
+    cache_key = app_module._media_cache_key_for_url(url)
+    relative_path = f"{cache_key[:2]}/{cache_key[2:4]}/{cache_key}.jpg"
+    full_path = media_dir / relative_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_bytes(b"cached-data")
+
+    ts = app_module.now_ts()
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO media_cache(url, cache_key, relative_path, mime_type, size_bytes, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, cache_key, relative_path, "image/jpeg", len(b"cached-data"), "success", ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = app_module.app.test_client()
+    res = client.get(f"/api/media-cache/{cache_key}")
+    assert res.status_code == 200
+    assert res.data == b"cached-data"
+    assert res.mimetype == "image/jpeg"
+
+
+def test_media_cache_route_rejects_invalid_and_missing_keys(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    assert client.get("/api/media-cache/not-hex").status_code == 400
+    assert client.get("/api/media-cache/" + "0" * 64).status_code == 404
+
+
+
+def test_media_cache_route_blocks_traversal_and_sibling_prefix(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    evil_sibling = tmp_path / "media-cache-evil"
+    evil_sibling.mkdir(parents=True, exist_ok=True)
+    evil_file = evil_sibling / "stolen.jpg"
+    evil_file.write_bytes(b"evil")
+
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    ts = app_module.now_ts()
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO media_cache(url, cache_key, relative_path, mime_type, size_bytes, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("https://pbs.twimg.com/media/evil.jpg", "e" * 64, "../media-cache-evil/stolen.jpg", "image/jpeg", 4, "success", ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = app_module.app.test_client()
+    res = client.get(f"/api/media-cache/{'e' * 64}")
+    assert res.status_code == 400
+    assert evil_file.exists()
+
+
+def test_cleanup_media_cache_does_not_delete_outside_files(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    outside_file = tmp_path / "outside.jpg"
+    outside_file.write_bytes(b"outside")
+
+    conn = app_module.db_conn()
+    try:
+        old_ts = (datetime.now() - timedelta(days=31)).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            """
+            INSERT INTO media_cache(url, cache_key, relative_path, mime_type, size_bytes, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("https://pbs.twimg.com/media/outside.jpg", "0" * 64, "../outside.jpg", "image/jpeg", 7, "success", old_ts, old_ts),
+        )
+        conn.commit()
+        app_module._cleanup_media_cache(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert outside_file.exists()
+    conn = app_module.db_conn()
+    try:
+        row = conn.execute("SELECT url FROM media_cache WHERE cache_key=?", ("0" * 64,)).fetchone()
+        assert row is None
+    finally:
+        conn.close()
+
+
+
+def test_cache_twitter_image_rejects_non_whitelisted_url(tmp_path: Path, monkeypatch):
+    media_dir = tmp_path / "media-cache"
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(media_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(tmp_path / "news_index.sqlite3"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    downloaded: set[str] = set()
+
+    def fake_download(url, dest_path):
+        downloaded.add(url)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(b"img")
+        return True, "image/jpeg", 3
+
+    monkeypatch.setattr(app_module, "_download_media_file", fake_download)
+
+    conn = app_module.db_conn()
+    try:
+        assert app_module._cache_twitter_image(conn, "https://example.com/image.jpeg") is None
+        assert app_module._cache_twitter_image(conn, "http://pbs.twimg.com/media/a.jpg") is None
+        assert app_module._cache_twitter_image(conn, "https://pbs.twimg.com/profile_images/a.jpg") is None
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert not downloaded

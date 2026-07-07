@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.error import HTTPError, URLError
@@ -51,6 +51,16 @@ DAILY_NEWS_DIR = resolve_daily_news_dir()
 DAILY_BRIEFING_DIR = resolve_daily_briefing_dir()
 DB_PATH = resolve_db_path()
 README_PATH = BASE_DIR / "README.md"
+
+
+def resolve_media_cache_dir() -> Path:
+    env = os.environ.get("NEWS_READER_MEDIA_CACHE_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    return DB_PATH.parent / "media-cache"
+
+
+MEDIA_CACHE_DIR = resolve_media_cache_dir()
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 
@@ -413,11 +423,14 @@ def db_conn() -> sqlite3.Connection:
 
 
 def ensure_db() -> None:
+    MEDIA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     conn = db_conn()
     try:
         apply_schema(conn, SCHEMA_PATH)
         migrate_market_trend_notes(conn)
         seed_market_tag_definitions(conn)
+        _cleanup_media_cache(conn)
+        conn.commit()
     finally:
         conn.close()
 
@@ -3725,21 +3738,22 @@ _TWITTER_VIDEO_HOSTS = {"video.twimg.com"}
 _TWITTER_VIDEO_PATTERNS = (".mp4", ".m3u8", ".mov", "amplify_video", "ext_tw_video", "/video/")
 
 
-def _is_twitter_image_url(url: str) -> bool:
-    if not isinstance(url, str) or not url.startswith("http"):
+def _is_cacheable_twitter_media_url(url: str) -> bool:
+    if not isinstance(url, str) or not url.startswith("https://"):
         return False
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     path = parsed.path.lower()
-    if host in _TWITTER_VIDEO_HOSTS or "video.twimg" in host:
+    if host != "pbs.twimg.com" or "/media/" not in path:
         return False
     url_lower = url.lower()
     if any(pattern in url_lower for pattern in _TWITTER_VIDEO_PATTERNS):
         return False
-    ext = os.path.splitext(path)[1]
-    is_pbs_media = host == "pbs.twimg.com" and "/media/" in path
-    is_image_ext = ext in _TWITTER_IMAGE_EXTENSIONS
-    return is_pbs_media or is_image_ext
+    return True
+
+
+def _is_twitter_image_url(url: str) -> bool:
+    return _is_cacheable_twitter_media_url(url)
 
 
 def _extract_tweet_media_urls(tweet: dict) -> list[str]:
@@ -3784,6 +3798,135 @@ def _is_twitter_url(url: str) -> bool:
     return route is not None and route.get("source") == "Twitter/X"
 
 
+_MEDIA_CACHE_MAX_SIZE = 10 * 1024 * 1024
+_MEDIA_CACHE_ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_MEDIA_CACHE_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+_MEDIA_CACHE_MAX_AGE_DAYS = 30
+_MEDIA_CACHE_KEY_RE = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _media_cache_key_for_url(url: str) -> str:
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+
+def _extension_for_mime_type(mime_type: str | None) -> str:
+    return {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get((mime_type or "").lower(), "")
+
+
+def _media_cache_relative_path(cache_key: str, ext: str = "") -> str:
+    return f"{cache_key[:2]}/{cache_key[2:4]}/{cache_key}{ext}"
+
+
+def _is_path_within_media_cache_dir(full_path: Path) -> bool:
+    try:
+        resolved = full_path.resolve()
+        root = MEDIA_CACHE_DIR.resolve()
+        return resolved == root or root in resolved.parents
+    except Exception:
+        return False
+
+
+def _download_media_file(url: str, dest_path: Path) -> tuple[bool, str | None, int]:
+    try:
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=30) as resp:
+            final_url = resp.geturl()
+            if not _is_cacheable_twitter_media_url(final_url):
+                return False, f"redirect_to_non_whitelist: {final_url}", 0
+            content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if content_type:
+                if content_type not in _MEDIA_CACHE_ALLOWED_MIME_TYPES:
+                    return False, f"unsupported_content_type: {content_type}", 0
+            else:
+                parsed_path = urlparse(final_url).path.lower()
+                ext = os.path.splitext(parsed_path)[1]
+                if ext not in _MEDIA_CACHE_ALLOWED_EXTENSIONS:
+                    return False, f"unsupported_extension: {ext}", 0
+            data = resp.read(_MEDIA_CACHE_MAX_SIZE + 1)
+            if len(data) > _MEDIA_CACHE_MAX_SIZE:
+                return False, "content_too_large", 0
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            dest_path.write_bytes(data)
+            return True, content_type or None, len(data)
+    except HTTPError as exc:
+        return False, f"http_{exc.code}", 0
+    except Exception as exc:
+        return False, str(exc), 0
+
+
+def _cleanup_media_cache(conn: sqlite3.Connection) -> None:
+    cutoff = (datetime.now() - timedelta(days=_MEDIA_CACHE_MAX_AGE_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    rows = conn.execute(
+        "SELECT url, relative_path FROM media_cache WHERE created_at < ?",
+        (cutoff,),
+    ).fetchall()
+    for row in rows:
+        try:
+            full_path = (MEDIA_CACHE_DIR / row["relative_path"]).resolve()
+            if _is_path_within_media_cache_dir(full_path) and full_path.exists():
+                full_path.unlink()
+        except Exception:
+            pass
+    conn.execute("DELETE FROM media_cache WHERE created_at < ?", (cutoff,))
+
+
+def _cache_twitter_image(conn: sqlite3.Connection, url: str) -> dict | None:
+    if not _is_cacheable_twitter_media_url(url):
+        return None
+    cache_key = _media_cache_key_for_url(url)
+    relative_path = _media_cache_relative_path(cache_key)
+    dest_path = MEDIA_CACHE_DIR / relative_path
+    existing = conn.execute(
+        "SELECT status, relative_path FROM media_cache WHERE url=?",
+        (url,),
+    ).fetchone()
+    if existing and existing["status"] == "success":
+        existing_path = MEDIA_CACHE_DIR / existing["relative_path"]
+        if existing_path.exists():
+            return {"cache_key": cache_key, "cached_url": f"/api/media-cache/{cache_key}", "status": "success"}
+    ok, mime_type, size = _download_media_file(url, dest_path)
+    ts = now_ts()
+    if not ok:
+        conn.execute(
+            """
+            INSERT INTO media_cache(url, cache_key, relative_path, mime_type, size_bytes, status, created_at, updated_at, last_error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+              status=excluded.status,
+              updated_at=excluded.updated_at,
+              last_error=excluded.last_error
+            """,
+            (url, cache_key, relative_path, None, 0, "failed", ts, ts, mime_type or "download_failed"),
+        )
+        return None
+    ext = _extension_for_mime_type(mime_type)
+    if ext:
+        relative_path = _media_cache_relative_path(cache_key, ext)
+        final_path = MEDIA_CACHE_DIR / relative_path
+        if final_path != dest_path:
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(dest_path), str(final_path))
+    else:
+        final_path = dest_path
+    conn.execute(
+        """
+        INSERT INTO media_cache(url, cache_key, relative_path, mime_type, size_bytes, status, created_at, updated_at, last_error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(url) DO UPDATE SET
+          cache_key=excluded.cache_key,
+          relative_path=excluded.relative_path,
+          mime_type=excluded.mime_type,
+          size_bytes=excluded.size_bytes,
+          status=excluded.status,
+          created_at=excluded.created_at,
+          updated_at=excluded.updated_at,
+          last_error=NULL
+        """,
+        (url, cache_key, relative_path, mime_type, size, "success", ts, ts, None),
+    )
+    return {"cache_key": cache_key, "cached_url": f"/api/media-cache/{cache_key}", "status": "success"}
+
+
 def _sanitize_twitter_media_images(raw_images: object) -> list[dict]:
     if not isinstance(raw_images, list):
         return []
@@ -3796,14 +3939,7 @@ def _sanitize_twitter_media_images(raw_images: object) -> list[dict]:
         if source not in ("tweet", "quoted_tweet"):
             continue
         url = entry.get("url")
-        if not isinstance(url, str) or not url.startswith("http"):
-            continue
-        parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
-        path = parsed.path.lower()
-        if host != "pbs.twimg.com" or "/media/" not in path:
-            continue
-        if any(pattern in url.lower() for pattern in _TWITTER_VIDEO_PATTERNS):
+        if not _is_cacheable_twitter_media_url(url):
             continue
         if url in seen:
             continue
@@ -3935,6 +4071,22 @@ def run_opencli_twitter_detail(url: str) -> tuple[bool, dict, str]:
 
     content = "\n".join(part for part in lines if part is not None).strip()
     media_images = _build_twitter_media_images(main_tweet, quoted)
+    cached_images: list[dict] = []
+    if media_images:
+        conn = db_conn()
+        try:
+            for image in media_images:
+                cached = _cache_twitter_image(conn, image["url"])
+                if cached:
+                    cached_images.append({**image, **cached})
+                else:
+                    cached_images.append(image)
+            _cleanup_media_cache(conn)
+            conn.commit()
+        finally:
+            conn.close()
+    else:
+        cached_images = media_images
     payload = {
         "source": "Twitter/X",
         "tweet": main_tweet,
@@ -3944,7 +4096,7 @@ def run_opencli_twitter_detail(url: str) -> tuple[bool, dict, str]:
         "article": article_record or None,
         "article_error": article_error or None,
         "comment_summary_error": comment_summary_error or None,
-        "media_images": media_images,
+        "media_images": cached_images,
     }
     return (
         True,
@@ -6155,6 +6307,32 @@ def api_update_item_state(item_id: str):
     )
 
 
+@app.get("/api/media-cache/<cache_key>")
+def api_media_cache(cache_key: str):
+    if not _MEDIA_CACHE_KEY_RE.match(cache_key):
+        return jsonify({"ok": False, "error": "invalid_cache_key"}), 400
+    conn = db_conn()
+    try:
+        row = conn.execute(
+            "SELECT relative_path, mime_type FROM media_cache WHERE cache_key=? AND status='success'",
+            (cache_key,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    full_path = (MEDIA_CACHE_DIR / row["relative_path"]).resolve()
+    if not _is_path_within_media_cache_dir(full_path):
+        return jsonify({"ok": False, "error": "invalid_path"}), 400
+    if not full_path.exists():
+        return jsonify({"ok": False, "error": "file_missing"}), 404
+    return send_from_directory(
+        str(MEDIA_CACHE_DIR),
+        row["relative_path"],
+        mimetype=row["mime_type"] or None,
+    )
+
+
 @app.get("/api/news/<item_id>/detail")
 def api_news_detail(item_id: str):
     conn = db_conn()
@@ -6210,6 +6388,8 @@ def api_news_detail(item_id: str):
             "done_total": sum(1 for reminder in reminders if reminder["status"] == "done"),
             "dismissed_total": sum(1 for reminder in reminders if reminder["status"] == "dismissed"),
         }
+        detail = None
+        detail_out = None
         if url:
             job = conn.execute(
                 "SELECT status, attempts, last_error, queued_at, started_at, finished_at FROM detail_jobs WHERE url=?",
@@ -6232,18 +6412,25 @@ def api_news_detail(item_id: str):
                 (url,),
             ).fetchone()
             market_tags = load_market_tags_map(conn, [url]).get(url, [])
+
+            detail_out = dict(detail) if detail else None
+            if detail_out and (_is_twitter_url(url) or item["source_type"] == "twitter"):
+                try:
+                    raw_payload = json.loads(detail_out.get("raw_json") or "{}")
+                    detail_out["media_images"] = _sanitize_twitter_media_images(raw_payload.get("media_images"))
+                    for image in detail_out["media_images"]:
+                        cached = conn.execute(
+                            "SELECT cache_key FROM media_cache WHERE url=? AND status='success'",
+                            (image["url"],),
+                        ).fetchone()
+                        if cached:
+                            image["cached_url"] = f"/api/media-cache/{cached['cache_key']}"
+                except Exception:
+                    detail_out["media_images"] = []
+            if detail_out and "raw_json" in detail_out:
+                del detail_out["raw_json"]
     finally:
         conn.close()
-
-    detail_out = dict(detail) if detail else None
-    if detail_out and (_is_twitter_url(url) or item["source_type"] == "twitter"):
-        try:
-            raw_payload = json.loads(detail_out.get("raw_json") or "{}")
-            detail_out["media_images"] = _sanitize_twitter_media_images(raw_payload.get("media_images"))
-        except Exception:
-            detail_out["media_images"] = []
-    if detail_out and "raw_json" in detail_out:
-        del detail_out["raw_json"]
 
     return jsonify(
         {

@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-07-07 — v2.0.2.5 improve: Twitter/X 推文图片本地缓存与 30 天清理
+- **文件**
+  - *app.py（+）*、*schema.sql（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*、*README.md（+）*
+    - 新增 `media_cache` 表记录图片缓存元数据（URL、cache_key、relative_path、mime_type、size_bytes、status、created_at 等）
+    - 缓存目录优先读取 `NEWS_READER_MEDIA_CACHE_DIR`，否则放在 `NEWS_READER_DB_PATH` 同级 `media-cache`；运行态数据不进 Git
+    - 推文详情抓取时提取图片 URL 并下载到本地，仅接受 `pbs.twimg.com/media/` + HTTP `Content-Type: image/jpeg/png/webp`（或对应扩展名），单图 10MB 上限；继续过滤视频、视频封面与 `media_posters`
+    - 新增 `/api/media-cache/<cache_key>` 路由提供本地图片读取，带 cache_key 校验与 path traversal 防护
+    - `/api/news/<id>/detail` 返回的 `detail.media_images` 优先带 `cached_url`，前端 gallery 直接访问本机缓存 URL，不再依赖远程 X 图片地址
+    - 缓存创建超过 30 天的文件与 DB 记录在 `ensure_db` 及每次缓存批次后自动清理；缓存缺失/失败不影响正文，可提示重新抓取推文
+    - 顶栏版本号、页面 `<title>`、静态资源版本参数与移动端更多面板版本文案同步更新到 `v2.0.2.5`
+- **影响**：新增 schema 与本地缓存目录，拉取后需重启 Flask 并刷新页面；首次含图推文稍后阅读时会下载图片，无 VPN 时只要缓存存在仍可显示。
+
 ### 2026-07-07 — v2.0.2.4 improve: Twitter/X 推文稍后阅读图片展示与重新抓取
 - **文件**
   - *app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*README.md（+）*、*tests/test_api.py（+）*
