@@ -3720,6 +3720,98 @@ def _extract_twitter_article_payload(parsed: object) -> dict:
     return record if isinstance(record, dict) else {}
 
 
+_TWITTER_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+_TWITTER_VIDEO_HOSTS = {"video.twimg.com"}
+_TWITTER_VIDEO_PATTERNS = (".mp4", ".m3u8", ".mov", "amplify_video", "ext_tw_video", "/video/")
+
+
+def _is_twitter_image_url(url: str) -> bool:
+    if not isinstance(url, str) or not url.startswith("http"):
+        return False
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    if host in _TWITTER_VIDEO_HOSTS or "video.twimg" in host:
+        return False
+    url_lower = url.lower()
+    if any(pattern in url_lower for pattern in _TWITTER_VIDEO_PATTERNS):
+        return False
+    ext = os.path.splitext(path)[1]
+    is_pbs_media = host == "pbs.twimg.com" and "/media/" in path
+    is_image_ext = ext in _TWITTER_IMAGE_EXTENSIONS
+    return is_pbs_media or is_image_ext
+
+
+def _extract_tweet_media_urls(tweet: dict) -> list[str]:
+    urls: list[str] = []
+    media_urls = tweet.get("media_urls")
+    if isinstance(media_urls, str):
+        media_urls = [media_urls]
+    if isinstance(media_urls, list):
+        for value in media_urls:
+            if isinstance(value, str) and value.startswith("http"):
+                urls.append(value)
+    media_list = tweet.get("media")
+    if isinstance(media_list, list):
+        for entry in media_list:
+            if not isinstance(entry, dict):
+                continue
+            for key in ("media_url_https", "url", "media_url"):
+                value = entry.get(key)
+                if isinstance(value, str) and value.startswith("http"):
+                    urls.append(value)
+                    break
+    return urls
+
+
+def _build_twitter_media_images(main_tweet: dict, quoted_tweet: dict | None) -> list[dict]:
+    seen: set[str] = set()
+    images: list[dict] = []
+    for source, tweet in (("tweet", main_tweet), ("quoted_tweet", quoted_tweet or {})):
+        if not isinstance(tweet, dict):
+            continue
+        for url in _extract_tweet_media_urls(tweet):
+            if url in seen:
+                continue
+            if _is_twitter_image_url(url):
+                seen.add(url)
+                images.append({"url": url, "source": source})
+    return images
+
+
+def _is_twitter_url(url: str) -> bool:
+    route = resolve_detail_route(url)
+    return route is not None and route.get("source") == "Twitter/X"
+
+
+def _sanitize_twitter_media_images(raw_images: object) -> list[dict]:
+    if not isinstance(raw_images, list):
+        return []
+    seen: set[str] = set()
+    result: list[dict] = []
+    for entry in raw_images:
+        if not isinstance(entry, dict):
+            continue
+        source = entry.get("source")
+        if source not in ("tweet", "quoted_tweet"):
+            continue
+        url = entry.get("url")
+        if not isinstance(url, str) or not url.startswith("http"):
+            continue
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.lower()
+        if host != "pbs.twimg.com" or "/media/" not in path:
+            continue
+        if any(pattern in url.lower() for pattern in _TWITTER_VIDEO_PATTERNS):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        result.append({"url": url, "source": source})
+    return result
+
+
 def _build_twitter_comments_summary_text(comments: list[dict]) -> str:
     parts: list[str] = []
     for index, comment in enumerate(comments, start=1):
@@ -3842,6 +3934,7 @@ def run_opencli_twitter_detail(url: str) -> tuple[bool, dict, str]:
         )
 
     content = "\n".join(part for part in lines if part is not None).strip()
+    media_images = _build_twitter_media_images(main_tweet, quoted)
     payload = {
         "source": "Twitter/X",
         "tweet": main_tweet,
@@ -3851,6 +3944,7 @@ def run_opencli_twitter_detail(url: str) -> tuple[bool, dict, str]:
         "article": article_record or None,
         "article_error": article_error or None,
         "comment_summary_error": comment_summary_error or None,
+        "media_images": media_images,
     }
     return (
         True,
@@ -6126,7 +6220,7 @@ def api_news_detail(item_id: str):
                 (url,),
             ).fetchone()
             detail = conn.execute(
-                "SELECT title, author, published_at, content, content_length, fetched_at FROM article_details WHERE url=?",
+                "SELECT title, author, published_at, content, content_length, fetched_at, raw_json FROM article_details WHERE url=?",
                 (url,),
             ).fetchone()
             ai = conn.execute(
@@ -6141,6 +6235,16 @@ def api_news_detail(item_id: str):
     finally:
         conn.close()
 
+    detail_out = dict(detail) if detail else None
+    if detail_out and (_is_twitter_url(url) or item["source_type"] == "twitter"):
+        try:
+            raw_payload = json.loads(detail_out.get("raw_json") or "{}")
+            detail_out["media_images"] = _sanitize_twitter_media_images(raw_payload.get("media_images"))
+        except Exception:
+            detail_out["media_images"] = []
+    if detail_out and "raw_json" in detail_out:
+        del detail_out["raw_json"]
+
     return jsonify(
         {
             "ok": True,
@@ -6153,7 +6257,7 @@ def api_news_detail(item_id: str):
             "favorite_at": (state_row["favorite_at"] if state_row else None),
             "detail_status": (job["status"] if job else "none"),
             "job": dict(job) if job else None,
-            "detail": dict(detail) if detail else None,
+            "detail": detail_out,
             "ai_status": (ai_job["status"] if ai_job else "none"),
             "ai_job": dict(ai_job) if ai_job else None,
             "ai": dict(ai) if ai else None,
@@ -7006,30 +7110,55 @@ def api_news_market_tag_delete(item_id: str):
 def api_news_detail_retry(item_id: str):
     conn = db_conn()
     try:
-        row = conn.execute("SELECT id, url, source FROM items WHERE id=?", (item_id,)).fetchone()
+        row = conn.execute("SELECT id, url, source, source_type FROM items WHERE id=?", (item_id,)).fetchone()
         if not row:
             return jsonify({"ok": False, "error": "item_not_found"}), 404
         if not row["url"]:
             return jsonify({"ok": False, "error": "missing_url"}), 400
-        has_detail = conn.execute("SELECT 1 FROM article_details WHERE url=?", (row["url"],)).fetchone()
+        body = request.get_json(silent=True) or {}
+        mode = (request.args.get("mode") or body.get("mode") or "").strip().lower()
+        url = row["url"]
+        is_twitter = _is_twitter_url(url) or row["source_type"] == "twitter"
+        has_detail = conn.execute("SELECT 1 FROM article_details WHERE url=?", (url,)).fetchone()
         with conn:
             ts = now_ts()
             if has_detail:
-                enqueue_ai_job(conn, row["url"])
-                conn.execute(
-                    """
-                    UPDATE ai_jobs
-                    SET status='pending', last_error=NULL, queued_at=?, updated_at=?
-                    WHERE url=?
-                    """,
-                    (ts, ts, row["url"]),
-                )
+                if is_twitter and mode != "ai":
+                    # For Twitter/X, retry re-fetches the tweet detail even if it already exists,
+                    # so that images and updated text can be refreshed without losing the old view.
+                    conn.execute(
+                        """
+                        INSERT INTO detail_jobs(url, item_id, source, status, attempts, queued_at, updated_at, started_at, finished_at)
+                        VALUES (?, ?, ?, 'pending', 0, ?, ?, NULL, NULL)
+                        ON CONFLICT(url) DO UPDATE SET
+                          item_id=excluded.item_id,
+                          source=excluded.source,
+                          status='pending',
+                          last_error=NULL,
+                          attempts=0,
+                          queued_at=excluded.queued_at,
+                          updated_at=excluded.updated_at,
+                          started_at=NULL,
+                          finished_at=NULL
+                        """,
+                        (url, row["id"], row["source"] or "", ts, ts),
+                    )
+                else:
+                    enqueue_ai_job(conn, url)
+                    conn.execute(
+                        """
+                        UPDATE ai_jobs
+                        SET status='pending', last_error=NULL, queued_at=?, updated_at=?
+                        WHERE url=?
+                        """,
+                        (ts, ts, url),
+                    )
             else:
-                created = enqueue_detail_job(conn, row["id"], row["url"], row["source"] or "")
+                created = enqueue_detail_job(conn, row["id"], url, row["source"] or "")
                 if not created:
                     conn.execute(
                         "UPDATE detail_jobs SET status='pending', last_error=NULL, queued_at=?, updated_at=? WHERE url=?",
-                        (ts, ts, row["url"]),
+                        (ts, ts, url),
                     )
     finally:
         conn.close()

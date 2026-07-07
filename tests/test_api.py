@@ -5573,3 +5573,482 @@ def test_settings_api_ignores_legacy_chat_fields(tmp_path: Path, monkeypatch):
     assert payload["llm"]["translation"]["model"] == "deepseek-legacy"
     assert payload["llm"]["codex_chat"]["model"] == "gpt-5-codex-legacy"
     assert "chat" not in payload["llm"]
+
+
+
+def test_twitter_image_url_filtering():
+    import app as app_module
+
+    assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.jpg") is True
+    assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.png") is True
+    assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.webp?format=webp") is True
+    assert app_module._is_twitter_image_url("https://example.com/image.jpeg") is True
+    assert app_module._is_twitter_image_url("https://video.twimg.com/ext_tw_video/abc.mp4") is False
+    assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.mp4") is False
+    assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.m3u8") is False
+    assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.jpg/amplify_video/123") is False
+    assert app_module._is_twitter_image_url("https://pbs.twimg.com/media/abc.ext_tw_video.jpg") is False
+
+
+def test_build_twitter_media_images_extracts_deduplicates_and_marks_source():
+    import app as app_module
+
+    main = {
+        "media_urls": [
+            "https://pbs.twimg.com/media/a.jpg",
+            "https://video.twimg.com/v.mp4",
+            "https://pbs.twimg.com/media/a.jpg",
+        ]
+    }
+    quoted = {"media_urls": ["https://pbs.twimg.com/media/b.webp", "https://pbs.twimg.com/media/a.jpg"]}
+    images = app_module._build_twitter_media_images(main, quoted)
+    assert [img["url"] for img in images] == [
+        "https://pbs.twimg.com/media/a.jpg",
+        "https://pbs.twimg.com/media/b.webp",
+    ]
+    assert images[0]["source"] == "tweet"
+    assert images[1]["source"] == "quoted_tweet"
+
+
+def test_build_twitter_media_images_ignores_media_posters():
+    import app as app_module
+
+    main = {
+        "media_urls": ["https://pbs.twimg.com/media/poster.jpg"],
+        "media_posters": ["https://pbs.twimg.com/media/poster.jpg"],
+    }
+    # media_posters itself is not used as an image source; only media_urls is read.
+    images = app_module._build_twitter_media_images(main, None)
+    assert [img["url"] for img in images] == ["https://pbs.twimg.com/media/poster.jpg"]
+
+
+def test_run_opencli_twitter_detail_includes_media_images(monkeypatch):
+    import app as app_module
+
+    thread_payload = [
+        {
+            "text": "主推文内容比较完整，足够通过正文长度校验。",
+            "media_urls": [
+                "https://pbs.twimg.com/media/a.jpg",
+                "https://video.twimg.com/v.mp4",
+            ],
+            "quoted_tweet": {
+                "text": "引用推文内容",
+                "media_urls": ["https://pbs.twimg.com/media/b.webp"],
+            },
+        }
+    ]
+
+    def fake_run(cmd, timeout):
+        if "thread" in cmd:
+            return True, thread_payload, ""
+        return False, None, "Article not found"
+
+    monkeypatch.setattr(app_module, "_run_opencli_json_command", fake_run)
+    ok, detail, error = app_module.run_opencli_twitter_detail("https://x.com/example/status/123")
+    assert ok is True
+    assert error == ""
+    payload = json.loads(detail["raw_json"])
+    assert payload["media_images"] == [
+        {"url": "https://pbs.twimg.com/media/a.jpg", "source": "tweet"},
+        {"url": "https://pbs.twimg.com/media/b.webp", "source": "quoted_tweet"},
+    ]
+
+
+def test_detail_api_returns_twitter_media_images_and_hides_raw_json(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    url = "https://x.com/example/status/123"
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        f"""## X · Social（1条）
+### [Tweet Update]({url})
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    raw = json.dumps(
+        {"media_images": [{"url": "https://pbs.twimg.com/media/a.jpg", "source": "tweet"}]},
+        ensure_ascii=False,
+    )
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", item["id"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, "Twitter/X", "Tweet Update", "alice", "2026-06-11 09:00:00", "content", len("content"), raw, ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["ok"] is True
+    assert detail["detail"]["media_images"] == [{"url": "https://pbs.twimg.com/media/a.jpg", "source": "tweet"}]
+    assert "raw_json" not in detail["detail"]
+
+
+def test_detail_api_non_twitter_has_no_media_images(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    url = "https://www.reuters.com/world/example"
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        f"""## Reuters · World（1条）
+### [Item 1]({url})
+- 发布时间：2026-05-25 12:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, "Reuters", "T", "A", "2026-05-25", "English body " * 30, len("English body " * 30), "{}", ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["ok"] is True
+    assert detail["detail"].get("media_images") in (None, [])
+
+
+def test_detail_retry_twitter_with_detail_requeues_detail_job(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    url = "https://x.com/example/status/123"
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        f"""## X · Social（1条）
+### [Tweet Update]({url})
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", item["id"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, "Twitter/X", "Tweet Update", "alice", "2026-06-11 09:00:00", "content", len("content"), "{}", ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    retry = client.post(f"/api/news/{item['id']}/detail/retry")
+    assert retry.status_code == 200
+    assert retry.get_json()["ok"] is True
+
+    conn = app_module.db_conn()
+    try:
+        job = conn.execute("SELECT status FROM detail_jobs WHERE url=?", (url,)).fetchone()
+        assert job is not None
+        assert job["status"] == "pending"
+    finally:
+        conn.close()
+
+
+def test_detail_retry_twitter_with_detail_mode_ai_requeues_ai_job(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    url = "https://x.com/example/status/123"
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        f"""## X · Social（1条）
+### [Tweet Update]({url})
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", item["id"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, "Twitter/X", "Tweet Update", "alice", "2026-06-11 09:00:00", "content", len("content"), "{}", ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    retry = client.post(f"/api/news/{item['id']}/detail/retry", json={"mode": "ai"})
+    assert retry.status_code == 200
+    assert retry.get_json()["ok"] is True
+
+    conn = app_module.db_conn()
+    try:
+        job = conn.execute("SELECT status FROM ai_jobs WHERE url=?", (url,)).fetchone()
+        assert job is not None
+        assert job["status"] == "pending"
+    finally:
+        conn.close()
+
+
+def test_detail_retry_non_twitter_with_detail_still_requeues_ai_job(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年5月"
+    daily_dir.mkdir(parents=True)
+    url = "https://www.reuters.com/world/example"
+    (daily_dir / "dailyFreshNews_2026-05-25.md").write_text(
+        f"""## Reuters · World（1条）
+### [Item 1]({url})
+- 发布时间：2026-05-25 12:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, "Reuters", "T", "A", "2026-05-25", "English body " * 30, len("English body " * 30), "{}", ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    retry = client.post(f"/api/news/{item['id']}/detail/retry")
+    assert retry.status_code == 200
+    assert retry.get_json()["ok"] is True
+
+    conn = app_module.db_conn()
+    try:
+        job = conn.execute("SELECT status FROM ai_jobs WHERE url=?", (url,)).fetchone()
+        assert job is not None
+        assert job["status"] == "pending"
+    finally:
+        conn.close()
+
+
+
+def test_sanitize_twitter_media_images_filters_invalid_items():
+    import app as app_module
+
+    raw = [
+        {"url": "https://pbs.twimg.com/media/valid.jpg", "source": "tweet"},
+        {"url": "https://example.com/image.jpg", "source": "tweet"},
+        {"url": "https://video.twimg.com/ext_tw_video/x.mp4", "source": "tweet"},
+        {"url": "https://pbs.twimg.com/media/valid2.png", "source": "quoted_tweet"},
+        {"url": "https://pbs.twimg.com/media/duplicate.jpg", "source": "tweet"},
+        {"url": "https://pbs.twimg.com/media/other.jpg", "source": "comments"},
+        {"url": "https://pbs.twimg.com/media/amplify_video.jpg", "source": "tweet"},
+        "not a dict",
+    ]
+    result = app_module._sanitize_twitter_media_images(raw)
+    assert result == [
+        {"url": "https://pbs.twimg.com/media/valid.jpg", "source": "tweet"},
+        {"url": "https://pbs.twimg.com/media/valid2.png", "source": "quoted_tweet"},
+        {"url": "https://pbs.twimg.com/media/duplicate.jpg", "source": "tweet"},
+    ]
+
+
+def test_detail_api_sanitizes_twitter_media_images_and_hides_raw_json(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    url = "https://x.com/example/status/123"
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        f"""## X · Social（1条）
+### [Tweet Update]({url})
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    raw = json.dumps(
+        {
+            "media_images": [
+                {"url": "https://pbs.twimg.com/media/valid.jpg", "source": "tweet"},
+                {"url": "https://example.com/image.jpg", "source": "tweet"},
+                {"url": "https://video.twimg.com/ext_tw_video/x.mp4", "source": "tweet"},
+                {"url": "https://pbs.twimg.com/media/valid2.png", "source": "quoted_tweet"},
+                {"url": "https://pbs.twimg.com/media/valid.jpg", "source": "tweet"},
+                {"url": "https://pbs.twimg.com/media/other.jpg", "source": "comments"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", item["id"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, "Twitter/X", "Tweet Update", "alice", "2026-06-11 09:00:00", "content", len("content"), raw, ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail["ok"] is True
+    assert detail["detail"]["media_images"] == [
+        {"url": "https://pbs.twimg.com/media/valid.jpg", "source": "tweet"},
+        {"url": "https://pbs.twimg.com/media/valid2.png", "source": "quoted_tweet"},
+    ]
+    assert "raw_json" not in detail["detail"]
+
+
+def test_detail_retry_twitter_resets_detail_job_attempts_and_timestamps(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    url = "https://x.com/example/status/123"
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        f"""## X · Social（1条）
+### [Tweet Update]({url})
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    ts = app_module.now_ts()
+    conn = app_module.db_conn()
+    try:
+        conn.execute(
+            "UPDATE items SET source=?, source_name=?, source_type=? WHERE id=?",
+            ("Twitter", "Twitter", "twitter", item["id"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_details(url, source, title, author, published_at, content, content_length, raw_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, "Twitter/X", "Tweet Update", "alice", "2026-06-11 09:00:00", "content", len("content"), "{}", ts, ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO detail_jobs(url, item_id, source, status, attempts, last_error, queued_at, started_at, finished_at, updated_at)
+            VALUES (?, ?, ?, 'failed', 2, 'old error', ?, ?, ?, ?)
+            """,
+            (url, item["id"], "Twitter", ts, ts, ts, ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    retry = client.post(f"/api/news/{item['id']}/detail/retry")
+    assert retry.status_code == 200
+
+    conn = app_module.db_conn()
+    try:
+        job = conn.execute("SELECT status, attempts, last_error, started_at, finished_at FROM detail_jobs WHERE url=?", (url,)).fetchone()
+        assert job["status"] == "pending"
+        assert job["attempts"] == 0
+        assert job["last_error"] is None
+        assert job["started_at"] is None
+        assert job["finished_at"] is None
+    finally:
+        conn.close()

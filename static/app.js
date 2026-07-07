@@ -322,6 +322,8 @@ const detailAiPoints = document.getElementById("detailAiPoints");
 const detailAiConclusion = document.getElementById("detailAiConclusion");
 const detailOriginalWrap = document.getElementById("detailOriginalWrap");
 const detailOriginalContent = document.getElementById("detailOriginalContent");
+const detailMediaGallery = document.getElementById("detailMediaGallery");
+const detailRefreshTweetBtn = document.getElementById("detailRefreshTweetBtn");
 const detailNoteToggleBtn = document.getElementById("detailNoteToggleBtn");
 const detailNoteCard = document.getElementById("detailNoteCard");
 const detailNoteText = document.getElementById("detailNoteText");
@@ -2345,7 +2347,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.3";
+  version.textContent = "News Reader v2.0.2.4";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5229,6 +5231,14 @@ function renderDetail(item) {
   retranslateBtn.textContent = "重新翻译";
   retranslateBtn.disabled = false;
   retranslateBtn.classList.add("hidden");
+  if (detailRefreshTweetBtn) {
+    detailRefreshTweetBtn.classList.add("hidden");
+    detailRefreshTweetBtn.disabled = false;
+  }
+  if (detailMediaGallery) {
+    detailMediaGallery.innerHTML = "";
+    detailMediaGallery.classList.add("hidden");
+  }
   closeMarketPicker();
   detailInlineMarketTags.classList.add("hidden");
   detailInlineMarketTags.innerHTML = "";
@@ -5313,6 +5323,19 @@ function renderDetail(item) {
       contentEl.textContent = original;
       contentEl.classList.remove("hidden");
       stopDetailPolling();
+    }
+
+    if (isTwitterDetail && detailMediaGallery) {
+      const images = Array.isArray(detail.media_images) ? detail.media_images : [];
+      renderDetailMediaGallery(images);
+      if (detailRefreshTweetBtn) {
+        detailRefreshTweetBtn.classList.remove("hidden");
+        detailRefreshTweetBtn.disabled = status === "pending" || status === "running";
+      }
+      if (status === "pending" || status === "running") {
+        statusEl.textContent = "正在重新抓取推文详情";
+        statusEl.className = "detail-status pending";
+      }
     }
   } else if (!item.read_later_at) {
     statusEl.textContent = Number(item.detail_ready || 0) === 1 ? "已完成稍后阅读" : "未加入稍后再看";
@@ -5399,6 +5422,32 @@ function renderDetail(item) {
   updateWorkspaceLayout();
 }
 
+function renderDetailMediaGallery(images) {
+  if (!detailMediaGallery) return;
+  detailMediaGallery.innerHTML = "";
+  for (const image of images) {
+    const url = image && image.url;
+    if (!url) continue;
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = "推文图片";
+    img.loading = "lazy";
+    img.onerror = () => {
+      a.remove();
+      if (detailMediaGallery.childElementCount === 0) {
+        detailMediaGallery.classList.add("hidden");
+      }
+    };
+    a.appendChild(img);
+    detailMediaGallery.appendChild(a);
+  }
+  detailMediaGallery.classList.toggle("hidden", detailMediaGallery.childElementCount === 0);
+}
+
 async function fetchDetail(itemId) {
   const res = await fetch(`/api/news/${encodeURIComponent(itemId)}/detail`);
   if (!res.ok) return null;
@@ -5457,9 +5506,11 @@ function startDetailPolling(itemId) {
   const current = state.itemsById.get(itemId);
   if (!current) return;
   const detailReady = Number(current.detail_ready || 0) === 1;
+  const detailStatus = current.detail_status || "none";
   const aiStatus = current.ai_status || "none";
-  const shouldPollDetail = !!current.read_later_at && !detailReady;
-  const shouldPollAi = detailReady && (aiStatus === "pending" || aiStatus === "running" || aiStatus === "none");
+  const isRefetching = detailStatus === "pending" || detailStatus === "running";
+  const shouldPollDetail = (!!current.read_later_at && !detailReady) || (detailReady && isRefetching);
+  const shouldPollAi = detailReady && !isRefetching && (aiStatus === "pending" || aiStatus === "running" || aiStatus === "none");
   if (!shouldPollDetail && !shouldPollAi) return;
 
   detailPollTimer = window.setInterval(async () => {
@@ -5481,7 +5532,9 @@ function startDetailPolling(itemId) {
       }
       return;
     }
-    if (aiStatus === "success" || aiStatus === "failed" || aiStatus === "canceled") {
+    const detailPolling = status === "pending" || status === "running";
+    const aiPolling = aiStatus === "pending" || aiStatus === "running" || aiStatus === "none";
+    if (!detailPolling && !aiPolling) {
       stopDetailPolling();
     }
   }, 2000);
@@ -7874,17 +7927,26 @@ if (detailChatInput) {
   });
 }
 
+function isTwitterItem(item) {
+  return item && (item.source_type === "twitter" || /^https?:\/\/(x\.com|twitter\.com)\//i.test(item.url || ""));
+}
+
 detailRetryBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;
   detailRetryBtn.disabled = true;
   try {
+    const item = state.itemsById.get(state.selectedId);
+    const mode = isTwitterItem(item) && Number(item?.detail_ready || 0) === 1 ? "detail" : "";
     const res = await fetch(`/api/news/${encodeURIComponent(state.selectedId)}/detail/retry`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mode ? { mode } : {}),
     });
     if (!res.ok) return;
-    const item = state.itemsById.get(state.selectedId);
     if (item) {
-      if (Number(item.detail_ready || 0) === 1) {
+      if (isTwitterItem(item) && Number(item.detail_ready || 0) === 1) {
+        item.detail_status = "pending";
+      } else if (Number(item.detail_ready || 0) === 1) {
         item.ai_status = "pending";
       } else {
         item.detail_status = "pending";
@@ -7907,6 +7969,8 @@ detailRetranslateBtn.addEventListener("click", async () => {
   try {
     const res = await fetch(`/api/news/${encodeURIComponent(state.selectedId)}/detail/retry`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "ai" }),
     });
     if (!res.ok) return;
     item.ai_status = "pending";
@@ -7918,6 +7982,30 @@ detailRetranslateBtn.addEventListener("click", async () => {
     detailRetranslateBtn.disabled = false;
   }
 });
+
+if (detailRefreshTweetBtn) {
+  detailRefreshTweetBtn.addEventListener("click", async () => {
+    if (!state.selectedId) return;
+    const item = state.itemsById.get(state.selectedId);
+    if (!item || !isTwitterItem(item)) return;
+    detailRefreshTweetBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/news/${encodeURIComponent(state.selectedId)}/detail/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "detail" }),
+      });
+      if (!res.ok) return;
+      item.detail_status = "pending";
+      state.itemsById.set(item.id, item);
+      rerenderOne(item.id);
+      await loadDetail(state.selectedId);
+      startDetailPolling(state.selectedId);
+    } finally {
+      detailRefreshTweetBtn.disabled = false;
+    }
+  });
+}
 
 detailNoteToggleBtn.addEventListener("click", () => {
   if (!state.selectedId) return;

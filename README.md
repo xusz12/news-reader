@@ -4,6 +4,17 @@
 
 ## What's Changed
 
+### 2026-07-07 — v2.0.2.4 improve: Twitter/X 推文稍后阅读图片展示与重新抓取
+- **文件**
+  - *app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*README.md（+）*、*tests/test_api.py（+）*
+    - 推文详情抓取时从 `main_tweet` / `quoted_tweet` 提取 `media_urls`，按 `pbs.twimg.com/media/` 或图片扩展名白名单保留图片，过滤 `video.twimg.com`、`.mp4`、`.m3u8`、`.mov`、`amplify_video`、`ext_tw_video` 等视频/视频封面，去重并标记来源 `tweet` / `quoted_tweet`
+    - 图片列表写入 `article_details.raw_json` 的 `media_images` 字段；`/api/news/<id>/detail` 解析后仅向前端返回安全的 `detail.media_images`，不暴露完整 `raw_json`
+    - 右栏新增 `detailMediaGallery` 图片区，显示在正文上方；点击可新标签打开原图，加载失败自动移除，无图片时隐藏
+    - Twitter/X 详情工具栏新增「重新抓取推文」按钮；点击后端重新排 `detail_jobs`，旧正文与旧图片在抓取期间继续展示，抓取成功后覆盖，失败保留旧内容
+    - `/api/news/<id>/detail/retry` 支持 `mode=ai` / `mode=detail` 参数：普通新闻仍只重新排 AI job；Twitter/X 选择重新抓详情或重新翻译，确保「重新翻译」语义不回归
+    - 顶栏版本号、页面 `<title>`、静态资源版本参数与移动端更多面板版本文案同步更新到 `v2.0.2.4`
+- **影响**：新增推文图片展示与重抓能力；拉取后需重启 Flask，并刷新页面以获取新的前端版本。
+
 ### 2026-07-07 — v2.0.2.3 fix: 日报集合右栏工具栏
 - **文件**
   - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*README.md（+）*

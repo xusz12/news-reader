@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.2.3</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.2.3" />
+    <title>News Reader v2.0.2.4</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.2.4" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.2.3</span>
+          <span class="topbar-version">v2.0.2.4</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -395,6 +395,7 @@
             <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
             <button id="detailRetryBtn" class="detail-retry-btn hidden" type="button">重试详情抓取</button>
             <button id="detailRetranslateBtn" class="detail-retry-btn hidden" type="button">重新翻译</button>
+            <button id="detailRefreshTweetBtn" class="detail-retry-btn hidden" type="button">重新抓取推文</button>
             <span class="detail-action-spacer" aria-hidden="true"></span>
             <button id="detailAskBtn" class="icon-btn hidden" type="button" title="提问" aria-label="提问"></button>
             <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
@@ -457,6 +458,7 @@
               <p id="detailAiConclusion" class="detail-ai-conclusion"></p>
             </section>
             <div id="detailStatus" class="detail-status"></div>
+            <div id="detailMediaGallery" class="detail-media-gallery hidden"></div>
             <div id="detailContent" class="detail-content hidden"></div>
             <details id="detailOriginalWrap" class="detail-original hidden">
               <summary>查看英文原文</summary>
@@ -583,6 +585,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.2.3"></script>
+    <script src="/static/app.js?v=2.0.2.4"></script>
   </body>
 </html>
