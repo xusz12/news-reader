@@ -1143,12 +1143,9 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
   const options = Array.isArray(catalog?.options) ? catalog.options : [];
   select.innerHTML = "";
 
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = catalog?.default_label || "deepseek-chat";
-  select.appendChild(defaultOption);
-
+  const defaultModelValue = (catalog?.resolved_default_model || "").trim();
   const values = new Set([""]);
+  const realOptions = [];
   options.forEach((item) => {
     const value = (item?.value || "").trim();
     if (!value || values.has(value)) return;
@@ -1156,8 +1153,19 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = item?.label || value;
-    select.appendChild(option);
+    realOptions.push(option);
   });
+
+  // 当默认模型已在可选项中时，不再单独显示"默认：X"占位项，直接预选中那条；
+  // 否则保留占位项以支持"留空=用默认模型"。
+  const defaultInOptions = !!defaultModelValue && values.has(defaultModelValue);
+  if (!defaultInOptions) {
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = catalog?.default_label ? `默认：${catalog.default_label}` : "deepseek-v4-flash";
+    select.appendChild(defaultOption);
+  }
+  realOptions.forEach((option) => select.appendChild(option));
 
   if (savedValue && !values.has(savedValue)) {
     values.add(savedValue);
@@ -1181,7 +1189,7 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
     customInput.value = savedValue;
     customInput.classList.remove("hidden");
   } else {
-    select.value = "";
+    select.value = defaultInOptions ? defaultModelValue : "";
     customInput.value = "";
     customInput.classList.add("hidden");
   }
@@ -1248,7 +1256,11 @@ function populateSettingsForm() {
   );
   if (settingsTranslationModelCurrent) {
     const currentTranslationModel = (llm.translation?.model || "").trim();
-    const resolvedDefaultTranslationModel = (state.runtimeSettings?.model_catalogs?.translation?.resolved_default_model || "deepseek-chat").trim();
+    const catalogResolvedDefault = state.runtimeSettings?.model_catalogs?.translation?.resolved_default_model;
+    if (!catalogResolvedDefault) {
+      console.warn("[settings] model catalog missing resolved_default_model; falling back to deepseek-v4-flash");
+    }
+    const resolvedDefaultTranslationModel = (catalogResolvedDefault || "deepseek-v4-flash").trim();
     if (currentTranslationModel) {
       settingsTranslationModelCurrent.textContent = currentTranslationModel === resolvedDefaultTranslationModel
         ? `当前：${currentTranslationModel}`
@@ -2282,7 +2294,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.7";
+  version.textContent = "News Reader v2.0.2.8";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }

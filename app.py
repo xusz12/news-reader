@@ -200,9 +200,18 @@ SECRET_PROVIDER_MAP = {
 DEEPSEEK_MODEL_FALLBACKS = [
     "deepseek-v4-flash",
     "deepseek-v4-pro",
-    "deepseek-chat",
-    "deepseek-reasoner",
 ]
+
+_DEPRECATED_DEEPSEEK_MODELS = {
+    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-reasoner": "deepseek-v4-pro",
+}
+
+
+def normalize_deepseek_model(model: str) -> str:
+    return _DEPRECATED_DEEPSEEK_MODELS.get((model or "").strip().lower(), (model or "").strip())
+
+
 CODEX_MODEL_FALLBACKS = [
     "gpt-5.5",
     "gpt-5-codex",
@@ -1082,7 +1091,7 @@ def current_runtime_settings() -> dict:
             if provider in {"deepseek"}:
                 merged["llm"]["translation"]["provider"] = provider
             if isinstance(model, str):
-                merged["llm"]["translation"]["model"] = model
+                merged["llm"]["translation"]["model"] = normalize_deepseek_model(model)
         codex_chat = llm.get("codex_chat")
         if isinstance(codex_chat, dict):
             model = codex_chat.get("model")
@@ -1198,11 +1207,13 @@ def parse_deepseek_model_options(payload: object) -> list[dict]:
     if not isinstance(rows, list):
         return []
     ids: list[str] = []
+    seen: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
             continue
-        model_id = (row.get("id") or "").strip()
-        if model_id:
+        model_id = normalize_deepseek_model((row.get("id") or "").strip())
+        if model_id and model_id not in seen:
+            seen.add(model_id)
             ids.append(model_id)
     return [build_model_option(model_id, source="official") for model_id in sort_deepseek_model_ids(ids)]
 
@@ -1418,7 +1429,7 @@ def validate_runtime_settings(payload: object) -> dict:
         raise ValueError("invalid_llm_settings")
 
     translation_provider = (translation.get("provider") or "").strip().lower()
-    translation_model = (translation.get("model") or "").strip()
+    translation_model = normalize_deepseek_model((translation.get("model") or "").strip())
     codex_chat = llm.get("codex_chat") if isinstance(llm.get("codex_chat"), dict) else {}
     codex_chat_model = (codex_chat.get("model") or "").strip()
     if translation_provider != "deepseek":
@@ -4397,7 +4408,7 @@ def process_pending_ai_once() -> bool:
                     """,
                     (
                         job["url"],
-                        payload.get("model", "deepseek-chat"),
+                        payload.get("model", "deepseek-v4-flash"),
                         json.dumps(payload.get("key_points_zh", []), ensure_ascii=False),
                         payload.get("conclusion_zh", ""),
                         payload.get("body_zh", ""),
@@ -4767,7 +4778,7 @@ def api_tracked_topic_rule_draft():
         {
             "ok": True,
             "draft": draft,
-            "model": payload.get("model", model_name or "deepseek-chat"),
+            "model": payload.get("model", model_name or "deepseek-v4-flash"),
             "version": TRACKED_RULE_DRAFT_VERSION,
         }
     )
@@ -4947,7 +4958,7 @@ def api_tracked_topic_daily_summary_generate(topic_id: int, summary_date: str):
                     status="failed",
                     summary_text="",
                     error=str(exc),
-                    model=model_name or "deepseek-chat",
+                    model=model_name or "deepseek-v4-flash",
                     raw_json="{}",
                 )
             summary_row = tracked_daily_summary_row(conn, topic_id, normalized_date)
@@ -4973,7 +4984,7 @@ def api_tracked_topic_daily_summary_generate(topic_id: int, summary_date: str):
                     tracked_daily_summary_char_limit(len(rows)),
                 ),
                 error="",
-                model=payload.get("model", model_name or "deepseek-chat"),
+                model=payload.get("model", model_name or "deepseek-v4-flash"),
                 raw_json=payload.get("raw_json", "{}"),
             )
         summary_row = tracked_daily_summary_row(conn, topic_id, normalized_date)
@@ -5920,7 +5931,7 @@ def api_market_tag_summary_generate(tag_key: str):
                     status="failed",
                     summary_text="",
                     error=str(exc),
-                    model=model_name or "deepseek-chat",
+                    model=model_name or "deepseek-v4-flash",
                     raw_json="{}",
                 )
             summary_row = market_tag_summary_row(conn, tag_key, MARKET_WORKBENCH_SUMMARY_RANGE_DAYS)
@@ -5936,7 +5947,7 @@ def api_market_tag_summary_generate(tag_key: str):
                 status="success",
                 summary_text=(payload.get("summary_text") or "").strip(),
                 error="",
-                model=payload.get("model", model_name or "deepseek-chat"),
+                model=payload.get("model", model_name or "deepseek-v4-flash"),
                 raw_json=payload.get("raw_json", "{}"),
             )
         summary_row = market_tag_summary_row(conn, tag_key, MARKET_WORKBENCH_SUMMARY_RANGE_DAYS)

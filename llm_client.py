@@ -137,9 +137,12 @@ def _contains_cjk(text: str) -> bool:
     return False
 
 
+_DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+
+
 def _configured_model() -> str:
     value = (os.getenv("NEWS_READER_LLM_MODEL") or "").strip()
-    return value or "deepseek-chat"
+    return value or _DEFAULT_DEEPSEEK_MODEL
 
 
 def resolve_translation_default_model() -> str:
@@ -365,6 +368,7 @@ def generate_article_ai(*, title: str, source: str, content: str, model: str | N
             tool_choice={"type": "function", "function": {"name": "save_article_translation"}},
             temperature=0.2,
             timeout=180,
+            extra_body={"thinking": {"type": "disabled"}},
         )
     except Exception as exc:
         raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
@@ -447,6 +451,7 @@ def generate_twitter_comments_summary(
             tool_choice={"type": "function", "function": {"name": "save_twitter_comments_summary"}},
             temperature=0.2,
             timeout=120,
+            extra_body={"thinking": {"type": "disabled"}},
         )
     except Exception as exc:
         raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
@@ -516,6 +521,7 @@ def generate_body_translation_only(*, title: str, source: str, content: str, mod
             tool_choice={"type": "function", "function": {"name": "save_body_translation_only"}},
             temperature=0.2,
             timeout=120,
+            extra_body={"thinking": {"type": "disabled"}},
         )
     except Exception as exc:
         raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
@@ -607,6 +613,7 @@ def generate_tracked_topic_rule_draft(
             tool_choice={"type": "function", "function": {"name": "save_tracked_rule_draft"}},
             temperature=0.2,
             timeout=180,
+            extra_body={"thinking": {"type": "disabled"}},
         )
     except Exception as exc:
         raise LLMClientError(f"DEEPSEEK_CALL_FAILED: {exc}") from exc
@@ -688,6 +695,7 @@ def generate_tracked_topic_daily_summary(
             ),
             tools=tools,
             tool_choice={"type": "function", "function": {"name": "save_daily_summary"}},
+            extra_body={"thinking": {"type": "disabled"}},
             temperature=0.2,
             timeout=180,
         )
@@ -771,6 +779,7 @@ def generate_market_tag_summary(
             ),
             tools=tools,
             tool_choice={"type": "function", "function": {"name": "save_market_tag_summary"}},
+            extra_body={"thinking": {"type": "disabled"}},
             temperature=0.2,
             timeout=180,
         )

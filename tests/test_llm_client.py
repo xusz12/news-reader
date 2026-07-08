@@ -43,7 +43,7 @@ def test_generate_article_ai_success(monkeypatch):
         )
         msg = types.SimpleNamespace(tool_calls=[tool_call])
         choice = types.SimpleNamespace(message=msg)
-        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+        return types.SimpleNamespace(model="deepseek-v4-flash", choices=[choice])
 
     _install_fake_openai(monkeypatch, create_impl)
     import llm_client
@@ -54,11 +54,12 @@ def test_generate_article_ai_success(monkeypatch):
         source="Reuters",
         content="English body " * 50,
     )
-    assert out["model"] == "deepseek-chat"
+    assert out["model"] == "deepseek-v4-flash"
     assert out["conclusion_zh"] == "一句话结论"
     assert out["key_points_zh"] == ["要点一", "要点二", "要点三"]
     assert len(out["body_zh"]) >= 200
-    assert called["model"] == "deepseek-chat"
+    assert called["model"] == "deepseek-v4-flash"
+    assert called["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 def test_generate_article_ai_invalid_tool_payload(monkeypatch):
@@ -70,7 +71,7 @@ def test_generate_article_ai_invalid_tool_payload(monkeypatch):
         )
         msg = types.SimpleNamespace(tool_calls=[tool_call])
         choice = types.SimpleNamespace(message=msg)
-        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+        return types.SimpleNamespace(model="deepseek-v4-flash", choices=[choice])
 
     _install_fake_openai(monkeypatch, create_impl)
     import llm_client
@@ -103,7 +104,7 @@ def test_generate_article_ai_reads_key_from_keychain(monkeypatch):
         )
         msg = types.SimpleNamespace(tool_calls=[tool_call])
         choice = types.SimpleNamespace(message=msg)
-        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+        return types.SimpleNamespace(model="deepseek-v4-flash", choices=[choice])
 
     _install_fake_openai(monkeypatch, create_impl)
     import llm_client
@@ -115,7 +116,7 @@ def test_generate_article_ai_reads_key_from_keychain(monkeypatch):
         source="Reuters",
         content="English body " * 50,
     )
-    assert out["model"] == "deepseek-chat"
+    assert out["model"] == "deepseek-v4-flash"
 
 
 def test_generate_article_ai_uses_configured_model_and_fallback(monkeypatch):
@@ -152,6 +153,7 @@ def test_generate_article_ai_uses_configured_model_and_fallback(monkeypatch):
         content="English body " * 50,
     )
     assert called["model"] == "deepseek-v4-pro"
+    assert called["extra_body"] == {"thinking": {"type": "disabled"}}
     assert out["model"] == "deepseek-v4-pro"
 
 
@@ -172,7 +174,7 @@ def test_generate_article_ai_accepts_short_chinese_body(monkeypatch):
         )
         msg = types.SimpleNamespace(tool_calls=[tool_call])
         choice = types.SimpleNamespace(message=msg)
-        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+        return types.SimpleNamespace(model="deepseek-v4-flash", choices=[choice])
 
     _install_fake_openai(monkeypatch, create_impl)
     import llm_client
@@ -203,7 +205,7 @@ def test_generate_article_ai_rejects_non_chinese_body(monkeypatch):
         )
         msg = types.SimpleNamespace(tool_calls=[tool_call])
         choice = types.SimpleNamespace(message=msg)
-        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+        return types.SimpleNamespace(model="deepseek-v4-flash", choices=[choice])
 
     _install_fake_openai(monkeypatch, create_impl)
     import llm_client
@@ -260,18 +262,19 @@ def test_generate_tracked_topic_rule_draft_success(monkeypatch):
         )
         msg = types.SimpleNamespace(tool_calls=[tool_call])
         choice = types.SimpleNamespace(message=msg)
-        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+        return types.SimpleNamespace(model="deepseek-v4-flash", choices=[choice])
 
     _install_fake_openai(monkeypatch, create_impl)
     import llm_client
 
     importlib.reload(llm_client)
     out = llm_client.generate_tracked_topic_rule_draft(title="美伊战争")
-    assert out["model"] == "deepseek-chat"
+    assert out["model"] == "deepseek-v4-flash"
     assert out["title"] == "美伊战争"
     assert out["strong_phrases"] == ["美伊战争", "美国伊朗战争"]
     assert out["threshold"] == 6
     assert called["tool_choice"]["function"]["name"] == "save_tracked_rule_draft"
+    assert called["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 def test_generate_tracked_topic_rule_draft_invalid_payload(monkeypatch):
@@ -283,7 +286,7 @@ def test_generate_tracked_topic_rule_draft_invalid_payload(monkeypatch):
         )
         msg = types.SimpleNamespace(tool_calls=[tool_call])
         choice = types.SimpleNamespace(message=msg)
-        return types.SimpleNamespace(model="deepseek-chat", choices=[choice])
+        return types.SimpleNamespace(model="deepseek-v4-flash", choices=[choice])
 
     _install_fake_openai(monkeypatch, create_impl)
     import llm_client

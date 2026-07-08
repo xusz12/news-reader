@@ -5089,7 +5089,14 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         app_module,
         "urlopen",
-        lambda request, timeout=0: DummyResponse({"data": [{"id": "deepseek-v4-pro"}, {"id": "deepseek-v4-flash"}]}),
+        lambda request, timeout=0: DummyResponse(
+            {"data": [
+                {"id": "deepseek-v4-pro"},
+                {"id": "deepseek-v4-flash"},
+                {"id": "deepseek-chat"},
+                {"id": "deepseek-reasoner"},
+            ]}
+        ),
     )
 
     def fake_subprocess_run(cmd, **kwargs):
@@ -5125,9 +5132,14 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     assert data["api_status"]["codex"]["exec_available"] is True
     assert data["api_status"]["codex"]["models_readable"] is True
     assert data["model_catalogs"]["translation"]["source"] == "official"
-    assert data["model_catalogs"]["translation"]["resolved_default_model"] == "deepseek-chat"
-    assert data["model_catalogs"]["translation"]["default_label"] == "deepseek-chat"
+    assert data["model_catalogs"]["translation"]["resolved_default_model"] == "deepseek-v4-flash"
+    assert data["model_catalogs"]["translation"]["default_label"] == "deepseek-v4-flash"
     assert data["model_catalogs"]["translation"]["options"][0]["value"] == "deepseek-v4-flash"
+    option_values = {opt["value"] for opt in data["model_catalogs"]["translation"]["options"]}
+    assert "deepseek-chat" not in option_values
+    assert "deepseek-reasoner" not in option_values
+    assert "deepseek-v4-flash" in option_values
+    assert "deepseek-v4-pro" in option_values
     assert data["model_catalogs"]["codex_chat"]["source"] == "codex_debug"
     assert data["tracked"]["default_rule_params"]["threshold"] == 6
     assert data["tracked"]["default_rule_params"]["title_weight"] == 1
@@ -5152,12 +5164,12 @@ def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
     )
     assert save_res.status_code == 200
     saved = save_res.get_json()
-    assert saved["llm"]["translation"]["model"] == "deepseek-reasoner"
+    assert saved["llm"]["translation"]["model"] == "deepseek-v4-pro"
     assert saved["llm"]["codex_chat"]["model"] == "gpt-5-codex"
     assert any(option["value"] == "gpt-5-codex" for option in saved["model_catalogs"]["codex_chat"]["options"])
     assert settings_path.exists() is True
     saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert saved_file["llm"]["translation"]["model"] == "deepseek-reasoner"
+    assert saved_file["llm"]["translation"]["model"] == "deepseek-v4-pro"
     assert saved_file["llm"]["codex_chat"]["model"] == "gpt-5-codex"
 
 
@@ -6601,3 +6613,50 @@ def test_run_opencli_twitter_detail_allows_single_character_tweet(monkeypatch, t
     assert ok is True
     assert error == ""
     assert "早" in detail["content"]
+
+
+
+def test_normalize_deepseek_model_maps_deprecated_names():
+    import app as app_module
+
+    assert app_module.normalize_deepseek_model("deepseek-chat") == "deepseek-v4-flash"
+    assert app_module.normalize_deepseek_model("deepseek-reasoner") == "deepseek-v4-pro"
+    assert app_module.normalize_deepseek_model("deepseek-v4-flash") == "deepseek-v4-flash"
+    assert app_module.normalize_deepseek_model("  DeepSeek-Chat  ") == "deepseek-v4-flash"
+    assert app_module.normalize_deepseek_model("") == ""
+
+
+def test_settings_load_normalizes_deprecated_deepseek_model(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"translation": {"provider": "deepseek", "model": "deepseek-chat"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    settings = app_module.current_runtime_settings()
+    assert settings["llm"]["translation"]["model"] == "deepseek-v4-flash"
+
+
+def test_settings_save_normalizes_deprecated_deepseek_model(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    normalized = app_module.validate_runtime_settings(
+        {"llm": {"translation": {"provider": "deepseek", "model": "deepseek-chat"}}}
+    )
+    assert normalized["llm"]["translation"]["model"] == "deepseek-v4-flash"

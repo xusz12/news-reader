@@ -4,6 +4,19 @@
 
 ## What's Changed
 
+### 2026-07-08 — v2.0.2.8 fix: DeepSeek 默认模型从 `deepseek-chat` 迁移到 `deepseek-v4-flash`
+- **文件**
+  - *llm_client.py（+）*、*app.py（+）*、*static/app.js（+）*、*static/index.html（+）*、*tests/test_llm_client.py（+）*、*tests/test_api.py（+）*、*README.md（+）*
+    - `deepseek-chat` 将于 2026-07-24 弃用，本版本提前完成迁移
+    - `llm_client.py` 默认模型改为 `deepseek-v4-flash`；所有 strict function calling 调用显式加 `extra_body={"thinking": {"type": "disabled"}}`，避免 v4-flash 默认思考模式与 `tool_choice` 冲突
+    - 保留 `https://api.deepseek.com/beta` endpoint（strict tool calling 仍依赖 /beta）
+    - `app.py` 的 `DEEPSEEK_MODEL_FALLBACKS` 移除 `deepseek-chat` / `deepseek-reasoner`，所有硬编码兜底改为 `deepseek-v4-flash`
+    - 新增 `normalize_deepseek_model()`：读取/保存 settings 时自动把 `deepseek-chat` 归一化为 `deepseek-v4-flash`，`deepseek-reasoner` 归一化为 `deepseek-v4-pro`
+    - 前端设置页默认文案与 resolved 默认模型同步为 `deepseek-v4-flash`
+    - 设置页 DeepSeek 模型下拉去掉冗余的"默认：X"占位项，默认模型已在可选项中时直接预选真实 option
+    - 补齐回归测试：默认 resolved model 为 `deepseek-v4-flash`、settings 归一化、strict 调用带 thinking disabled
+- **影响**：涉及 `app.py` 与 LLM 调用层，拉取后需重启 Flask；DeepSeek API key 不变。
+
 ### 2026-07-08 — v2.0.2.7 cleanup: 移除独立趋势集合前端入口
 - **文件**
   - *static/app.js（+）*、*static/index.html（+）*、*static/style.css（+）*、*README.md（+）*
