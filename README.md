@@ -4,6 +4,15 @@
 
 ## What's Changed
 
+### 2026-07-08 — v2.0.2.7 cleanup: 移除独立趋势集合前端入口
+- **文件**
+  - *static/app.js（+）*、*static/index.html（+）*、*static/style.css（+）*、*README.md（+）*
+    - 前端移除独立的“趋势”集合入口、趋势矩阵视图、趋势右栏明细/返回链路
+    - 板块工作台内的趋势想法写入/编辑/删除能力保留，未改动后端 trend API、schema 与数据表
+    - 同步清理不再引用的前端样式与 DOM 结构
+    - 版本同步到 `v2.0.2.7`
+- **影响**：仅前端入口与视图清理；拉取后刷新页面即可生效，无需后端重启。
+
 ### 2026-07-07 — v2.0.2.6 fix: EMPTY_TWITTER_THREAD 短推文误判
 - **文件**
   - *app.py（+）*、*tests/test_api.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*README.md（+）*

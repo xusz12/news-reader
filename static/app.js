@@ -7,7 +7,7 @@ let state = {
   feedReadFilter: "unread", // 仅新闻流记忆 all | unread
   readLaterReadFilter: "unread", // 稍后阅读记忆 all | unread | read
   sourceFilter: "all", // all | reuters | bloomberg | techcrunch | ars | x | host:*
-  collection: "feed", // search | feed | daily | favorites | reminders | important | read_later | notes | tracked | market_tags | trends
+  collection: "feed", // search | feed | daily | favorites | reminders | important | read_later | notes | tracked | market_tags
   total: 0,
   loading: false,
   hasMore: true,
@@ -40,12 +40,7 @@ let state = {
   },
   detailCacheByUrl: new Map(),
   readingCheckpoint: null,
-  trendDays: 7,
-  trendRows: [],
-  trendDates: [],
-  trendSelection: null,
   selectedTrendIdea: null,
-  trendNoteContext: null,
   marketTagChoices: [],
   marketWorkbenchTag: "",
   marketWorkbenchFilter: "all",
@@ -58,8 +53,6 @@ let state = {
   trendComposeOpen: false,
   newsSortOrderByCollection: {},
   dateCounts: new Map(),
-  lastNewsCollectionBeforeTrends: "feed",
-  detailReturnToTrend: false,
   detailReturnToTrackedTopicId: null,
   searchRange: "all",
   searchTime: "all",
@@ -132,7 +125,6 @@ const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
 const navTrackedBtn = document.getElementById("navTrackedBtn");
 const navMarketTagsBtn = document.getElementById("navMarketTagsBtn");
-const navTrendsBtn = document.getElementById("navTrendsBtn");
 const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
 const mobileReadLaterTabBtn = document.getElementById("mobileReadLaterTabBtn");
 const mobileMoreTabBtn = document.getElementById("mobileMoreTabBtn");
@@ -182,9 +174,6 @@ const marketWorkbenchComposeBtn = document.getElementById("marketWorkbenchCompos
 const marketWorkbenchPinCard = document.getElementById("marketWorkbenchPinCard");
 const listHint = document.getElementById("listHint");
 const loadMoreSentinel = document.getElementById("loadMoreSentinel");
-const workspace = document.getElementById("workspace");
-const trendsView = document.getElementById("trendsView");
-const trendsTable = document.getElementById("trendsTable");
 const trackedView = document.getElementById("trackedView");
 const trackedBackfillModeSelect = document.getElementById("trackedBackfillModeSelect");
 const trackedBackfillBtn = document.getElementById("trackedBackfillBtn");
@@ -200,22 +189,6 @@ const trackedTimelineList = document.getElementById("trackedTimelineList");
 
 const detailPanel = document.getElementById("detailPanel");
 const detailEmpty = document.getElementById("detailEmpty");
-const detailTrendBody = document.getElementById("detailTrendBody");
-const detailTrendTitle = document.getElementById("detailTrendTitle");
-const detailTrendMeta = document.getElementById("detailTrendMeta");
-const trendComposeBtn = document.getElementById("trendComposeBtn");
-const trendBullishNoteBtn = document.getElementById("trendBullishNoteBtn");
-const trendBearishNoteBtn = document.getElementById("trendBearishNoteBtn");
-const detailTrendNoteCard = document.getElementById("detailTrendNoteCard");
-const detailTrendNoteTitle = document.getElementById("detailTrendNoteTitle");
-const detailTrendNoteText = document.getElementById("detailTrendNoteText");
-const detailTrendNoteEditor = document.getElementById("detailTrendNoteEditor");
-const detailTrendNoteEditorMeta = document.getElementById("detailTrendNoteEditorMeta");
-const detailTrendNoteInput = document.getElementById("detailTrendNoteInput");
-const detailTrendNoteSaveBtn = document.getElementById("detailTrendNoteSaveBtn");
-const detailTrendNoteDeleteBtn = document.getElementById("detailTrendNoteDeleteBtn");
-const detailTrendNoteCancelBtn = document.getElementById("detailTrendNoteCancelBtn");
-const detailTrendList = document.getElementById("detailTrendList");
 const detailTrendComposerBody = document.getElementById("detailTrendComposerBody");
 const trendNoteDateSelect = document.getElementById("trendNoteDateSelect");
 const trendNoteTagSelect = document.getElementById("trendNoteTagSelect");
@@ -331,7 +304,6 @@ const detailNoteEditor = document.getElementById("detailNoteEditor");
 const detailNoteInput = document.getElementById("detailNoteInput");
 const detailNoteSaveBtn = document.getElementById("detailNoteSaveBtn");
 const detailNoteCancelBtn = document.getElementById("detailNoteCancelBtn");
-const detailReturnToTrendBtn = document.getElementById("detailReturnToTrendBtn");
 const detailReturnToTrackedBtn = document.getElementById("detailReturnToTrackedBtn");
 const detailBullishBtn = document.getElementById("detailBullishBtn");
 const detailBearishBtn = document.getElementById("detailBearishBtn");
@@ -589,59 +561,24 @@ async function openErrorStatsPanel() {
   }
 }
 
-function showTrendsView(show) {
-  trendsView.classList.toggle("hidden", !show);
-  if (trackedView) trackedView.classList.toggle("hidden", true);
-  newsList.classList.toggle("hidden", !!show);
+function showListView() {
+  if (trackedView) trackedView.classList.add("hidden");
+  newsList.classList.remove("hidden");
 }
 
 function showTrackedView(show) {
-  if (trackedView) trackedView.classList.toggle("hidden", true);
-  trendsView.classList.toggle("hidden", true);
-  newsList.classList.toggle("hidden", false);
+  if (trackedView) trackedView.classList.toggle("hidden", !show);
+  newsList.classList.remove("hidden");
 }
 
-function updateWorkspaceLayout() {
-  if (!workspace) return;
-  const trendsMode = state.collection === "trends";
-  const trendDetailOpen = trendsMode && (!!state.trendSelection || state.tagAdminOpen || state.trendComposeOpen);
-  workspace.classList.toggle("trends-mode", trendsMode);
-  workspace.classList.toggle("trends-detail-open", trendDetailOpen);
-}
+function updateWorkspaceLayout() {}
 
 function updateSourceFilterVisibility() {
-  const visible = state.collection !== "trends" && state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes" && state.collection !== "market_tags" && state.collection !== "daily";
+  const visible = state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes" && state.collection !== "market_tags" && state.collection !== "daily";
   document.querySelectorAll("#sourceFilterPanel").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
   if (!visible) closeMobileFilterSheet();
-}
-
-async function fetchMarketTrends() {
-  const params = new URLSearchParams({ days: String(state.trendDays || 7) });
-  const res = await fetch(`/api/market-trends?${params.toString()}`);
-  if (!res.ok) throw new Error("market_trends_fetch_failed");
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "market_trends_fetch_failed");
-  return data;
-}
-
-async function fetchMarketTrendDetail(date, tag, direction) {
-  const params = new URLSearchParams({ date, tag, direction });
-  const res = await fetch(`/api/market-trends/detail?${params.toString()}`);
-  if (!res.ok) throw new Error("market_trend_detail_fetch_failed");
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "market_trend_detail_fetch_failed");
-  return data;
-}
-
-async function fetchMarketTrendTagDetail(tag) {
-  const params = new URLSearchParams({ tag });
-  const res = await fetch(`/api/market-trends/tag-detail?${params.toString()}`);
-  if (!res.ok) throw new Error("market_trend_tag_detail_fetch_failed");
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "market_trend_tag_detail_fetch_failed");
-  return data;
 }
 
 async function fetchMarketTagDefinitions() {
@@ -828,7 +765,7 @@ function updateDateSectionCount(dateKey) {
 }
 
 function itemMatchesCurrentDateCountScope(item) {
-  if (!item || state.collection === "trends" || state.collection === "search" || state.collection === "reminders") return false;
+  if (!item || state.collection === "search" || state.collection === "reminders") return false;
   let inCollection = false;
   if (state.collection === "feed") inCollection = true;
   else if (state.collection === "favorites") inCollection = !!item.favorite_at;
@@ -2101,8 +2038,7 @@ function updateBatchActionButton() {
     state.collection === "reminders" ||
     state.collection === "important" ||
     state.collection === "notes" ||
-    state.collection === "market_tags" ||
-    state.collection === "trends"
+    state.collection === "market_tags"
   ) {
     markAllReadBtn.classList.add("hidden");
     markAllReadBtn.disabled = false;
@@ -2153,7 +2089,6 @@ function updateCollectionButtons() {
   if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
   if (navTrackedBtn) navTrackedBtn.classList.toggle("active", state.collection === "tracked");
   if (navMarketTagsBtn) navMarketTagsBtn.classList.toggle("active", state.collection === "market_tags");
-  if (navTrendsBtn) navTrendsBtn.classList.toggle("active", state.collection === "trends");
   if (mobileCollectionTriggerBtn) {
     mobileCollectionTriggerBtn.classList.toggle("active", state.collection === "feed");
     mobileCollectionTriggerBtn.textContent = "新闻";
@@ -2166,8 +2101,8 @@ function updateCollectionButtons() {
   }
   updateMobileSourceEntryButton();
   if (manageMarketTagsBtn) {
-    manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "trends" && state.collection !== "market_tags");
-    if (state.collection === "trends" || state.collection === "market_tags") {
+    manageMarketTagsBtn.classList.toggle("hidden", state.collection !== "market_tags");
+    if (state.collection === "market_tags") {
       applyIcon(manageMarketTagsBtn, "pen", {
         tone: state.tagAdminOpen ? "accent" : "default",
         label: "管理板块",
@@ -2347,7 +2282,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.6";
+  version.textContent = "News Reader v2.0.2.7";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -2768,10 +2703,8 @@ function renderTrackedTopicEmpty(message = "选择一个跟踪主题，右栏会
   closeTagAdminView();
   clearTrendIdeaDetailState();
   closeTrendComposerView();
-  closeTrendNoteEditor();
   closeReminderEditor();
   closeDetailTrackEditor();
-  if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
@@ -2791,11 +2724,9 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
   closeTagAdminView();
   clearTrendIdeaDetailState();
   closeTrendComposerView();
-  closeTrendNoteEditor();
   closeReminderEditor();
   closeDetailTrackEditor();
   detailEmpty.classList.add("hidden");
-  if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
@@ -2899,11 +2830,9 @@ function openTrackedDefaultsPanel() {
   closeTagAdminView();
   clearTrendIdeaDetailState();
   closeTrendComposerView();
-  closeTrendNoteEditor();
   closeReminderEditor();
   closeDetailTrackEditor();
   detailEmpty.classList.add("hidden");
-  if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
@@ -2919,11 +2848,9 @@ function openTrackedTopicForm(mode, topic = null) {
   closeTagAdminView();
   clearTrendIdeaDetailState();
   closeTrendComposerView();
-  closeTrendNoteEditor();
   closeReminderEditor();
   closeDetailTrackEditor();
   detailEmpty.classList.add("hidden");
-  if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
@@ -3018,7 +2945,6 @@ function updateFeedHeader() {
     notes: ["个人判断", "想法"],
     tracked: ["主题时间线", "跟踪"],
     market_tags: ["板块工作台", "板块"],
-    trends: ["市场信号", "趋势"],
   };
   const [kicker, title] = headers[state.collection] || headers.feed;
   feedKicker.textContent = kicker;
@@ -3059,13 +2985,7 @@ function renderMeta() {
     notes: "想法",
     tracked: "跟踪",
     market_tags: "板块",
-    trends: "趋势",
   };
-  if (state.collection === "trends") {
-    meta.textContent = `趋势 · 近 ${state.trendDays} 天 · ${state.trendRows.length} 个板块 · ${state.total} 条标记`;
-    pageInfo.textContent = "- / -";
-    return;
-  }
   if (state.collection === "daily") {
     meta.textContent = `日报 · 共 ${state.total} 份 · ${state.dailyBriefings.length} 个月`;
     pageInfo.textContent = "- / -";
@@ -3144,7 +3064,6 @@ function closeTrendComposerView() {
 }
 
 function restoreMarketWorkbenchDetailState() {
-  if (detailTrendBody) detailTrendBody.classList.add("hidden");
   if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
@@ -3166,7 +3085,6 @@ function clearTrendIdeaDetailState() {
 }
 
 function emptyDetailMessage() {
-  if (state.collection === "trends") return "选择一个趋势单元格查看新闻明细";
   if (state.collection === "daily") return "选择一份日报查看详情";
   if (state.collection === "notes") return "选择一条想法查看详情";
   if (state.collection === "market_tags") return state.marketWorkbenchTag ? "选择一条板块内容查看详情" : "选择一条板块新闻查看详情";
@@ -3177,26 +3095,6 @@ function renderDetailEmpty(message = emptyDetailMessage()) {
   if (!detailEmpty) return;
   detailEmpty.textContent = message;
   detailEmpty.classList.remove("hidden");
-}
-
-function closeTrendNoteEditor() {
-  state.trendNoteContext = null;
-  if (detailTrendNoteEditor) {
-    detailTrendNoteEditor.dataset.key = "";
-    detailTrendNoteEditor.classList.add("hidden");
-  }
-  if (detailTrendNoteDeleteBtn) {
-    detailTrendNoteDeleteBtn.classList.add("hidden");
-  }
-}
-
-function currentTrendSelectionBase() {
-  if (!state.trendSelection) return null;
-  return {
-    date: state.trendSelection.date,
-    tagKey: state.trendSelection.tagKey,
-    tagLabel: state.trendSelection.tagLabel,
-  };
 }
 
 async function saveTrendNote(payload) {
@@ -3241,7 +3139,7 @@ async function deleteTrendNote(noteId) {
 
 function renderTrendComposeOptions() {
   if (!trendNoteDateSelect || !trendNoteTagSelect) return;
-  const dateOptions = state.trendDates.length ? state.trendDates : defaultTrendComposeDates();
+  const dateOptions = defaultTrendComposeDates();
   const tagOptions = activeMarketTagChoices();
   trendNoteDateSelect.innerHTML = "";
   dateOptions.forEach((date) => {
@@ -3261,12 +3159,9 @@ function renderTrendComposeOptions() {
 }
 
 function openTrendComposeView(prefill = null) {
-  const base = prefill || currentTrendSelectionBase();
   clearTrendIdeaDetailState();
   closeTagAdminView();
-  closeTrendNoteEditor();
   detailBody.classList.add("hidden");
-  detailTrendBody.classList.add("hidden");
   detailEmpty.classList.add("hidden");
   detailTrendComposerBody.classList.remove("hidden");
   state.trendComposeOpen = true;
@@ -3277,44 +3172,14 @@ function openTrendComposeView(prefill = null) {
   if (trendNoteTagSelect.options.length) {
     trendNoteTagSelect.value = trendNoteTagSelect.options[0].value;
   }
-  if (base) {
-    trendNoteDateSelect.value = base.date;
-    trendNoteTagSelect.value = base.tagKey;
+  if (prefill) {
+    trendNoteDateSelect.value = prefill.date;
+    trendNoteTagSelect.value = prefill.tagKey;
   }
   trendNoteComposeInput.value = "";
   if (trendNoteComposeDeleteBtn) trendNoteComposeDeleteBtn.classList.add("hidden");
   updateWorkspaceLayout();
   openDetailOnMobile();
-}
-
-function openTrendNoteEditor(input) {
-  const editingNote = typeof input === "object" && input ? input : null;
-  const direction = editingNote ? editingNote.direction : input;
-  const base = editingNote
-    ? {
-        date: editingNote.date_key,
-        tagKey: editingNote.tag_key,
-        tagLabel: editingNote.tag,
-      }
-    : currentTrendSelectionBase();
-  if (!base) return;
-  const nextNoteId = editingNote?.id || "";
-  const sameKey = `${base.date}|${base.tagKey}|${direction}|${nextNoteId || "new"}`;
-  if (detailTrendNoteEditor.dataset.key === sameKey && !detailTrendNoteEditor.classList.contains("hidden")) {
-    closeTrendNoteEditor();
-    return;
-  }
-  state.trendNoteContext = {
-    ...base,
-    direction,
-    noteId: editingNote?.id || null,
-    mode: editingNote ? "edit" : "create",
-  };
-  detailTrendNoteEditor.dataset.key = sameKey;
-  detailTrendNoteEditorMeta.textContent = `${base.date} · ${base.tagLabel} · ${direction === "bullish" ? "看多" : "看空"} · ${editingNote ? "编辑想法" : "新建想法"}`;
-  detailTrendNoteInput.value = editingNote?.note || "";
-  detailTrendNoteDeleteBtn.classList.toggle("hidden", !editingNote);
-  detailTrendNoteEditor.classList.remove("hidden");
 }
 
 function closeTagAdminView() {
@@ -3510,68 +3375,7 @@ async function refreshTrendTagAdminState(nextSelectedTagKey = state.selectedTagA
     const exists = state.marketTagChoices.some((tag) => tag.key === state.selectedTagAdminKey);
     if (!exists) state.selectedTagAdminKey = "";
   }
-  if (state.collection === "trends") {
-    const data = await fetchMarketTrends();
-    state.total = Number(data.tagged_item_count || 0);
-    state.trendDates = Array.isArray(data.dates) ? data.dates : [];
-    state.trendRows = Array.isArray(data.rows) ? data.rows : [];
-    const activeKeys = new Set(state.trendRows.map((row) => row.tag_key || row.tag));
-    if (state.trendSelection && !activeKeys.has(state.trendSelection.tagKey)) {
-      state.trendSelection = null;
-      renderTrendDetail(null);
-    }
-    renderTrendsView();
-    renderMeta();
-  }
   renderTagAdminList();
-}
-
-async function refreshTrendSelectionAfterMutation(nextSelection = state.trendSelection) {
-  if (state.collection !== "trends") return;
-  const data = await fetchMarketTrends();
-  state.total = Number(data.tagged_item_count || 0);
-  state.trendDates = Array.isArray(data.dates) ? data.dates : [];
-  state.trendRows = Array.isArray(data.rows) ? data.rows : [];
-
-  if (!nextSelection) {
-    state.trendSelection = null;
-    renderTrendsView();
-    renderTrendDetail(null);
-    renderMeta();
-    return;
-  }
-
-  const activeKeys = new Set(state.trendRows.map((row) => row.tag_key || row.tag));
-  if (!activeKeys.has(nextSelection.tagKey)) {
-    state.trendSelection = null;
-    renderTrendsView();
-    renderTrendDetail(null);
-    renderMeta();
-    return;
-  }
-
-  let payload = null;
-  if (nextSelection.kind === "tag") {
-    payload = await fetchMarketTrendTagDetail(nextSelection.tagKey);
-  } else {
-    payload = await fetchMarketTrendDetail(nextSelection.date, nextSelection.tagKey, nextSelection.direction);
-    if (!payload.total && !payload.trend_note_total) {
-      state.trendSelection = null;
-      renderTrendsView();
-      renderTrendDetail(null);
-      renderMeta();
-      return;
-    }
-  }
-
-  state.trendSelection = {
-    ...nextSelection,
-    tagLabel: payload.tag,
-    detailPayload: payload,
-  };
-  renderTrendsView();
-  renderTrendDetail(payload);
-  renderMeta();
 }
 
 async function refreshMarketWorkbenchAfterTrendCompose() {
@@ -3585,7 +3389,7 @@ async function refreshMarketWorkbenchAfterTrendCompose() {
   state.page = Number(data.page || 1);
   state.hasMore = !!data.has_more;
   state.marketWorkbenchSummary = data.summary || null;
-  showTrendsView(false);
+  showListView();
   renderMeta();
   (data.items || []).forEach((item) => {
     const row = item.entry_type === "trend_note" ? buildIdeaRow(item) : buildItemRow(item);
@@ -3614,424 +3418,13 @@ async function openTagAdminView() {
   state.tagAdminOpen = true;
   clearTrendIdeaDetailState();
   closeTrendComposerView();
-  closeTrendNoteEditor();
-  state.trendSelection = null;
   closeMarketPicker();
   detailBody.classList.add("hidden");
-  detailTrendBody.classList.add("hidden");
   detailEmpty.classList.add("hidden");
   await refreshTrendTagAdminState();
   detailTagAdminBody.classList.remove("hidden");
   updateWorkspaceLayout();
   openDetailOnMobile();
-}
-
-function renderTrendDetail(payload) {
-  closeTagAdminView();
-  closeTrendComposerView();
-  closeTrendNoteEditor();
-  clearTrendIdeaDetailState();
-  state.detailReturnToTrend = false;
-  syncDetailReturnButton();
-  detailBody.classList.add("hidden");
-  if (!payload) {
-    detailTrendBody.classList.add("hidden");
-    detailTrendNoteCard.classList.add("hidden");
-    detailTrendList.innerHTML = "";
-    renderDetailEmpty();
-    updateWorkspaceLayout();
-    return;
-  }
-
-  detailEmpty.classList.add("hidden");
-  detailTrendComposerBody.classList.add("hidden");
-  detailTrendBody.classList.remove("hidden");
-  const isTagOverview = payload.view === "tag";
-  trendComposeBtn.classList.toggle("hidden", false);
-  trendBullishNoteBtn.classList.toggle("hidden", isTagOverview);
-  trendBearishNoteBtn.classList.toggle("hidden", isTagOverview);
-  if (isTagOverview) {
-    detailTrendTitle.textContent = `${payload.tag} · 板块总览`;
-    detailTrendMeta.textContent = `${payload.item_total || 0} 条新闻 · ${payload.trend_note_total || 0} 条趋势想法`;
-    detailTrendNoteCard.classList.add("hidden");
-  } else {
-    detailTrendTitle.textContent = `${payload.tag} · ${payload.direction === "bullish" ? "看多" : "看空"}`;
-    detailTrendMeta.textContent = `${payload.date} · ${payload.total || 0} 条新闻 · ${payload.trend_note_total || 0} 条趋势想法`;
-    detailTrendNoteCard.classList.add("hidden");
-  }
-  detailTrendList.innerHTML = "";
-  if (isTagOverview) {
-    renderTrendTagOverview(payload);
-  } else {
-    (payload.trend_notes || []).forEach((note) => {
-      detailTrendList.appendChild(buildTrendNoteCard(note));
-    });
-    (payload.items || []).forEach((item) => {
-      detailTrendList.appendChild(buildTrendNewsCard(item, payload));
-    });
-  }
-  updateWorkspaceLayout();
-}
-
-function buildTrendNewsCard(item, trendContext = null) {
-  const card = document.createElement("article");
-  card.className = "trend-detail-card trend-detail-card-clickable";
-
-  const header = document.createElement("div");
-  header.className = "trend-detail-card-header";
-
-  const title = document.createElement("h4");
-  title.className = "trend-detail-title";
-  const titleBtn = document.createElement("button");
-  titleBtn.type = "button";
-  titleBtn.className = "trend-detail-open-btn";
-  titleBtn.textContent = item.title || "未命名新闻";
-  title.appendChild(titleBtn);
-  header.appendChild(title);
-
-  if (item.url) {
-    const actions = document.createElement("div");
-    actions.className = "trend-detail-inline-actions";
-    const sourceLink = document.createElement("a");
-    sourceLink.href = item.url;
-    sourceLink.target = "_blank";
-    sourceLink.rel = "noopener noreferrer";
-    sourceLink.className = "trend-detail-inline-link";
-    sourceLink.textContent = "原文";
-    sourceLink.addEventListener("click", (event) => event.stopPropagation());
-    actions.appendChild(sourceLink);
-    header.appendChild(actions);
-  }
-
-  const directionLabel = item.direction === "bullish" ? "看多" : item.direction === "bearish" ? "看空" : "";
-  const metaLine = document.createElement("div");
-  metaLine.className = "trend-detail-meta";
-  metaLine.textContent = `${directionLabel ? `${directionLabel} · ` : ""}${item.source || "未知来源"} · ${item.published_at || item.date_key || ""}`;
-
-  const summary = document.createElement("p");
-  summary.className = "trend-detail-summary";
-  const summaryText = typeof item.summary === "string" ? item.summary.trim() : "";
-  summary.textContent = summaryText;
-  summary.classList.toggle("hidden", !summaryText);
-
-  const notePreviewText = typeof item.note_preview === "string"
-    ? item.note_preview.trim()
-    : (typeof item.note?.note === "string" ? item.note.note.trim() : "");
-  const notePreview = document.createElement("p");
-  notePreview.className = "trend-detail-note-preview hidden";
-  notePreview.textContent = notePreviewText;
-  notePreview.classList.toggle("hidden", !notePreviewText);
-
-  const openDetail = () => openItemDetail(item, { fromTrend: true });
-  card.addEventListener("click", openDetail);
-  card.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    openDetail();
-  });
-  card.tabIndex = 0;
-  titleBtn.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    openDetail();
-  });
-
-  card.appendChild(header);
-  card.appendChild(metaLine);
-  card.appendChild(summary);
-  card.appendChild(notePreview);
-
-  if (Array.isArray(item.market_tags) && item.market_tags.length) {
-    const tags = document.createElement("div");
-    tags.className = "trend-detail-tags";
-    item.market_tags.forEach((tag) => {
-      const chip = document.createElement("span");
-      chip.className = `trend-detail-tag ${tag.direction}`;
-
-      const label = document.createElement("span");
-      label.textContent = tag.tag;
-      chip.appendChild(label);
-
-      const removeBtn = document.createElement("button");
-      removeBtn.type = "button";
-      removeBtn.className = "trend-detail-tag-remove";
-      removeBtn.textContent = "×";
-      removeBtn.title = `移除${tag.tag}`;
-      removeBtn.setAttribute("aria-label", `移除${tag.tag}`);
-      removeBtn.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        removeBtn.disabled = true;
-        try {
-          await deleteMarketTag(item, tag.key || tag.tag);
-          await refreshTrendSelectionAfterMutation(state.trendSelection);
-        } finally {
-          removeBtn.disabled = false;
-        }
-      });
-      chip.appendChild(removeBtn);
-
-      tags.appendChild(chip);
-    });
-    card.appendChild(tags);
-  }
-
-  return card;
-}
-
-function buildTrendNoteCard(note) {
-  const card = document.createElement("article");
-  card.className = "trend-detail-card trend-detail-note-card";
-
-  const header = document.createElement("div");
-  header.className = "trend-detail-card-header";
-
-  const title = document.createElement("h4");
-  title.className = "trend-detail-title";
-  title.textContent = `${note.direction === "bullish" ? "看多" : "看空"}想法`;
-  header.appendChild(title);
-
-  const actions = document.createElement("div");
-  actions.className = "trend-detail-inline-actions";
-
-  const editBtn = document.createElement("button");
-  editBtn.type = "button";
-  editBtn.className = "trend-detail-inline-btn";
-  editBtn.textContent = "编辑";
-  editBtn.addEventListener("click", () => openTrendNoteEditor(note));
-
-  const deleteBtn = document.createElement("button");
-  deleteBtn.type = "button";
-  deleteBtn.className = "trend-detail-inline-btn danger";
-  deleteBtn.textContent = "删除";
-  deleteBtn.addEventListener("click", async () => {
-    deleteBtn.disabled = true;
-    try {
-      await deleteTrendNote(note.id);
-      await refreshTrendSelectionAfterMutation(state.trendSelection);
-      closeTrendNoteEditor();
-    } finally {
-      deleteBtn.disabled = false;
-    }
-  });
-
-  actions.appendChild(editBtn);
-  actions.appendChild(deleteBtn);
-  header.appendChild(actions);
-
-  const metaLine = document.createElement("div");
-  metaLine.className = "trend-detail-meta";
-  metaLine.textContent = `${note.updated_at || note.date_key || ""}`;
-
-  const noteBody = document.createElement("div");
-  noteBody.className = "trend-detail-note";
-  noteBody.textContent = note.note || "";
-
-  card.appendChild(header);
-  card.appendChild(metaLine);
-  card.appendChild(noteBody);
-  return card;
-}
-
-function renderTrendTagOverview(payload) {
-  const grouped = new Map();
-  (payload.trend_notes || []).forEach((note) => {
-    const date = note.date_key || "unknown";
-    if (!grouped.has(date)) grouped.set(date, { notes: [], items: [] });
-    grouped.get(date).notes.push(note);
-  });
-  (payload.items || []).forEach((item) => {
-    const date = item.date_key || "unknown";
-    if (!grouped.has(date)) grouped.set(date, { notes: [], items: [] });
-    grouped.get(date).items.push(item);
-  });
-  const dates = Array.from(grouped.keys()).sort((a, b) => b.localeCompare(a));
-  dates.forEach((date) => {
-    const section = document.createElement("section");
-    section.className = "trend-overview-section";
-
-    const heading = document.createElement("h4");
-    heading.className = "trend-overview-date";
-    heading.textContent = date;
-    section.appendChild(heading);
-
-    const bucket = grouped.get(date);
-    bucket.notes.forEach((note) => {
-      section.appendChild(buildTrendNoteCard(note));
-    });
-    bucket.items.forEach((item) => {
-      section.appendChild(buildTrendNewsCard(item, payload));
-    });
-    detailTrendList.appendChild(section);
-  });
-}
-
-function renderTrendsView() {
-  trendsTable.innerHTML = "";
-
-  const thead = document.createElement("thead");
-  const headRow = document.createElement("tr");
-  const headDate = document.createElement("th");
-  headDate.textContent = "日期";
-  headRow.appendChild(headDate);
-  state.trendRows.forEach((row) => {
-    const th = document.createElement("th");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "trend-header-btn";
-    btn.textContent = row.tag_label || row.tag;
-    if (
-      state.trendSelection &&
-      state.trendSelection.kind === "tag" &&
-      state.trendSelection.tagKey === (row.tag_key || row.tag)
-    ) {
-      btn.classList.add("active");
-    }
-    btn.addEventListener("click", async () => {
-      const tagKey = row.tag_key || row.tag;
-      if (
-        state.trendSelection &&
-        state.trendSelection.kind === "tag" &&
-        state.trendSelection.tagKey === tagKey
-      ) {
-        state.trendSelection = null;
-        renderTrendsView();
-        renderTrendDetail(null);
-        return;
-      }
-      const payload = await fetchMarketTrendTagDetail(tagKey);
-      state.trendSelection = {
-        kind: "tag",
-        key: `tag|${tagKey}`,
-        tagKey,
-        tagLabel: row.tag_label || row.tag,
-        detailPayload: payload,
-      };
-      renderTrendsView();
-      renderTrendDetail(payload);
-      openDetailOnMobile();
-    });
-    th.appendChild(btn);
-    headRow.appendChild(th);
-  });
-  thead.appendChild(headRow);
-  trendsTable.appendChild(thead);
-
-  const tbody = document.createElement("tbody");
-  const rowMap = new Map(state.trendRows.map((row) => [row.tag_key || row.tag, row]));
-  state.trendDates.forEach((date) => {
-    const tr = document.createElement("tr");
-    const th = document.createElement("th");
-    th.textContent = date;
-    tr.appendChild(th);
-
-    state.trendRows.forEach((row) => {
-      const tagKey = row.tag_key || row.tag;
-      const value = rowMap.get(tagKey)?.values.find((entry) => entry.date === date) || {
-        date,
-        bullish: 0,
-        bearish: 0,
-      };
-      const td = document.createElement("td");
-      const wrap = document.createElement("div");
-      wrap.className = "trends-cell";
-      const activeKey = `${tagKey}|${date}`;
-
-      if (!value.bullish && !value.bearish) {
-        if (value.bullish_notes || value.bearish_notes) {
-          wrap.classList.add("split");
-        } else {
-          wrap.classList.add("empty");
-          wrap.textContent = "-";
-          wrap.addEventListener("click", () => {
-            openTrendComposeView({
-              date,
-              tagKey,
-              tagLabel: row.tag_label || row.tag,
-            });
-          });
-        }
-      } else {
-        if (value.bullish && value.bearish) {
-          wrap.classList.add("split");
-        }
-        if (!value.bullish && value.bullish_notes && !wrap.classList.contains("split")) {
-          wrap.classList.add("split");
-        }
-        if (!value.bearish && value.bearish_notes && !wrap.classList.contains("split")) {
-          wrap.classList.add("split");
-        }
-      }
-      if (value.bullish || value.bullish_notes) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "trend-chip-btn bullish";
-        if (value.bullish_has_item_note || value.bullish_notes) btn.classList.add("with-item-note");
-        if (
-          state.trendSelection &&
-          state.trendSelection.key === activeKey &&
-          state.trendSelection.direction === "bullish"
-        ) {
-          btn.classList.add("active");
-        }
-        btn.innerHTML =
-          `<span class="trend-chip-label">看多</span>+${value.bullish || 0}` +
-          (value.bullish_notes ? `<span class="trend-chip-note">想法 ${value.bullish_notes}</span>` : "");
-        btn.addEventListener("click", async () => {
-          const payload = await fetchMarketTrendDetail(date, tagKey, "bullish");
-          state.trendSelection = {
-            kind: "cell",
-            key: activeKey,
-            tagKey,
-            tagLabel: row.tag_label || row.tag,
-            date,
-            direction: "bullish",
-            detailPayload: payload,
-          };
-          renderTrendsView();
-          renderTrendDetail(payload);
-          openDetailOnMobile();
-        });
-        wrap.appendChild(btn);
-      }
-      if (value.bearish || value.bearish_notes) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "trend-chip-btn bearish";
-        if (value.bearish_has_item_note || value.bearish_notes) btn.classList.add("with-item-note");
-        if (
-          state.trendSelection &&
-          state.trendSelection.key === activeKey &&
-          state.trendSelection.direction === "bearish"
-        ) {
-          btn.classList.add("active");
-        }
-        btn.innerHTML =
-          `<span class="trend-chip-label">看空</span>+${value.bearish || 0}` +
-          (value.bearish_notes ? `<span class="trend-chip-note">想法 ${value.bearish_notes}</span>` : "");
-        btn.addEventListener("click", async () => {
-          const payload = await fetchMarketTrendDetail(date, tagKey, "bearish");
-          state.trendSelection = {
-            kind: "cell",
-            key: activeKey,
-            tagKey,
-            tagLabel: row.tag_label || row.tag,
-            date,
-            direction: "bearish",
-            detailPayload: payload,
-          };
-          renderTrendsView();
-          renderTrendDetail(payload);
-          openDetailOnMobile();
-        });
-        wrap.appendChild(btn);
-      }
-      td.appendChild(wrap);
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
-  });
-  trendsTable.appendChild(tbody);
 }
 
 async function patchState(itemId, payload) {
@@ -4259,29 +3652,14 @@ function setDetailNoteEditorOpen(open) {
   detailNoteEditor.classList.toggle("hidden", !open);
 }
 
-function canReturnToTrendDetail() {
-  return !!(state.detailReturnToTrend && state.trendSelection?.detailPayload);
-}
-
 function canReturnToTrackedTopic() {
   return !!state.detailReturnToTrackedTopicId;
 }
 
 function syncDetailReturnButton() {
-  if (!detailReturnToTrendBtn) return;
-  detailReturnToTrendBtn.classList.toggle("hidden", !canReturnToTrendDetail());
   if (detailReturnToTrackedBtn) {
     detailReturnToTrackedBtn.classList.toggle("hidden", !canReturnToTrackedTopic());
   }
-}
-
-function restoreTrendDetailFromDetail() {
-  if (!canReturnToTrendDetail()) return;
-  state.selectedId = null;
-  state.detailReturnToTrend = false;
-  stopDetailPolling();
-  renderTrendDetail(state.trendSelection.detailPayload);
-  openDetailOnMobile();
 }
 
 async function restoreTrackedTopicFromDetail() {
@@ -4293,18 +3671,17 @@ async function restoreTrackedTopicFromDetail() {
   await openTrackedTopicDetailById(topicId);
 }
 
-async function openItemDetail(item, { fromTrend = false, fromTrackedTopicId = null } = {}) {
+async function openItemDetail(item, { fromTrackedTopicId = null } = {}) {
   if (!item) return;
   if (state.selectedId !== item.id) resetDetailChatState();
   state.itemsById.set(item.id, item);
   state.selectedId = item.id;
-  state.detailReturnToTrend = fromTrend;
   state.detailReturnToTrackedTopicId = fromTrackedTopicId || null;
   renderDetail(state.itemsById.get(item.id) || item);
   if (!item.snapshotOnly) {
     loadDetail(item.id);
     startDetailPolling(item.id);
-    if (!fromTrend) saveReadingCheckpoint(item).catch(() => {});
+    saveReadingCheckpoint(item).catch(() => {});
   }
   openDetailOnMobile();
 }
@@ -5152,7 +4529,6 @@ function renderDetail(item) {
   clearTrendIdeaDetailState();
   if (!item) {
     resetDetailChatState({ keepProvider: true });
-    state.detailReturnToTrend = false;
     state.detailReturnToTrackedTopicId = null;
     stopDetailPolling();
     closeMarketPicker();
@@ -5160,7 +4536,6 @@ function renderDetail(item) {
     closeDetailTrackEditor();
     if (detailReminderCard) detailReminderCard.classList.add("hidden");
     syncDetailReturnButton();
-    detailTrendBody.classList.add("hidden");
     if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
     if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
     if (detailDailyBody) detailDailyBody.classList.add("hidden");
@@ -5170,7 +4545,6 @@ function renderDetail(item) {
     updateWorkspaceLayout();
     return;
   }
-  detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
@@ -5718,12 +5092,11 @@ function buildItemRow(item) {
   li.addEventListener("click", () => {
     if (state.selectedId === item.id) {
       state.selectedId = null;
-      state.detailReturnToTrend = false;
       stopDetailPolling();
       closeDetailOnMobile();
       renderDetail(null);
     } else {
-      openItemDetail(item, { fromTrend: false });
+      openItemDetail(item);
     }
     newsList.querySelectorAll(".news-item").forEach((row) => {
       row.classList.toggle("selected", row.dataset.id === state.selectedId);
@@ -5760,7 +5133,7 @@ async function openIdeaCard(item) {
     return;
   }
   state.selectedTrendIdea = null;
-  openItemDetail(item, { fromTrend: false });
+  openItemDetail(item);
 }
 
 function buildIdeaRow(item) {
@@ -5951,16 +5324,13 @@ function updateIdeaRow(item) {
 function renderTrendIdeaDetail(item) {
   closeTagAdminView();
   closeTrendComposerView();
-  closeTrendNoteEditor();
   resetDetailChatState({ keepProvider: true });
   stopDetailPolling();
   closeMarketPicker();
   closeReminderEditor();
   if (detailReminderCard) detailReminderCard.classList.add("hidden");
-  state.detailReturnToTrend = false;
   syncDetailReturnButton();
   detailBody.classList.add("hidden");
-  detailTrendBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
   detailChatBody.classList.add("hidden");
   if (!item) {
@@ -6145,7 +5515,6 @@ function setDailyBriefingHeader(briefing = {}, statusText = "", statusClass = "m
 
 function renderDailyBriefingDetailLoading(item) {
   if (!detailDailyBody || !detailDailyTitle || !detailDailyMeta || !detailDailyStatus || !detailDailyContent) return;
-  detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   detailBody.classList.add("hidden");
@@ -6168,11 +5537,9 @@ function renderDailyBriefingDetail(briefing) {
   closeReminderEditor();
   closeDetailTrackEditor();
   if (detailReminderCard) detailReminderCard.classList.add("hidden");
-  state.detailReturnToTrend = false;
   state.detailReturnToTrackedTopicId = null;
   syncDetailReturnButton();
 
-  detailTrendBody.classList.add("hidden");
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   detailBody.classList.add("hidden");
@@ -6473,18 +5840,13 @@ function resetList() {
   stopRowStatusPolling();
   clearFeedEndAutoReadTimer();
   feedEndAutoReadFiredKey = "";
-  state.trendRows = [];
-  state.trendDates = [];
-  state.trendSelection = null;
   state.selectedTrendIdea = null;
-  state.trendNoteContext = null;
   state.tagAdminOpen = false;
   state.trendComposeOpen = false;
   state.dateCounts = new Map();
-  state.detailReturnToTrend = false;
   state.feedUnreadCursor = null;
   resetDetailChatState();
-  showTrendsView(false);
+  showListView();
   showTrackedView(false);
   syncSearchPageControls();
   closeDetailOnMobile();
@@ -6580,7 +5942,7 @@ async function loadFirstPage(page = 1) {
       state.hasMore = state.page < state.pages;
       data.items.forEach((item) => appendNewsRow(item, buildItemRow(item)));
       renderMeta();
-      showTrendsView(false);
+      showListView();
       if (!state.q) {
         setHint("输入关键词开始搜索");
       } else if (state.total === 0) {
@@ -6606,7 +5968,7 @@ async function loadFirstPage(page = 1) {
       state.page = 1;
       state.hasMore = false;
       state.dateCounts = new Map();
-      showTrendsView(false);
+      showListView();
       showTrackedView(false);
       renderDailyBriefingsList();
       renderMeta();
@@ -6615,33 +5977,6 @@ async function loadFirstPage(page = 1) {
       } else {
         setHint("选择一份日报，在右栏查看结构化内容。");
       }
-      if (readObserver) {
-        readObserver.disconnect();
-        readObserver = null;
-      }
-      stopRowStatusPolling();
-      return;
-    }
-
-    if (state.collection === "trends") {
-      try {
-        await fetchMarketTagDefinitions();
-      } catch {
-        state.marketTagChoices = [];
-      }
-      const data = await fetchMarketTrends();
-      state.total = Number(data.tagged_item_count || 0);
-      state.pages = 1;
-      state.page = 1;
-      state.hasMore = false;
-      state.trendDates = Array.isArray(data.dates) ? data.dates : [];
-      state.trendRows = Array.isArray(data.rows) ? data.rows : [];
-      state.dateCounts = new Map();
-      showTrendsView(true);
-      renderTrendsView();
-      renderTrendDetail(null);
-      renderMeta();
-      setHint(state.trendRows.length ? "点击单元格查看趋势明细" : "暂无板块趋势数据");
       if (readObserver) {
         readObserver.disconnect();
         readObserver = null;
@@ -6687,7 +6022,7 @@ async function loadFirstPage(page = 1) {
       state.page = 1;
       state.hasMore = false;
       state.dateCounts = new Map();
-      showTrendsView(false);
+      showListView();
       state.reminderItems.forEach((reminder) => {
         const row = buildReminderListRow(reminder);
         if (listHint && listHint.parentElement === newsList) {
@@ -6721,11 +6056,11 @@ async function loadFirstPage(page = 1) {
       state.pages = data.pages;
       state.page = 1;
       state.hasMore = state.page < state.pages;
-      showTrendsView(false);
+      showListView();
       data.items.forEach((item) => appendNewsRow(item, buildIdeaRow(item)));
       renderMeta();
       if (state.total === 0) {
-        setHint("还没有想法，去新闻详情或趋势页记录第一条。");
+        setHint("还没有想法，去新闻详情或板块里记录第一条。");
       } else if (state.hasMore) {
         setHint("继续下滑加载更多");
       } else {
@@ -6749,7 +6084,7 @@ async function loadFirstPage(page = 1) {
       state.marketWorkbenchSummary = data.summary || null;
       state.marketWorkbenchPin = data.pin || null;
       state.marketWorkbenchPinEditing = false;
-      showTrendsView(false);
+      showListView();
       renderMeta();
       renderMarketWorkbenchPinCard();
       (data.items || []).forEach((item) => {
@@ -6821,7 +6156,6 @@ async function loadNextPage() {
     return;
   }
   if (state.collection === "daily") return;
-  if (state.collection === "trends") return;
   if (state.collection === "market_tags") {
     if (!state.hasMore || !state.marketWorkbenchTag) return;
     const next = state.page + 1;
@@ -7067,9 +6401,6 @@ async function switchCollection(collection) {
     return;
   }
   removeMarketWorkbenchSummaryInline();
-  if (collection === "trends" && state.collection !== "trends") {
-    state.lastNewsCollectionBeforeTrends = state.collection;
-  }
   state.collection = collection;
   closeMobileFilterSheet();
   closeMobileCollectionSheet();
@@ -7126,11 +6457,6 @@ if (navTrackedBtn) {
 if (navMarketTagsBtn) {
   navMarketTagsBtn.addEventListener("click", async () => {
     await switchCollection("market_tags");
-  });
-}
-if (navTrendsBtn) {
-  navTrendsBtn.addEventListener("click", async () => {
-    await switchCollection("trends");
   });
 }
 
@@ -7284,26 +6610,8 @@ if (trackedBackfillBtn) {
 
 if (manageMarketTagsBtn) {
   manageMarketTagsBtn.addEventListener("click", async () => {
-    if (state.collection !== "trends" && state.collection !== "market_tags") return;
+    if (state.collection !== "market_tags") return;
     await openTagAdminView();
-  });
-}
-
-if (trendComposeBtn) {
-  trendComposeBtn.addEventListener("click", () => {
-    openTrendComposeView();
-  });
-}
-
-if (trendBullishNoteBtn) {
-  trendBullishNoteBtn.addEventListener("click", () => {
-    openTrendNoteEditor("bullish");
-  });
-}
-
-if (trendBearishNoteBtn) {
-  trendBearishNoteBtn.addEventListener("click", () => {
-    openTrendNoteEditor("bearish");
   });
 }
 
@@ -7418,8 +6726,7 @@ markAllReadBtn.addEventListener("click", async () => {
     state.collection === "important" ||
     state.collection === "notes" ||
     state.collection === "tracked" ||
-    state.collection === "market_tags" ||
-    state.collection === "trends"
+    state.collection === "market_tags"
   ) return;
 
   const readLaterMode = state.collection === "read_later";
@@ -7471,10 +6778,6 @@ refreshBtn.addEventListener("click", async () => {
 });
 
 detailCloseBtn.addEventListener("click", () => {
-  if (canReturnToTrendDetail()) {
-    restoreTrendDetailFromDetail();
-    return;
-  }
   if (canReturnToTrackedTopic()) {
     restoreTrackedTopicFromDetail().catch(() => {});
     return;
@@ -7482,9 +6785,6 @@ detailCloseBtn.addEventListener("click", () => {
   closeDetailOnMobile();
   stopDetailPolling();
 });
-if (detailReturnToTrendBtn) {
-  detailReturnToTrendBtn.addEventListener("click", restoreTrendDetailFromDetail);
-}
 if (detailReturnToTrackedBtn) {
   detailReturnToTrackedBtn.addEventListener("click", () => {
     restoreTrackedTopicFromDetail().catch(() => {});
@@ -7779,63 +7079,6 @@ if (detailTagCreateBtn) {
   });
 }
 
-if (detailTrendNoteCancelBtn) {
-  detailTrendNoteCancelBtn.addEventListener("click", closeTrendNoteEditor);
-}
-
-if (detailTrendNoteSaveBtn) {
-  detailTrendNoteSaveBtn.addEventListener("click", async () => {
-    if (!state.trendNoteContext) return;
-    detailTrendNoteSaveBtn.disabled = true;
-    try {
-      const context = { ...state.trendNoteContext };
-      if (context.noteId) {
-        await updateTrendNote(context.noteId, detailTrendNoteInput.value);
-      } else {
-        await saveTrendNote({
-          date: context.date,
-          tag: context.tagKey,
-          direction: context.direction,
-          note: detailTrendNoteInput.value,
-        });
-      }
-      await refreshTrendSelectionAfterMutation({
-        kind: "cell",
-        key: `${context.tagKey}|${context.date}`,
-        tagKey: context.tagKey,
-        tagLabel: context.tagLabel,
-        date: context.date,
-        direction: context.direction,
-      });
-      closeTrendNoteEditor();
-    } finally {
-      detailTrendNoteSaveBtn.disabled = false;
-    }
-  });
-}
-
-if (detailTrendNoteDeleteBtn) {
-  detailTrendNoteDeleteBtn.addEventListener("click", async () => {
-    if (!state.trendNoteContext?.noteId) return;
-    detailTrendNoteDeleteBtn.disabled = true;
-    try {
-      const context = { ...state.trendNoteContext };
-      await deleteTrendNote(context.noteId);
-      await refreshTrendSelectionAfterMutation({
-        kind: "cell",
-        key: `${context.tagKey}|${context.date}`,
-        tagKey: context.tagKey,
-        tagLabel: context.tagLabel,
-        date: context.date,
-        direction: context.direction,
-      });
-      closeTrendNoteEditor();
-    } finally {
-      detailTrendNoteDeleteBtn.disabled = false;
-    }
-  });
-}
-
 if (trendNoteComposeCancelBtn) {
   trendNoteComposeCancelBtn.addEventListener("click", () => {
     closeTrendComposerView();
@@ -7843,11 +7086,7 @@ if (trendNoteComposeCancelBtn) {
       restoreMarketWorkbenchDetailState();
       return;
     }
-    if (state.trendSelection?.detailPayload) {
-      renderTrendDetail(state.trendSelection.detailPayload);
-    } else {
-      renderTrendDetail(null);
-    }
+    renderDetailEmpty();
   });
 }
 
@@ -7880,15 +7119,9 @@ if (trendNoteComposeSaveBtn) {
         setHint("趋势想法已保存");
         return;
       }
-      await refreshTrendSelectionAfterMutation({
-        kind: "cell",
-        key: `${tag}|${date}`,
-        tagKey: tag,
-        tagLabel: state.marketTagChoices.find((x) => x.key === tag)?.display_name || tag,
-        date,
-        direction,
-      });
       closeTrendComposerView();
+      renderDetailEmpty();
+      setHint("趋势想法已保存");
     } finally {
       trendNoteComposeSaveBtn.disabled = false;
     }
@@ -8114,7 +7347,7 @@ if (detailTrendIdeaDeleteBtn) {
       syncIdeaRowSelection();
       renderMeta();
       renderTrendIdeaDetail(null);
-      setHint(state.total > 0 ? "趋势想法已删除" : "还没有想法，去新闻详情或趋势页记录第一条。");
+      setHint(state.total > 0 ? "趋势想法已删除" : "还没有想法，去新闻详情或板块里记录第一条。");
     } finally {
       detailTrendIdeaDeleteBtn.disabled = false;
     }

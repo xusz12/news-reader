@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.2.6</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.2.6" />
+    <title>News Reader v2.0.2.7</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.2.7" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.2.6</span>
+          <span class="topbar-version">v2.0.2.7</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -72,7 +72,6 @@
         <div class="nav-group">
           <h2>市场</h2>
           <button id="navMarketTagsBtn" class="nav-btn">板块</button>
-          <button id="navTrendsBtn" class="nav-btn nav-btn-secondary hidden">趋势</button>
         </div>
 
         <section id="sourceFilterPanel" class="source-filter-panel" aria-label="来源筛选">
@@ -159,11 +158,6 @@
           <li id="listHint" class="list-hint"></li>
           <li id="loadMoreSentinel" class="load-sentinel" aria-hidden="true"></li>
         </ul>
-        <div id="trendsView" class="trends-view hidden">
-          <div class="trends-scroll">
-            <table id="trendsTable" class="trends-table"></table>
-          </div>
-        </div>
         <div class="pager hidden" aria-hidden="true">
           <span id="pageInfo">1 / 1</span>
         </div>
@@ -173,29 +167,6 @@
       <aside id="detailPanel" class="detail-panel" aria-live="polite">
         <button id="detailCloseBtn" class="detail-close" type="button">关闭</button>
         <div id="detailEmpty" class="detail-empty">选择一条新闻查看摘要与正文</div>
-        <div id="detailTrendBody" class="detail-trend-body hidden">
-          <h3 id="detailTrendTitle" class="detail-title"></h3>
-          <div id="detailTrendMeta" class="detail-meta"></div>
-          <div class="detail-actions detail-trend-actions">
-            <button id="trendComposeBtn" class="detail-retry-btn" type="button">写趋势想法</button>
-            <button id="trendBullishNoteBtn" class="detail-retry-btn" type="button">写看多想法</button>
-            <button id="trendBearishNoteBtn" class="detail-retry-btn" type="button">写看空想法</button>
-          </div>
-          <section id="detailTrendNoteCard" class="detail-note-card hidden">
-            <h4 id="detailTrendNoteTitle">趋势想法</h4>
-            <p id="detailTrendNoteText" class="detail-note-text"></p>
-          </section>
-          <section id="detailTrendNoteEditor" class="detail-note-editor hidden">
-            <div id="detailTrendNoteEditorMeta" class="detail-meta"></div>
-            <textarea id="detailTrendNoteInput" class="detail-note-input" rows="4" maxlength="5000" placeholder="记录你对这个日期、板块与方向的判断..."></textarea>
-            <div class="detail-note-actions">
-              <button id="detailTrendNoteSaveBtn" class="detail-retry-btn" type="button">保存</button>
-              <button id="detailTrendNoteDeleteBtn" class="detail-retry-btn" type="button">删除</button>
-              <button id="detailTrendNoteCancelBtn" class="detail-retry-btn" type="button">取消</button>
-            </div>
-          </section>
-          <div id="detailTrendList" class="detail-trend-list"></div>
-        </div>
         <div id="detailTrendComposerBody" class="detail-tag-admin-body hidden">
           <div class="detail-tag-admin-header">
             <div>
@@ -389,7 +360,6 @@
           </div>
         </div>
         <div id="detailBody" class="detail-body hidden">
-          <button id="detailReturnToTrendBtn" class="detail-return-btn hidden" type="button">返回趋势明细</button>
           <button id="detailReturnToTrackedBtn" class="detail-return-btn hidden" type="button">返回跟踪主题</button>
           <div class="detail-actions detail-toolbar">
             <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
@@ -585,6 +555,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.2.6"></script>
+    <script src="/static/app.js?v=2.0.2.7"></script>
   </body>
 </html>
