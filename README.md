@@ -4,6 +4,20 @@
 
 ## What's Changed
 
+### 2026-07-09 — v2.0.2.9 improve: Chat 新增可选 Pi provider（基于 `pi` CLI + ollama）
+- **文件**
+  - *settings.py（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*tests/test_api.py（+）*、*README.md（+）*
+    - 新增 `llm.chat.provider` 设置（`codex` / `pi`，默认 `codex`），兼容旧配置，未指定时保持 Codex 不变
+    - 新增 `llm.pi_chat` 设置：provider（当前仅 `ollama`）与 model，默认模型为探针验证通过的 `minimax-m3:cloud`
+    - `/api/settings` 返回 `llm.chat` / `llm.pi_chat`；`/api/runtime-settings` 返回 chat provider catalog（含 Pi CLI 可用性检测）
+    - 后端新增 `run_pi_chat()`：调用 `pi -p --mode json --provider ollama --model <model>`，JSON 流式解析 session id 与回答；清理 `PI_PACKAGE_DIR` 避免 Slock 注入导致 pi 启动崩溃
+    - `/api/news/<id>/chat` 按当前 provider 分发至 `run_codex_chat` 或 `run_pi_chat`，错误码统一映射（timeout / session_invalid / empty_answer / provider_failed 等）
+    - 前端设置页新增 Chat provider 下拉、Pi provider/model 下拉与自定义输入；切换 provider 时即时显示/隐藏对应字段
+    - 前端 chat 详情页读取当前 provider 与 model，发送/归档时应用；provider/model 切换后清空当前临时对话并提示
+    - 归档摘要首版仍固定走 Codex，与 chat provider 选择无关（已在设置页与 README 明确说明）
+    - 补齐回归测试：legacy chat 字段归一化、Pi stdout 解析、Pi 子进程调用环境、`run_pi_chat`、chat endpoint provider 分发与 timeout 错误映射
+- **影响**：涉及 `app.py` 与前端，拉取后需重启 Flask 并刷新页面；使用 Pi 前需本地安装 `pi` CLI 并配置 ollama。
+
 ### 2026-07-08 — v2.0.2.8 fix: DeepSeek 默认模型从 `deepseek-chat` 迁移到 `deepseek-v4-flash`
 - **文件**
   - *llm_client.py（+）*、*app.py（+）*、*static/app.js（+）*、*static/index.html（+）*、*tests/test_llm_client.py（+）*、*tests/test_api.py（+）*、*README.md（+）*

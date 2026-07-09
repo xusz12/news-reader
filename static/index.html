@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.2.8</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.2.8" />
+    <title>News Reader v2.0.2.9</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.2.9" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.2.8</span>
+          <span class="topbar-version">v2.0.2.9</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -499,11 +499,33 @@
                 <div id="settingsTranslationModelCurrent" class="settings-field-current"></div>
               </div>
               <div class="settings-field">
+                <label for="settingsChatProviderSelect">Chat provider</label>
+                <select id="settingsChatProviderSelect" class="pref-select">
+                  <option value="codex">Codex</option>
+                  <option value="pi">Pi</option>
+                </select>
+                <div id="settingsChatProviderCurrent" class="settings-field-current"></div>
+              </div>
+              <div class="settings-field">
                 <label for="settingsCodexChatModelSelect">Codex chat 默认模型</label>
                 <select id="settingsCodexChatModelSelect" class="pref-select"></select>
                 <input id="settingsCodexChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Codex 模型名" />
                 <div id="settingsCodexChatModelCurrent" class="settings-field-current"></div>
               </div>
+              <div class="settings-field" id="settingsPiChatProviderField">
+                <label for="settingsPiChatProviderSelect">Pi chat provider（当前仅 ollama）</label>
+                <select id="settingsPiChatProviderSelect" class="pref-select">
+                  <option value="ollama">ollama</option>
+                </select>
+                <input id="settingsPiChatProviderCustom" class="settings-input hidden" type="text" maxlength="40" placeholder="输入自定义 pi provider" />
+              </div>
+              <div class="settings-field" id="settingsPiChatModelField">
+                <label for="settingsPiChatModelSelect">Pi chat 默认模型</label>
+                <select id="settingsPiChatModelSelect" class="pref-select"></select>
+                <input id="settingsPiChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Pi 模型名" />
+                <div id="settingsPiChatModelCurrent" class="settings-field-current"></div>
+              </div>
+              <div class="settings-field-note" id="settingsChatArchiveNote">归档摘要当前始终使用 Codex，与 chat provider 选择无关。</div>
               <div class="settings-actions">
                 <button id="settingsSaveBtn" class="detail-retry-btn" type="button">保存设置</button>
               </div>
@@ -555,6 +577,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.2.8"></script>
+    <script src="/static/app.js?v=2.0.2.9"></script>
   </body>
 </html>

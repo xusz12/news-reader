@@ -4973,6 +4973,64 @@ def test_news_chat_archive_accepts_200_chars(tmp_path: Path, monkeypatch):
     assert res.get_json()["archive_summary"] == summary
 
 
+def test_news_chat_archive_works_under_pi_provider(tmp_path: Path, monkeypatch):
+    # 归档摘要首版固定走 Codex，与当前 chat provider 选择无关（README/设置页边界）。
+    # 这里把 chat provider 设成 pi，断言归档端点仍走 Codex 并成功，避免 UI/接口把可用归档挡掉。
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Archive Pi](https://example.com/chat-archive-pi)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    assert app_module.current_chat_provider() == "pi"
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+
+    archive_called = {}
+
+    def fake_archive(**kwargs):
+        archive_called.update(kwargs)
+        return {"provider": "codex", "model": kwargs["model"], "summary": "归档始终走 Codex。"}
+
+    monkeypatch.setattr(app_module, "run_codex_chat_archive", fake_archive)
+    res = client.post(
+        f"/api/news/{item['id']}/chat/archive",
+        json={
+            "messages": [
+                {"role": "user", "content": "总结"},
+                {"role": "assistant", "content": "归档始终走 Codex。"},
+            ]
+        },
+    )
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert payload["archive_summary"] == "归档始终走 Codex。"
+    assert archive_called, "归档应走 run_codex_chat_archive，与 chat provider=pi 无关"
+
+
 def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -5546,7 +5604,7 @@ def test_saved_models_are_used_by_translation_and_codex_chat(tmp_path: Path, mon
     assert chat_res.get_json()["model"] == "gpt-5-codex-x"
 
 
-def test_settings_api_ignores_legacy_chat_fields(tmp_path: Path, monkeypatch):
+def test_settings_api_sanitizes_legacy_chat_fields(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     db_path = tmp_path / "news_index.sqlite3"
@@ -5584,8 +5642,273 @@ def test_settings_api_ignores_legacy_chat_fields(tmp_path: Path, monkeypatch):
     assert payload["ok"] is True
     assert payload["llm"]["translation"]["model"] == "deepseek-legacy"
     assert payload["llm"]["codex_chat"]["model"] == "gpt-5-codex-legacy"
-    assert "chat" not in payload["llm"]
+    assert payload["llm"]["chat"] == {"provider": "codex"}
+    assert payload["llm"]["pi_chat"]["provider"] == "ollama"
+    assert payload["llm"]["pi_chat"]["model"] == "minimax-m3:cloud"
 
+
+
+def test_current_chat_provider_and_pi_config(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "qwen3.5:0.8b"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    assert app_module.current_chat_provider() == "pi"
+    assert app_module.current_pi_chat_config() == {"provider": "ollama", "model": "qwen3.5:0.8b"}
+
+
+def test_pi_chat_settings_snapshot(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    snapshot = app_module.pi_chat_settings_snapshot("minimax-m3:cloud")
+    assert snapshot["catalog"]["resolved_default_model"] == "minimax-m3:cloud"
+    assert snapshot["catalog"]["saved_model"] == "minimax-m3:cloud"
+    assert any(opt["value"] == "minimax-m3:cloud" for opt in snapshot["catalog"]["options"])
+
+
+def test_parse_pi_stdout_success_text_delta():
+    import app as app_module
+
+    stdout = (
+        '{"type":"session","id":"pi-session-1"}\n'
+        '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"你好"}}\n'
+        '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"世界"}}\n'
+        '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"你好世界"}}\n'
+    )
+    session_id, answer, has_error, error_message = app_module._parse_pi_stdout(stdout)
+    assert session_id == "pi-session-1"
+    assert answer == "你好世界"
+    assert has_error is False
+    assert error_message == ""
+
+
+def test_parse_pi_stdout_falls_back_to_message_end():
+    import app as app_module
+
+    stdout = (
+        '{"type":"session","id":"pi-session-2"}\n'
+        '{"type":"message_end","message":{"content":[{"type":"text","text":"fallback"}]}}\n'
+    )
+    session_id, answer, has_error, error_message = app_module._parse_pi_stdout(stdout)
+    assert session_id == "pi-session-2"
+    assert answer == "fallback"
+    assert has_error is False
+
+
+def test_parse_pi_stdout_detects_auto_retry_failure():
+    import app as app_module
+
+    stdout = (
+        '{"type":"session","id":"pi-session-3"}\n'
+        '{"type":"auto_retry_end","success":false,"finalError":"rate limit"}\n'
+    )
+    _, _, has_error, error_message = app_module._parse_pi_stdout(stdout)
+    assert has_error is True
+    assert "rate limit" in error_message
+
+
+def test_parse_pi_stdout_detects_will_retry():
+    import app as app_module
+
+    stdout = '{"type":"agent_end","willRetry":true}\n'
+    _, _, has_error, error_message = app_module._parse_pi_stdout(stdout)
+    assert has_error is True
+    assert error_message == "pi_will_retry"
+
+
+def test_run_pi_chat_success(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs.get("env")
+        class Completed:
+            returncode = 0
+            stdout = (
+                '{"type":"session","id":"pi-session-run"}\n'
+                '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Pi 回答"}}\n'
+                '{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}\n'
+            )
+            stderr = ""
+        return Completed()
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    result = app_module.run_pi_chat(
+        item_id="item-1",
+        question="怎么看？",
+        title="News",
+        source="Reuters",
+        published_at="2026-06-11",
+        content="body",
+        context_level="full_detail",
+        pi_provider="ollama",
+        pi_model="minimax-m3:cloud",
+    )
+    assert result["provider"] == "pi"
+    assert result["session_id"] == "pi-session-run"
+    assert result["model"] == "minimax-m3:cloud"
+    assert result["answer"] == "Pi 回答"
+    assert captured["env"] is not None
+    assert captured["env"].get("PI_PACKAGE_DIR") is None
+    assert "--provider" in captured["args"] and "ollama" in captured["args"]
+    assert "--model" in captured["args"] and "minimax-m3:cloud" in captured["args"]
+
+
+def test_news_chat_dispatches_to_pi_when_configured(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Pi Dispatch](https://example.com/pi-dispatch)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(
+                  url, source, title, author, published_at, content,
+                  content_length, raw_json, fetched_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["url"],
+                    "Reuters",
+                    "Pi Dispatch",
+                    "Reporter",
+                    "2026-06-11 09:00:00",
+                    "Full body for pi dispatch test.",
+                    33,
+                    "{}",
+                    ts,
+                    ts,
+                ),
+            )
+
+    captured = {}
+
+    def fake_run_pi_chat(**kwargs):
+        captured.update(kwargs)
+        return {
+            "provider": "pi",
+            "session_id": "pi-sess-1",
+            "model": kwargs["pi_model"],
+            "answer": "Pi 已回答",
+        }
+
+    monkeypatch.setattr(app_module, "run_pi_chat", fake_run_pi_chat)
+    res = client.post(f"/api/news/{item['id']}/chat", json={"question": "最新进展？"})
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert payload["provider"] == "pi"
+    assert payload["answer"] == "Pi 已回答"
+    assert payload["session_id"] == "pi-sess-1"
+    assert captured["item_id"] == item["id"]
+    assert captured["pi_provider"] == "ollama"
+    assert captured["pi_model"] == "minimax-m3:cloud"
+
+
+def test_news_chat_pi_timeout_maps_to_provider_timeout(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Pi Timeout](https://example.com/pi-timeout)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        ts = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(url, source, title, author, published_at, content,
+                  content_length, raw_json, fetched_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (item["url"], "Reuters", "Pi Timeout", "Reporter", "2026-06-11 09:00:00",
+                 "body", 4, "{}", ts, ts),
+            )
+
+    monkeypatch.setattr(
+        app_module, "run_pi_chat", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("pi_timeout"))
+    )
+    res = client.post(f"/api/news/{item['id']}/chat", json={"question": "？"})
+    assert res.status_code == 504
+    assert res.get_json()["error"] == "provider_timeout"
 
 
 def test_twitter_image_url_filtering():

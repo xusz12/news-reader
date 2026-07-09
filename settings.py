@@ -12,14 +12,25 @@ DEFAULT_DAILY_BRIEFING_DIR = DEFAULT_DAILY_NEWS_DIR / "briefings" / "daily"
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "news_index.sqlite3"
 DEFAULT_APP_SETTINGS_PATH = Path(__file__).resolve().parent / "app_settings.json"
 
+DEFAULT_CHAT_PROVIDER = "codex"
+DEFAULT_PI_CHAT_PROVIDER = "ollama"
+DEFAULT_PI_CHAT_MODEL = "minimax-m3:cloud"
+
 DEFAULT_APP_SETTINGS = {
     "llm": {
         "translation": {
             "provider": "deepseek",
             "model": "",
         },
+        "chat": {
+            "provider": DEFAULT_CHAT_PROVIDER,
+        },
         "codex_chat": {
             "model": "",
+        },
+        "pi_chat": {
+            "provider": DEFAULT_PI_CHAT_PROVIDER,
+            "model": DEFAULT_PI_CHAT_MODEL,
         },
     },
     "tracked": {
@@ -85,11 +96,26 @@ def load_app_settings() -> dict:
         if isinstance(model, str):
             base["llm"]["translation"]["model"] = model.strip()
 
+    chat = llm.get("chat")
+    if isinstance(chat, dict):
+        provider = (chat.get("provider") or "").strip().lower()
+        if provider in {"codex", "pi"}:
+            base["llm"]["chat"]["provider"] = provider
+
     codex_chat = llm.get("codex_chat")
     if isinstance(codex_chat, dict):
         model = codex_chat.get("model")
         if isinstance(model, str):
             base["llm"]["codex_chat"]["model"] = model.strip()
+
+    pi_chat = llm.get("pi_chat")
+    if isinstance(pi_chat, dict):
+        provider = (pi_chat.get("provider") or "").strip()
+        model = pi_chat.get("model")
+        if isinstance(provider, str):
+            base["llm"]["pi_chat"]["provider"] = provider
+        if isinstance(model, str):
+            base["llm"]["pi_chat"]["model"] = model.strip()
 
     tracked = payload.get("tracked") if isinstance(payload, dict) else None
     if isinstance(tracked, dict):

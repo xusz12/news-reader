@@ -61,6 +61,7 @@ let state = {
   trackedFormMode: "create",
   detailChatMessages: [],
   detailChatSessionId: "",
+  detailChatProvider: "",
   detailChatModel: "",
   detailChatStatus: "",
   detailChatSending: false,
@@ -284,9 +285,19 @@ const settingsTranslationProvider = document.getElementById("settingsTranslation
 const settingsTranslationModelSelect = document.getElementById("settingsTranslationModelSelect");
 const settingsTranslationModelCustom = document.getElementById("settingsTranslationModelCustom");
 const settingsTranslationModelCurrent = document.getElementById("settingsTranslationModelCurrent");
+const settingsChatProviderSelect = document.getElementById("settingsChatProviderSelect");
+const settingsChatProviderCurrent = document.getElementById("settingsChatProviderCurrent");
 const settingsCodexChatModelSelect = document.getElementById("settingsCodexChatModelSelect");
 const settingsCodexChatModelCustom = document.getElementById("settingsCodexChatModelCustom");
 const settingsCodexChatModelCurrent = document.getElementById("settingsCodexChatModelCurrent");
+const settingsPiChatProviderSelect = document.getElementById("settingsPiChatProviderSelect");
+const settingsPiChatProviderCustom = document.getElementById("settingsPiChatProviderCustom");
+const settingsPiChatModelSelect = document.getElementById("settingsPiChatModelSelect");
+const settingsPiChatModelCustom = document.getElementById("settingsPiChatModelCustom");
+const settingsPiChatModelCurrent = document.getElementById("settingsPiChatModelCurrent");
+const settingsPiChatProviderField = document.getElementById("settingsPiChatProviderField");
+const settingsPiChatModelField = document.getElementById("settingsPiChatModelField");
+const settingsChatArchiveNote = document.getElementById("settingsChatArchiveNote");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
@@ -1242,6 +1253,9 @@ function populateSettingsForm() {
   const llm = state.runtimeSettings?.llm;
   if (!llm) return;
   settingsTranslationProvider.value = llm.translation?.provider || "deepseek";
+  if (settingsChatProviderSelect) {
+    settingsChatProviderSelect.value = llm.chat?.provider || "codex";
+  }
   populateModelSelect(
     settingsTranslationModelSelect,
     settingsTranslationModelCustom,
@@ -1253,6 +1267,18 @@ function populateSettingsForm() {
     settingsCodexChatModelCustom,
     state.runtimeSettings?.model_catalogs?.codex_chat,
     llm.codex_chat?.model || "",
+  );
+  populateModelSelect(
+    settingsPiChatProviderSelect,
+    settingsPiChatProviderCustom,
+    { options: [{ value: "ollama", label: "ollama" }], resolved_default_model: "ollama" },
+    llm.pi_chat?.provider || "ollama",
+  );
+  populateModelSelect(
+    settingsPiChatModelSelect,
+    settingsPiChatModelCustom,
+    state.runtimeSettings?.model_catalogs?.pi_chat,
+    llm.pi_chat?.model || "",
   );
   if (settingsTranslationModelCurrent) {
     const currentTranslationModel = (llm.translation?.model || "").trim();
@@ -1269,11 +1295,37 @@ function populateSettingsForm() {
       settingsTranslationModelCurrent.textContent = `当前：${resolvedDefaultTranslationModel}（默认）`;
     }
   }
+  if (settingsChatProviderCurrent) {
+    const providerLabel = { codex: "Codex", pi: "Pi" }[llm.chat?.provider || "codex"];
+    settingsChatProviderCurrent.textContent = `当前：${providerLabel}`;
+  }
   if (settingsCodexChatModelCurrent) {
     const currentCodexModel = (llm.codex_chat?.model || "").trim();
     settingsCodexChatModelCurrent.textContent = currentCodexModel
       ? `当前：${currentCodexModel}`
       : "当前：Codex 默认模型";
+  }
+  if (settingsPiChatModelCurrent) {
+    const currentPiModel = (llm.pi_chat?.model || "").trim();
+    settingsPiChatModelCurrent.textContent = currentPiModel
+      ? `当前：${currentPiModel}`
+      : "当前：Pi 默认模型";
+  }
+  renderChatProviderFieldVisibility();
+}
+
+function renderChatProviderFieldVisibility() {
+  if (!settingsChatProviderSelect) return;
+  const isPi = settingsChatProviderSelect.value === "pi";
+  if (settingsCodexChatModelSelect) {
+    const field = settingsCodexChatModelSelect.closest(".settings-field");
+    if (field) field.classList.toggle("hidden", isPi);
+  }
+  if (settingsPiChatProviderField) {
+    settingsPiChatProviderField.classList.toggle("hidden", !isPi);
+  }
+  if (settingsPiChatModelField) {
+    settingsPiChatModelField.classList.toggle("hidden", !isPi);
   }
 }
 
@@ -1327,19 +1379,31 @@ function closeSettingsOverlay() {
 async function saveRuntimeSettings() {
   const draftTranslationProvider = settingsTranslationProvider.value || "deepseek";
   const draftTranslationModel = readModelSetting(settingsTranslationModelSelect, settingsTranslationModelCustom);
+  const draftChatProvider = settingsChatProviderSelect?.value || "codex";
   const draftCodexChatModel = readModelSetting(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
+  const draftPiChatProvider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
+  const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
+    const previousProvider = state.runtimeSettings?.llm?.chat?.provider || "codex";
     const previousCodexModel = state.runtimeSettings?.llm?.codex_chat?.model || "";
+    const previousPiModel = state.runtimeSettings?.llm?.pi_chat?.model || "";
     const payload = {
       llm: {
         translation: {
           provider: draftTranslationProvider,
           model: draftTranslationModel,
         },
+        chat: {
+          provider: draftChatProvider,
+        },
         codex_chat: {
           model: draftCodexChatModel,
+        },
+        pi_chat: {
+          provider: draftPiChatProvider,
+          model: draftPiChatModel,
         },
       },
     };
@@ -1351,12 +1415,19 @@ async function saveRuntimeSettings() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
     state.runtimeSettings = data;
+    const currentProvider = data.llm?.chat?.provider || "codex";
     const currentCodexModel = data.llm?.codex_chat?.model || "";
-    if (currentCodexModel !== previousCodexModel) {
+    const currentPiModel = data.llm?.pi_chat?.model || "";
+    const providerChanged = currentProvider !== previousProvider;
+    const modelChanged = currentProvider === "codex"
+      ? currentCodexModel !== previousCodexModel
+      : currentPiModel !== previousPiModel;
+    if (providerChanged || modelChanged) {
       state.detailChatSessionId = "";
+      state.detailChatProvider = "";
       state.detailChatModel = "";
       state.detailChatMessages = [];
-      state.detailChatStatus = "Codex chat 模型已切换，当前临时对话已清空。";
+      state.detailChatStatus = `${currentProvider === "pi" ? "Pi" : "Codex"} chat 配置已切换，当前临时对话已清空。`;
     }
     state.settingsMessage = "保存成功。新请求通常立即生效；终验前建议重启 Flask。";
     state.settingsMessageTone = "ready";
@@ -2294,7 +2365,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.8";
+  version.textContent = "News Reader v2.0.2.9";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3707,6 +3778,7 @@ function resetDetailChatState({ keepProvider = false } = {}) {
   state.detailView = "detail";
   state.detailChatMessages = [];
   state.detailChatSessionId = "";
+  state.detailChatProvider = keepProvider ? state.detailChatProvider : "";
   state.detailChatModel = "";
   state.detailChatStatus = "";
   state.detailChatSending = false;
@@ -3723,9 +3795,21 @@ function currentCodexChatModel() {
   return (state.runtimeSettings?.llm?.codex_chat?.model || "").trim();
 }
 
+function currentChatProvider() {
+  return (state.runtimeSettings?.llm?.chat?.provider || "codex").trim();
+}
+
+function currentChatModel() {
+  const provider = currentChatProvider();
+  if (provider === "pi") {
+    return (state.runtimeSettings?.llm?.pi_chat?.model || "").trim();
+  }
+  return currentCodexChatModel();
+}
+
 function chatModelLabel(meta) {
-  const model = (meta?.model || currentCodexChatModel()).trim();
-  return model || "Codex 默认模型";
+  const model = (meta?.model || currentChatModel()).trim();
+  return model || "默认模型";
 }
 
 function parseKeyPoints(raw) {
@@ -3754,10 +3838,11 @@ function isCodexFallbackAi(ai) {
   return provider.startsWith("codex-fallback") || (ai?.model || "") === "codex-fallback";
 }
 
-function renderDetailChatMeta(item, codexMeta) {
+function renderDetailChatMeta(item, providerMeta) {
   if (!detailChatMeta) return;
   detailChatMeta.innerHTML = "";
   const contextMeta = detailChatContextMeta(item);
+  const label = providerMeta?.label || (currentChatProvider() === "pi" ? "Pi" : "Codex");
 
   const source = document.createElement("span");
   source.className = "detail-chat-source";
@@ -3765,8 +3850,8 @@ function renderDetailChatMeta(item, codexMeta) {
   detailChatMeta.appendChild(source);
 
   const modelBadge = document.createElement("span");
-  modelBadge.className = `detail-chat-model-badge ${codexMeta.available ? "ok" : "failed"}`;
-  modelBadge.textContent = `● ${chatModelLabel(codexMeta)}`;
+  modelBadge.className = `detail-chat-model-badge ${providerMeta?.available ? "ok" : "failed"}`;
+  modelBadge.textContent = `● ${label}${chatModelLabel(providerMeta) ? ` · ${chatModelLabel(providerMeta)}` : ""}`;
   detailChatMeta.appendChild(modelBadge);
 
   if (contextMeta?.context_label) {
@@ -3803,9 +3888,13 @@ function detailChatContextMeta(item) {
 function renderDetailChat(item) {
   if (!item) return;
   const providers = chatProvidersFromItem(item);
-  const codexMeta = providers.codex || { available: true, model: currentCodexChatModel() };
-  const chatEnabled = !!codexMeta.available;
-  const archiveEnabled = chatEnabled
+  const activeKey = currentChatProvider();
+  const providerMeta = providers[activeKey] || { available: true, model: currentChatModel(), label: activeKey === "pi" ? "Pi" : "Codex" };
+  const chatEnabled = !!providerMeta.available;
+  // 归档摘要始终走 Codex（与当前 chat provider 选择无关，见 README/设置页边界），
+  // 因此归档按钮可用性只看 Codex 自身是否可用，不跟随当前 provider 的 available。
+  const codexArchiveAvailable = providers["codex"] ? !!providers["codex"].available : true;
+  const archiveEnabled = codexArchiveAvailable
     && !state.detailChatSending
     && !state.detailChatArchiving
     && state.detailChatMessages.some((message) => message.role === "assistant");
@@ -3815,21 +3904,22 @@ function renderDetailChat(item) {
     ? "可基于完整正文继续追问；涉及背景或最新信息时，助手会主动搜索补充。"
     : "当前只有摘要与元数据；助手会把它当作提问场景，并在需要时主动搜索补充。";
 
-  renderDetailChatMeta(item, codexMeta);
+  renderDetailChatMeta(item, providerMeta);
   renderDetailChatKeyPoints(item);
   detailChatInput.disabled = state.detailChatSending || state.detailChatArchiving || !chatEnabled;
   detailChatSendBtn.disabled = state.detailChatSending || state.detailChatArchiving || !chatEnabled;
   if (detailChatArchiveBtn) {
     detailChatArchiveBtn.disabled = !archiveEnabled;
   }
+  const unavailableLabel = `${providerMeta.label || (activeKey === "pi" ? "Pi" : "Codex")} chat 当前不可用。`;
   detailChatInput.placeholder = chatEnabled
     ? (contextMeta?.context_level === "full_detail"
       ? "围绕这条新闻提问，例如：这件事现在的最新进展是什么？"
       : "结合这条新闻背景提问，例如：这件事现在有哪些最新进展？")
-    : "Codex chat 当前不可用。";
+    : unavailableLabel;
 
   const chatReady = !!(state.detailChatMessages && state.detailChatMessages.length);
-  const statusText = state.detailChatStatus || (chatReady ? "" : (chatEnabled ? "" : "Codex chat 当前不可用。"));
+  const statusText = state.detailChatStatus || (chatReady ? "" : (chatEnabled ? "" : unavailableLabel));
   detailChatStatus.textContent = statusText;
   detailChatStatus.className = `detail-status ${state.detailChatSending ? "pending" : statusText ? "muted" : "hidden"}`;
 
@@ -3839,7 +3929,7 @@ function renderDetailChat(item) {
     empty.className = "detail-chat-empty";
     empty.textContent = chatEnabled
       ? `${contextHint}当前上下文：${contextLabel}。`
-      : "Codex chat 当前不可用。";
+      : unavailableLabel;
     detailChatMessages.appendChild(empty);
     return;
   }
@@ -3895,12 +3985,17 @@ async function sendDetailChatMessage() {
   if (!item) return;
   const content = (detailChatInput.value || "").trim().slice(0, DETAIL_CHAT_MAX_LEN);
   if (!content) return;
-  const configuredModel = currentCodexChatModel();
-  const reset = !!state.detailChatSessionId && !!state.detailChatModel && configuredModel !== state.detailChatModel;
+  const configuredProvider = currentChatProvider();
+  const configuredModel = currentChatModel();
+  const reset = !!state.detailChatSessionId
+    && (!!state.detailChatProvider && state.detailChatProvider !== configuredProvider
+      || !!state.detailChatModel && state.detailChatModel !== configuredModel);
   if (reset) {
     state.detailChatMessages = [];
     state.detailChatSessionId = "";
-    state.detailChatStatus = "Codex chat 模型已切换，已为你重新开始一轮对话。";
+    state.detailChatProvider = "";
+    state.detailChatModel = "";
+    state.detailChatStatus = `${configuredProvider === "pi" ? "Pi" : "Codex"} chat 配置已切换，已为你重新开始一轮对话。`;
   }
 
   state.detailChatMessages = [...state.detailChatMessages, { role: "user", content }];
@@ -3918,8 +4013,10 @@ async function sendDetailChatMessage() {
     });
     state.detailChatMessages = [...state.detailChatMessages, { role: "assistant", content: payload.answer || "" }];
     state.detailChatSessionId = payload.session_id || "";
+    state.detailChatProvider = payload.provider || configuredProvider;
     state.detailChatModel = configuredModel;
-    state.detailChatStatus = `${payload.provider === "codex" ? "Codex" : "助手"} · ${payload.model || "默认模型"} · ${payload.context_label || "摘要与元数据"}`.trim();
+    const providerLabel = payload.provider === "pi" ? "Pi" : "Codex";
+    state.detailChatStatus = `${providerLabel} · ${payload.model || "默认模型"} · ${payload.context_label || "摘要与元数据"}`.trim();
   } catch (error) {
     const code = error instanceof Error ? error.message : "chat_request_failed";
     const labelMap = {
@@ -3927,13 +4024,14 @@ async function sendDetailChatMessage() {
       context_unavailable: "这条新闻缺少可提问的上下文，请稍后重试。",
       provider_busy: "该模型当前正忙，请稍后重试。",
       provider_timeout: "请求超时，请稍后重试。",
-      provider_failed: "Codex 调用失败，请稍后重试。",
+      provider_failed: "调用失败，请稍后重试。",
       session_invalid: "上轮对话 session 已失效，请重新开始。",
-      missing_session_id: "Codex 没有返回可继续对话的 session id，请重试。",
-      empty_answer: "Codex 没有返回有效回答，请重试。",
+      missing_session_id: "没有返回可继续对话的 session id，请重试。",
+      empty_answer: "没有返回有效回答，请重试。",
     };
     if (code === "session_invalid") {
       state.detailChatSessionId = "";
+      state.detailChatProvider = "";
       state.detailChatModel = "";
       state.detailChatMessages = state.detailChatMessages.slice(0, -1);
     }
@@ -6691,9 +6789,27 @@ if (settingsTranslationModelSelect) {
   });
 }
 
+if (settingsChatProviderSelect) {
+  settingsChatProviderSelect.addEventListener("change", () => {
+    renderChatProviderFieldVisibility();
+  });
+}
+
 if (settingsCodexChatModelSelect) {
   settingsCodexChatModelSelect.addEventListener("change", () => {
     syncModelCustomVisibility(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
+  });
+}
+
+if (settingsPiChatProviderSelect) {
+  settingsPiChatProviderSelect.addEventListener("change", () => {
+    renderPiChatModelVisibility();
+  });
+}
+
+if (settingsPiChatModelSelect) {
+  settingsPiChatModelSelect.addEventListener("change", () => {
+    syncModelCustomVisibility(settingsPiChatModelSelect, settingsPiChatModelCustom);
   });
 }
 

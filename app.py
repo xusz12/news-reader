@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -35,6 +36,9 @@ from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
 from secret_store import SecretStoreError, delete_secret, has_secret, read_secret, write_secret
 from settings import (
+    DEFAULT_CHAT_PROVIDER,
+    DEFAULT_PI_CHAT_MODEL,
+    DEFAULT_PI_CHAT_PROVIDER,
     default_app_settings,
     load_app_settings,
     resolve_daily_briefing_dir,
@@ -1092,11 +1096,24 @@ def current_runtime_settings() -> dict:
                 merged["llm"]["translation"]["provider"] = provider
             if isinstance(model, str):
                 merged["llm"]["translation"]["model"] = normalize_deepseek_model(model)
+        chat = llm.get("chat")
+        if isinstance(chat, dict):
+            provider = (chat.get("provider") or "").strip().lower()
+            if provider in {"codex", "pi"}:
+                merged["llm"]["chat"]["provider"] = provider
         codex_chat = llm.get("codex_chat")
         if isinstance(codex_chat, dict):
             model = codex_chat.get("model")
             if isinstance(model, str):
                 merged["llm"]["codex_chat"]["model"] = model.strip()
+        pi_chat = llm.get("pi_chat")
+        if isinstance(pi_chat, dict):
+            provider = (pi_chat.get("provider") or "").strip()
+            model = pi_chat.get("model")
+            if isinstance(provider, str):
+                merged["llm"]["pi_chat"]["provider"] = provider.strip()
+            if isinstance(model, str):
+                merged["llm"]["pi_chat"]["model"] = model.strip()
     tracked = raw.get("tracked") if isinstance(raw, dict) else {}
     if isinstance(tracked, dict):
         merged["tracked"]["default_rule_params"] = tracked_default_rule_params(
@@ -1396,24 +1413,76 @@ def codex_settings_snapshot(saved_model: str) -> dict:
     }
 
 
+PI_CHAT_MODEL_FALLBACKS = [DEFAULT_PI_CHAT_MODEL]
+
+
+def pi_chat_settings_snapshot(saved_model: str) -> dict:
+    cli_available = bool(shutil.which("pi"))
+    exec_available = False
+    last_error = ""
+    status_bits: list[str] = []
+
+    if not cli_available:
+        status_bits.append("未发现 Pi CLI，使用默认候选。")
+    else:
+        try:
+            exec_probe = subprocess.run(
+                ["pi", "--help"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                cwd=str(BASE_DIR),
+            )
+            exec_available = exec_probe.returncode == 0
+            status_bits.append("pi 可用。" if exec_available else "pi --help 返回非零。")
+            if not exec_available and not last_error:
+                last_error = trim_settings_error(exec_probe.stderr or exec_probe.stdout or f"exit_{exec_probe.returncode}")
+        except Exception as exc:  # pragma: no cover - env-specific
+            last_error = trim_settings_error(exc)
+            status_bits.append("pi 检查失败。")
+
+    return {
+        "service": {
+            "cli_available": cli_available,
+            "exec_available": exec_available,
+            "used_fallback": True,
+            "last_error": last_error,
+            "status_text": " ".join(status_bits).strip(),
+        },
+        "catalog": {
+            "source": "fallback",
+            "saved_model": (saved_model or "").strip(),
+            "resolved_default_model": DEFAULT_PI_CHAT_MODEL,
+            "custom_allowed": True,
+            "default_label": DEFAULT_PI_CHAT_MODEL,
+            "options": merge_model_options(fallback_model_options(PI_CHAT_MODEL_FALLBACKS, source="fallback"), saved_model),
+        },
+    }
+
+
 def serialize_runtime_settings() -> dict:
     settings = current_runtime_settings()
     translation_model = (settings["llm"]["translation"].get("model") or "").strip()
     codex_chat_model = (settings["llm"]["codex_chat"].get("model") or "").strip()
+    pi_chat_model = (settings["llm"]["pi_chat"].get("model") or "").strip()
     deepseek_snapshot = deepseek_settings_snapshot(translation_model)
     codex_snapshot = codex_settings_snapshot(codex_chat_model)
+    pi_snapshot = pi_chat_settings_snapshot(pi_chat_model)
     return {
         "api_status": {
             "deepseek": deepseek_snapshot["service"],
             "codex": codex_snapshot["service"],
+            "pi": pi_snapshot["service"],
         },
         "model_catalogs": {
             "translation": deepseek_snapshot["catalog"],
             "codex_chat": codex_snapshot["catalog"],
+            "pi_chat": pi_snapshot["catalog"],
         },
         "llm": settings["llm"],
         "tracked": settings["tracked"],
-        "restart_notice": "翻译 / 总结与 Codex chat 的新请求通常立即生效；涉及 app.py 本版改动，终验前请重启 Flask。",
+        "restart_notice": "翻译 / 总结与 chat 的新请求通常立即生效；涉及 app.py 本版改动，终验前请重启 Flask。",
     }
 
 
@@ -1432,12 +1501,23 @@ def validate_runtime_settings(payload: object) -> dict:
     translation_model = normalize_deepseek_model((translation.get("model") or "").strip())
     codex_chat = llm.get("codex_chat") if isinstance(llm.get("codex_chat"), dict) else {}
     codex_chat_model = (codex_chat.get("model") or "").strip()
+    chat = llm.get("chat") if isinstance(llm.get("chat"), dict) else {}
+    chat_provider = (chat.get("provider") or DEFAULT_CHAT_PROVIDER).strip().lower()
+    pi_chat = llm.get("pi_chat") if isinstance(llm.get("pi_chat"), dict) else {}
+    pi_chat_provider = (pi_chat.get("provider") or DEFAULT_PI_CHAT_PROVIDER).strip()
+    pi_chat_model = (pi_chat.get("model") or DEFAULT_PI_CHAT_MODEL).strip()
     if translation_provider != "deepseek":
         raise ValueError("unsupported_translation_provider")
+    if chat_provider not in {"codex", "pi"}:
+        raise ValueError("unsupported_chat_provider")
     if len(translation_model) > 120:
         raise ValueError("invalid_translation_model")
     if len(codex_chat_model) > 120:
         raise ValueError("invalid_codex_chat_model")
+    if len(pi_chat_provider) > 40:
+        raise ValueError("invalid_pi_chat_provider")
+    if len(pi_chat_model) > 120:
+        raise ValueError("invalid_pi_chat_model")
 
     normalized = {
         "llm": {
@@ -1445,8 +1525,15 @@ def validate_runtime_settings(payload: object) -> dict:
                 "provider": "deepseek",
                 "model": translation_model,
             },
+            "chat": {
+                "provider": chat_provider,
+            },
             "codex_chat": {
                 "model": codex_chat_model,
+            },
+            "pi_chat": {
+                "provider": pi_chat_provider,
+                "model": pi_chat_model,
             },
         },
         "tracked": current_runtime_settings()["tracked"],
@@ -1454,22 +1541,46 @@ def validate_runtime_settings(payload: object) -> dict:
     return normalized
 
 
-def chat_provider_catalog() -> dict[str, dict]:
+def current_chat_provider() -> str:
     llm = current_runtime_settings()["llm"]
-    model = (llm.get("codex_chat", {}).get("model") or "").strip()
-    return {
-        "codex": {
-            "label": "Codex",
-            "available": True,
-            "note": "基于当前新闻可用上下文回答；有正文时使用正文，无正文时退回标题、摘要与元数据。",
-            "model": model,
-        }
-    }
+    return (llm.get("chat", {}).get("provider") or DEFAULT_CHAT_PROVIDER).strip().lower()
 
 
 def current_codex_chat_model() -> str:
     llm = current_runtime_settings()["llm"]
     return (llm.get("codex_chat", {}).get("model") or "").strip()
+
+
+def current_pi_chat_config() -> dict[str, str]:
+    llm = current_runtime_settings()["llm"]
+    pi_chat = llm.get("pi_chat", {})
+    return {
+        "provider": (pi_chat.get("provider") or DEFAULT_PI_CHAT_PROVIDER).strip(),
+        "model": (pi_chat.get("model") or DEFAULT_PI_CHAT_MODEL).strip(),
+    }
+
+
+def chat_provider_catalog() -> dict[str, dict]:
+    llm = current_runtime_settings()["llm"]
+    codex_model = (llm.get("codex_chat", {}).get("model") or "").strip()
+    pi_config = current_pi_chat_config()
+    provider = current_chat_provider()
+    return {
+        "codex": {
+            "label": "Codex",
+            "available": True,
+            "note": "基于当前新闻可用上下文回答；有正文时使用正文，无正文时退回标题、摘要与元数据。",
+            "model": codex_model,
+            "current": provider == "codex",
+        },
+        "pi": {
+            "label": "Pi",
+            "available": bool(shutil.which("pi")),
+            "note": f"通过 pi agent 调用 {pi_config['provider']}/{pi_config['model']}，支持联网搜索。",
+            "model": pi_config["model"],
+            "current": provider == "pi",
+        },
+    }
 
 
 def codex_chat_lock(item_id: str) -> threading.Lock:
@@ -1705,6 +1816,174 @@ def run_codex_chat(
         "provider": "codex",
         "session_id": thread_id,
         "model": model,
+        "answer": answer,
+    }
+
+
+def _pi_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    # Slock 会注入指向其 runtime-pkg 的 PI_PACKAGE_DIR，该目录缺少 pi 主题文件，
+    # 导致 pi 启动崩溃。清掉它，让 pi 使用自身真实安装目录。
+    env.pop("PI_PACKAGE_DIR", None)
+    return env
+
+
+def _parse_pi_stdout(stdout: str) -> tuple[str, str, bool, str]:
+    session_id = ""
+    answer_parts: list[str] = []
+    fallback_answer = ""
+    has_error = False
+    error_message = ""
+    stop_reason = ""
+
+    for line in stdout.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        obj_type = obj.get("type")
+        if obj_type == "session":
+            session_id = (obj.get("id") or "").strip()
+            continue
+
+        if obj_type == "auto_retry_end":
+            if not obj.get("success"):
+                has_error = True
+                error_message = (obj.get("finalError") or "pi_auto_retry_failed")[:500]
+            continue
+
+        if obj_type == "message_update":
+            ev = obj.get("assistantMessageEvent") or {}
+            ev_type = ev.get("type")
+            if ev_type == "text_delta":
+                delta = ev.get("delta")
+                if isinstance(delta, str):
+                    answer_parts.append(delta)
+            elif ev_type == "text_end":
+                content = ev.get("content")
+                if isinstance(content, str):
+                    fallback_answer = content
+                partial = ev.get("partial") or {}
+                if not fallback_answer and isinstance(partial.get("content"), list):
+                    for chunk in partial["content"]:
+                        if isinstance(chunk, dict) and chunk.get("type") == "text":
+                            text = chunk.get("text")
+                            if isinstance(text, str):
+                                fallback_answer = text
+                                break
+                if partial.get("stopReason"):
+                    stop_reason = partial["stopReason"]
+            continue
+
+        if obj_type == "message_end":
+            message = obj.get("message") or {}
+            if message.get("stopReason"):
+                stop_reason = message["stopReason"]
+            if not fallback_answer and isinstance(message.get("content"), list):
+                for chunk in message["content"]:
+                    if isinstance(chunk, dict) and chunk.get("type") == "text":
+                        text = chunk.get("text")
+                        if isinstance(text, str):
+                            fallback_answer = text
+                            break
+            continue
+
+        if obj_type == "agent_end" and obj.get("willRetry"):
+            has_error = True
+            if not error_message:
+                error_message = "pi_will_retry"
+            continue
+
+    answer = ("".join(answer_parts) or fallback_answer).strip()
+    if stop_reason == "error" and not has_error:
+        has_error = True
+        if not error_message:
+            error_message = "pi_stop_reason_error"
+
+    return session_id, answer, has_error, error_message
+
+
+def run_pi_chat(
+    *,
+    item_id: str,
+    question: str,
+    title: str,
+    source: str,
+    published_at: str,
+    content: str,
+    context_level: str,
+    pi_provider: str,
+    pi_model: str,
+    session_id: str = "",
+    reset: bool = False,
+    timeout: int = 180,
+) -> dict:
+    prompt = question.strip()
+    if not prompt:
+        raise ValueError("empty_question")
+
+    session = (session_id or "").strip()
+    use_resume = bool(session) and not reset
+    if not use_resume:
+        session = f"newsreader-{item_id}-{uuid.uuid4()}"
+
+    command = [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--session-id",
+        session,
+        "--provider",
+        pi_provider,
+        "--model",
+        pi_model,
+        build_codex_chat_prompt(
+            title=title,
+            source=source,
+            published_at=published_at,
+            content=content,
+            question=prompt,
+            context_level=context_level,
+        ),
+    ]
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(BASE_DIR),
+            env=_pi_subprocess_env(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("pi_timeout") from exc
+
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    session_id_out, answer, has_error, error_message = _parse_pi_stdout(stdout)
+
+    if completed.returncode != 0:
+        detail = (stderr or stdout).strip() or "pi_failed"
+        raise RuntimeError(detail[:500])
+
+    if has_error:
+        raise RuntimeError(error_message or "pi_failed")
+
+    if not session_id_out:
+        raise RuntimeError("pi_missing_session_id")
+    if not answer:
+        raise RuntimeError("pi_empty_answer")
+
+    return {
+        "provider": "pi",
+        "session_id": session_id_out,
+        "model": pi_model,
         "answer": answer,
     }
 
@@ -6688,7 +6967,9 @@ def api_news_chat(item_id: str):
     session_id = (body.get("session_id") or "").strip()
     requested_model = (body.get("model") or "").strip()
     reset = bool(body.get("reset"))
-    model = requested_model or current_codex_chat_model()
+    provider = current_chat_provider()
+    codex_model = requested_model or current_codex_chat_model()
+    pi_config = current_pi_chat_config()
 
     conn = db_conn()
     try:
@@ -6744,28 +7025,43 @@ def api_news_chat(item_id: str):
         return jsonify({"ok": False, "error": "provider_busy"}), 409
 
     try:
-        payload = run_codex_chat(
-            question=question,
-            session_id=session_id,
-            model=model,
-            reset=reset,
-            title=chat_context["title"],
-            source=chat_context["source"],
-            published_at=chat_context["published_at"],
-            content=chat_context["content"],
-            context_level=chat_context["context_level"],
-        )
+        if provider == "pi":
+            payload = run_pi_chat(
+                item_id=item_id,
+                question=question,
+                session_id=session_id,
+                pi_provider=pi_config["provider"],
+                pi_model=requested_model or pi_config["model"],
+                reset=reset,
+                title=chat_context["title"],
+                source=chat_context["source"],
+                published_at=chat_context["published_at"],
+                content=chat_context["content"],
+                context_level=chat_context["context_level"],
+            )
+        else:
+            payload = run_codex_chat(
+                question=question,
+                session_id=session_id,
+                model=codex_model,
+                reset=reset,
+                title=chat_context["title"],
+                source=chat_context["source"],
+                published_at=chat_context["published_at"],
+                content=chat_context["content"],
+                context_level=chat_context["context_level"],
+            )
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except RuntimeError as exc:
         error = str(exc)
-        if error == "codex_timeout":
+        if error in {"codex_timeout", "pi_timeout"}:
             return jsonify({"ok": False, "error": "provider_timeout"}), 504
-        if error == "codex_session_invalid":
+        if error in {"codex_session_invalid", "pi_session_invalid"}:
             return jsonify({"ok": False, "error": "session_invalid"}), 409
-        if error == "codex_missing_session_id":
+        if error in {"codex_missing_session_id", "pi_missing_session_id"}:
             return jsonify({"ok": False, "error": "missing_session_id"}), 502
-        if error == "codex_empty_answer":
+        if error in {"codex_empty_answer", "pi_empty_answer"}:
             return jsonify({"ok": False, "error": "empty_answer"}), 502
         return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
     finally:
