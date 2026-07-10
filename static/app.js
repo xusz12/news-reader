@@ -1178,6 +1178,8 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
   }
   realOptions.forEach((option) => select.appendChild(option));
 
+  // 已保存但不在当前目录内的值，追加为下拉选项并选中，避免已保存配置因目录变化/检测失败而消失；
+  // 用户仍可选"自定义输入..."输入新值。
   if (savedValue && !values.has(savedValue)) {
     values.add(savedValue);
     const savedOption = document.createElement("option");
@@ -1271,7 +1273,11 @@ function populateSettingsForm() {
   populateModelSelect(
     settingsPiChatProviderSelect,
     settingsPiChatProviderCustom,
-    { options: [{ value: "ollama", label: "ollama" }], resolved_default_model: "ollama" },
+    {
+      options: (state.runtimeSettings?.model_catalogs?.pi_chat?.provider_options) || [{ value: "ollama", label: "ollama" }],
+      resolved_default_model: (state.runtimeSettings?.model_catalogs?.pi_chat?.resolved_default_provider) || "ollama",
+      default_label: (state.runtimeSettings?.model_catalogs?.pi_chat?.resolved_default_provider) || "ollama",
+    },
     llm.pi_chat?.provider || "ollama",
   );
   populateModelSelect(
@@ -1388,6 +1394,7 @@ async function saveRuntimeSettings() {
   try {
     const previousProvider = state.runtimeSettings?.llm?.chat?.provider || "codex";
     const previousCodexModel = state.runtimeSettings?.llm?.codex_chat?.model || "";
+    const previousPiProvider = state.runtimeSettings?.llm?.pi_chat?.provider || "";
     const previousPiModel = state.runtimeSettings?.llm?.pi_chat?.model || "";
     const payload = {
       llm: {
@@ -1417,11 +1424,12 @@ async function saveRuntimeSettings() {
     state.runtimeSettings = data;
     const currentProvider = data.llm?.chat?.provider || "codex";
     const currentCodexModel = data.llm?.codex_chat?.model || "";
+    const currentPiProvider = data.llm?.pi_chat?.provider || "";
     const currentPiModel = data.llm?.pi_chat?.model || "";
     const providerChanged = currentProvider !== previousProvider;
     const modelChanged = currentProvider === "codex"
       ? currentCodexModel !== previousCodexModel
-      : currentPiModel !== previousPiModel;
+      : (currentPiModel !== previousPiModel || currentPiProvider !== previousPiProvider);
     if (providerChanged || modelChanged) {
       state.detailChatSessionId = "";
       state.detailChatProvider = "";
@@ -2365,7 +2373,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.10";
+  version.textContent = "News Reader v2.0.2.11";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -6802,7 +6810,7 @@ if (settingsCodexChatModelSelect) {
 
 if (settingsPiChatProviderSelect) {
   settingsPiChatProviderSelect.addEventListener("change", () => {
-    renderPiChatModelVisibility();
+    syncModelCustomVisibility(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
   });
 }
 

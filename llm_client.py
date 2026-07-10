@@ -914,3 +914,208 @@ def generate_codex_fallback_translation(
                 ensure_ascii=False,
             ),
         }
+
+
+def _pi_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    # Slock 会注入指向其 runtime-pkg 的 PI_PACKAGE_DIR，该目录缺少 pi 主题文件，
+    # 导致 pi 启动崩溃。清掉它，让 pi 使用自身真实安装目录。
+    env.pop("PI_PACKAGE_DIR", None)
+    return env
+
+
+def _parse_pi_stdout(stdout: str) -> tuple[str, str, bool, str]:
+    session_id = ""
+    answer_parts: list[str] = []
+    fallback_answer = ""
+    has_error = False
+    error_message = ""
+    stop_reason = ""
+
+    for line in stdout.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        obj_type = obj.get("type")
+        if obj_type == "session":
+            session_id = (obj.get("id") or "").strip()
+            continue
+
+        if obj_type == "auto_retry_end":
+            if not obj.get("success"):
+                has_error = True
+                error_message = (obj.get("finalError") or "pi_auto_retry_failed")[:500]
+            continue
+
+        if obj_type == "message_update":
+            ev = obj.get("assistantMessageEvent") or {}
+            ev_type = ev.get("type")
+            if ev_type == "text_delta":
+                delta = ev.get("delta")
+                if isinstance(delta, str):
+                    answer_parts.append(delta)
+            elif ev_type == "text_end":
+                content = ev.get("content")
+                if isinstance(content, str):
+                    fallback_answer = content
+                partial = ev.get("partial") or {}
+                if not fallback_answer and isinstance(partial.get("content"), list):
+                    for chunk in partial["content"]:
+                        if isinstance(chunk, dict) and chunk.get("type") == "text":
+                            text = chunk.get("text")
+                            if isinstance(text, str):
+                                fallback_answer = text
+                                break
+                if partial.get("stopReason"):
+                    stop_reason = partial["stopReason"]
+            continue
+
+        if obj_type == "message_end":
+            message = obj.get("message") or {}
+            if message.get("stopReason"):
+                stop_reason = message["stopReason"]
+            if not fallback_answer and isinstance(message.get("content"), list):
+                for chunk in message["content"]:
+                    if isinstance(chunk, dict) and chunk.get("type") == "text":
+                        text = chunk.get("text")
+                        if isinstance(text, str):
+                            fallback_answer = text
+                            break
+            continue
+
+        if obj_type == "agent_end" and obj.get("willRetry"):
+            has_error = True
+            if not error_message:
+                error_message = "pi_will_retry"
+            continue
+
+    answer = ("".join(answer_parts) or fallback_answer).strip()
+    if stop_reason == "error" and not has_error:
+        has_error = True
+        if not error_message:
+            error_message = "pi_stop_reason_error"
+
+    return session_id, answer, has_error, error_message
+
+
+def generate_pi_fallback_translation(
+    *,
+    title: str,
+    source: str,
+    content: str,
+    pi_provider: str,
+    pi_model: str,
+    timeout: int = 90,
+    max_chars: int = 12000,
+) -> dict[str, Any]:
+    """DeepSeek 翻译失败后的 Pi 兜底：复用结构化翻译 schema/prompt，调 pi 单次无会话。
+
+    复用现有"结构化成功 / body-only 降级 / 完全失败"分层；Pi 失败不隐式回退 Codex。
+    """
+    body = (content or "").strip()
+    if not body:
+        raise LLMClientError("PI_FALLBACK_EMPTY_CONTENT")
+
+    truncated = False
+    if len(body) > max_chars:
+        body = body[:max_chars]
+        truncated = True
+
+    prompt = (
+        "你是专业新闻编辑与翻译。请基于英文新闻正文返回一个 JSON 对象，不要输出 JSON 以外的任何内容。\n"
+        "JSON 字段要求：\n"
+        '- "key_points_zh": 3 到 5 条中文要点数组，每条一句话\n'
+        '- "conclusion_zh": 一句中文结论\n'
+        '- "body_zh": 完整中文翻译，保持段落结构，不遗漏关键信息\n'
+        f"来源：{source or '未知'}\n"
+        f"标题：{title or '无标题'}\n\n"
+        f"{body}"
+    )
+
+    command = [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-session",
+        "--provider",
+        pi_provider,
+        "--model",
+        pi_model,
+        prompt,
+    ]
+
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 15,
+            check=False,
+            env=_pi_subprocess_env(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LLMClientError("PI_FALLBACK_TIMEOUT") from exc
+    except Exception as exc:
+        raise LLMClientError(f"PI_FALLBACK_FAILED: {exc}") from exc
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    _session_id, raw_output, has_error, error_message = _parse_pi_stdout(stdout)
+
+    if proc.returncode != 0:
+        detail = stderr or stdout or f"exit={proc.returncode}"
+        raise LLMClientError(f"PI_FALLBACK_FAILED: {detail[:300]}")
+    if has_error:
+        raise LLMClientError(f"PI_FALLBACK_FAILED: {error_message or 'pi_failed'}")
+
+    raw_output = (raw_output or "").strip()
+    raw_payload = {
+        "provider": "pi-fallback-structured",
+        "truncated": truncated,
+        "pi_provider": pi_provider,
+        "pi_model": pi_model,
+        "stdout": stdout[:4000],
+        "stderr": stderr[:1000],
+    }
+
+    try:
+        parsed = json.loads(raw_output)
+        normalized = _validate_structured_translation_payload(parsed)
+        return {
+            "model": pi_model or "pi-fallback",
+            **normalized,
+            "raw_json": json.dumps(
+                {
+                    **raw_payload,
+                    "structured_success": True,
+                    "parsed": parsed,
+                },
+                ensure_ascii=False,
+            ),
+        }
+    except Exception as exc:
+        body_zh = raw_output.strip()
+        if not body_zh or not _contains_cjk(body_zh):
+            detail = str(exc) if isinstance(exc, LLMClientError) else "PI_FALLBACK_INVALID_OUTPUT"
+            raise LLMClientError(detail)
+        return {
+            "model": pi_model or "pi-fallback",
+            "key_points_zh": [],
+            "conclusion_zh": "",
+            "body_zh": body_zh,
+            "raw_json": json.dumps(
+                {
+                    **raw_payload,
+                    "provider": "pi-fallback-body-only",
+                    "structured_success": False,
+                    "structured_error": str(exc),
+                },
+                ensure_ascii=False,
+            ),
+        }

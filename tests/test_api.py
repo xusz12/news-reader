@@ -3974,6 +3974,219 @@ def test_ai_fallback_to_codex_body_only_degrades_cleanly(tmp_path: Path, monkeyp
     assert "codex-fallback-body-only" in payload["ai"]["raw_json"]
 
 
+def test_ai_fallback_to_pi_success_when_provider_pi(tmp_path: Path, monkeypatch):
+    # provider=pi 时 DeepSeek 翻译失败 → 走 generate_pi_fallback_translation，不走 Codex。
+    daily_dir = tmp_path / "DailyNews"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    assert app_module.current_chat_provider() == "pi"
+    app_module.ensure_db()
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/pi-fallback",
+                "Pi fallback title",
+                "Reuters",
+                "Original english body",
+                21,
+                "2026-06-04 17:00:00",
+                "2026-06-04 17:00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
+            VALUES (?, 'pending', 0, ?, ?)
+            """,
+            ("https://example.com/pi-fallback", "2026-06-04 17:01:00", "2026-06-04 17:01:00"),
+        )
+
+    def fail_primary(**kwargs):
+        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
+
+    pi_called = {}
+    codex_called = {}
+
+    def succeed_pi(**kwargs):
+        pi_called.update(kwargs)
+        return {
+            "model": "minimax-m3:cloud",
+            "key_points_zh": ["要点一", "要点二", "要点三"],
+            "conclusion_zh": "Pi 兜底结论",
+            "body_zh": "这是 Pi 保底译文。",
+            "raw_json": '{"provider":"pi-fallback-structured","structured_success":true}',
+        }
+
+    def codex_should_not_run(**kwargs):
+        codex_called.update(kwargs)
+        return {"model": "codex-fallback", "key_points_zh": [], "conclusion_zh": "", "body_zh": "不应走 Codex", "raw_json": "{}"}
+
+    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
+    monkeypatch.setattr(app_module, "generate_pi_fallback_translation", succeed_pi)
+    monkeypatch.setattr(app_module, "generate_codex_fallback_translation", codex_should_not_run)
+
+    assert app_module.process_pending_ai_once() is True
+
+    with app_module.db_conn() as conn:
+        ai_row = conn.execute(
+            "SELECT model, body_zh, raw_json FROM article_ai WHERE url=?",
+            ("https://example.com/pi-fallback",),
+        ).fetchone()
+        job_row = conn.execute("SELECT status, last_error FROM ai_jobs WHERE url=?", ("https://example.com/pi-fallback",)).fetchone()
+
+    assert ai_row["model"] == "minimax-m3:cloud"
+    assert ai_row["body_zh"] == "这是 Pi 保底译文。"
+    assert "pi-fallback-structured" in ai_row["raw_json"]
+    assert job_row["status"] == "success"
+    assert pi_called, "provider=pi 时翻译兜底应走 generate_pi_fallback_translation"
+    assert not codex_called, "provider=pi 时翻译兜底不应再走 Codex"
+
+
+def test_ai_fallback_to_pi_failure_does_not_implicitly_use_codex(tmp_path: Path, monkeypatch):
+    # provider=pi 时 Pi 兜底失败 → 只记录失败，不隐式回退 Codex。
+    daily_dir = tmp_path / "DailyNews"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/pi-fallback-fail",
+                "Pi fallback fail title",
+                "Reuters",
+                "Original english body",
+                21,
+                "2026-06-04 17:00:00",
+                "2026-06-04 17:00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
+            VALUES (?, 'pending', 0, ?, ?)
+            """,
+            ("https://example.com/pi-fallback-fail", "2026-06-04 17:01:00", "2026-06-04 17:01:00"),
+        )
+
+    def fail_primary(**kwargs):
+        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
+
+    def fail_pi(**kwargs):
+        raise app_module.LLMClientError("PI_FALLBACK_FAILED: timeout")
+
+    codex_called = {}
+
+    def codex_should_not_run(**kwargs):
+        codex_called.update(kwargs)
+        return {"model": "codex-fallback", "key_points_zh": [], "conclusion_zh": "", "body_zh": "不应走 Codex", "raw_json": "{}"}
+
+    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
+    monkeypatch.setattr(app_module, "generate_pi_fallback_translation", fail_pi)
+    monkeypatch.setattr(app_module, "generate_codex_fallback_translation", codex_should_not_run)
+
+    assert app_module.process_pending_ai_once() is True
+
+    with app_module.db_conn() as conn:
+        job_row = conn.execute("SELECT status, last_error FROM ai_jobs WHERE url=?", ("https://example.com/pi-fallback-fail",)).fetchone()
+
+    assert job_row["status"] == "failed"
+    assert job_row["last_error"] is not None
+    assert not codex_called, "Pi 兜底失败不应隐式回退 Codex"
+
+
+def test_generate_pi_fallback_translation_layered(tmp_path: Path, monkeypatch):
+    # generate_pi_fallback_translation 复用结构化/body-only/失败分层。
+    import app as app_module
+    import llm_client as llm
+
+    def make_proc(stdout):
+        class Completed:
+            returncode = 0
+            stderr = ""
+        Completed.stdout = stdout
+        return Completed()
+
+    structured = (
+        '{"type":"session","id":"s"}\n'
+        '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"{\\"key_points_zh\\":[\\"一\\",\\"二\\",\\"三\\"],\\"conclusion_zh\\":\\"结论\\",\\"body_zh\\":\\"译文\\"}"}}\n'
+        '{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}\n'
+    )
+    monkeypatch.setattr(llm.subprocess, "run", lambda args, **kwargs: make_proc(structured))
+    out = llm.generate_pi_fallback_translation(title="t", source="s", content="body", pi_provider="ollama", pi_model="minimax-m3:cloud")
+    assert out["key_points_zh"] == ["一", "二", "三"]
+    assert out["body_zh"] == "译文"
+    assert "pi-fallback-structured" in out["raw_json"]
+
+    # body-only：输出非 JSON 但含中文
+    body_only = '{"type":"session","id":"s"}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"这是一段中文译文，不是 JSON"}}\n{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}\n'
+    monkeypatch.setattr(llm.subprocess, "run", lambda args, **kwargs: make_proc(body_only))
+    out2 = llm.generate_pi_fallback_translation(title="t", source="s", content="body", pi_provider="ollama", pi_model="minimax-m3:cloud")
+    assert out2["body_zh"] == "这是一段中文译文，不是 JSON"
+    assert out2["key_points_zh"] == []
+    assert "pi-fallback-body-only" in out2["raw_json"]
+
+    # 完全失败：空输出
+    monkeypatch.setattr(llm.subprocess, "run", lambda args, **kwargs: make_proc('{"type":"session","id":"s"}\n'))
+    raised = False
+    try:
+        llm.generate_pi_fallback_translation(title="t", source="s", content="body", pi_provider="ollama", pi_model="minimax-m3:cloud")
+    except llm.LLMClientError:
+        raised = True
+    assert raised, "空输出应抛 LLMClientError"
+
+    # PI_PACKAGE_DIR 清理断言
+    captured = {}
+
+    def capture_run(args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return make_proc(structured)
+
+    monkeypatch.setattr(llm.subprocess, "run", capture_run)
+    llm.generate_pi_fallback_translation(title="t", source="s", content="body", pi_provider="ollama", pi_model="minimax-m3:cloud")
+    assert captured["env"] is not None
+    assert captured["env"].get("PI_PACKAGE_DIR") is None
+
+
 def test_error_stats_today_with_and_without_errors(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -5778,23 +5991,109 @@ def test_current_chat_provider_and_pi_config(tmp_path: Path, monkeypatch):
     assert app_module.current_pi_chat_config() == {"provider": "ollama", "model": "qwen3.5:0.8b"}
 
 
-def test_pi_chat_settings_snapshot(tmp_path: Path, monkeypatch):
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {"llm": {"pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+def _fake_pi_subprocess(*, help_ok=True, models_stdout=None, models_ok=True):
+    def _run(args, **kwargs):
+        class Completed:
+            pass
+        if "--help" in args:
+            Completed.returncode = 0 if help_ok else 1
+            Completed.stdout = "pi help"
+            Completed.stderr = "" if help_ok else "boom"
+            return Completed()
+        if "--list-models" in args:
+            Completed.returncode = 0 if (models_ok and models_stdout is not None) else 1
+            Completed.stdout = models_stdout or ""
+            Completed.stderr = "" if models_ok else "boom"
+            return Completed()
+        Completed.returncode = 0
+        Completed.stdout = ""
+        Completed.stderr = ""
+        return Completed()
+    return _run
+
+
+def test_parse_pi_providers():
+    import app as app_module
+
+    stdout = (
+        "provider  model              context  max-out  thinking  images\n"
+        "deepseek  deepseek-v4-flash  1M       384K     yes       no\n"
+        "deepseek  deepseek-v4-pro    1M       384K     yes       no\n"
+        "ollama    minimax-m3:cloud   524.3K   16.4K    yes       yes\n"
+        "ollama    qwen3.5:4b         262.1K   16.4K    yes       yes\n"
     )
+    assert app_module.parse_pi_providers(stdout) == ["deepseek", "ollama"]
+    assert app_module.parse_pi_providers("") == []
+    assert app_module.parse_pi_providers("provider  model\n") == []
+
+
+def test_pi_chat_settings_snapshot_detects_providers(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
     monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
     import app as app_module
 
     importlib.reload(app_module)
-    snapshot = app_module.pi_chat_settings_snapshot("minimax-m3:cloud")
-    assert snapshot["catalog"]["resolved_default_model"] == "minimax-m3:cloud"
-    assert snapshot["catalog"]["saved_model"] == "minimax-m3:cloud"
-    assert any(opt["value"] == "minimax-m3:cloud" for opt in snapshot["catalog"]["options"])
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/opt/homebrew/bin/pi")
+    monkeypatch.setattr(
+        app_module.subprocess,
+        "run",
+        _fake_pi_subprocess(
+            models_stdout=(
+                "provider  model              context  max-out  thinking  images\n"
+                "deepseek  deepseek-v4-flash  1M       384K     yes       no\n"
+                "ollama    minimax-m3:cloud   524.3K   16.4K    yes       yes\n"
+            )
+        ),
+    )
+    snapshot = app_module.pi_chat_settings_snapshot("minimax-m3:cloud", "deepseek")
+    catalog = snapshot["catalog"]
+    assert catalog["saved_provider"] == "deepseek"
+    assert catalog["resolved_default_provider"] == "ollama"
+    provider_values = [opt["value"] for opt in catalog["provider_options"]]
+    assert "deepseek" in provider_values and "ollama" in provider_values
+    # 默认模型选项仍保留
+    assert catalog["resolved_default_model"] == "minimax-m3:cloud"
+    assert any(opt["value"] == "minimax-m3:cloud" for opt in catalog["options"])
+
+
+def test_pi_chat_settings_snapshot_falls_back_and_keeps_saved_provider(tmp_path: Path, monkeypatch):
+    # pi --list-models 失败时回退默认 ollama，且不丢已保存 provider。
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/opt/homebrew/bin/pi")
+    monkeypatch.setattr(app_module.subprocess, "run", _fake_pi_subprocess(help_ok=True, models_stdout=None, models_ok=False))
+    snapshot = app_module.pi_chat_settings_snapshot("minimax-m3:cloud", "custom-provider")
+    provider_values = [opt["value"] for opt in snapshot["catalog"]["provider_options"]]
+    # 回退默认 ollama + 已保存 custom-provider 被追加保留
+    assert "ollama" in provider_values
+    assert "custom-provider" in provider_values
+    assert snapshot["catalog"]["saved_provider"] == "custom-provider"
+
+
+def test_pi_chat_settings_snapshot_appends_saved_provider_not_detected(tmp_path: Path, monkeypatch):
+    # 已保存 provider 不在检测列表时，追加到下拉并保留为当前选项。
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/opt/homebrew/bin/pi")
+    monkeypatch.setattr(
+        app_module.subprocess,
+        "run",
+        _fake_pi_subprocess(models_stdout="provider  model\nollama  minimax-m3:cloud  524K  16K  yes  yes\n"),
+    )
+    snapshot = app_module.pi_chat_settings_snapshot("minimax-m3:cloud", "deepseek")
+    provider_values = [opt["value"] for opt in snapshot["catalog"]["provider_options"]]
+    assert "ollama" in provider_values
+    assert "deepseek" in provider_values  # saved 不在检测结果里，仍追加
+    assert snapshot["catalog"]["saved_provider"] == "deepseek"
 
 
 def test_parse_pi_stdout_success_text_delta():

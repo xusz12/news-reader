@@ -4,6 +4,17 @@
 
 ## What's Changed
 
+### 2026-07-10 — v2.0.2.11 fix: 翻译兜底跟随 Chat provider + Pi provider 自定义输入与记忆
+- **文件**
+  - *llm_client.py（+）*、*app.py（+）*、*static/app.js（+）*、*static/index.html（+）*、*tests/test_api.py（+）*、*README.md（+）*
+    - 翻译兜底跟随当前 Chat provider：`process_pending_ai_once()` 里 DeepSeek 翻译失败后，按 `current_chat_provider()` 分发；Codex 仍走 `generate_codex_fallback_translation()`，Pi 走新增 `generate_pi_fallback_translation()`（复用结构化翻译 schema/prompt，`pi -p --mode json --no-session`，复用"结构化成功 / body-only 降级 / 完全失败"分层，文案区分 `pi-fallback-structured` / `pi-fallback-body-only`）；Pi 失败不隐式回退 Codex
+    - `_pi_subprocess_env()` / `_parse_pi_stdout()` 从 app.py 移到 llm_client.py（与 codex fallback 同模块），app.py 改为导入复用；`run_pi_chat` / `run_pi_chat_archive` 不变
+    - 前端修复 Pi provider 自定义输入：change handler 由不存在的 `renderPiChatModelVisibility()` 改为 `syncModelCustomVisibility(...)`，选"自定义输入..."后正确展开输入框；设置页文案改为"默认 ollama，可自定义 provider，如 deepseek"
+    - Pi provider 下拉改为后端检测：`pi_chat_settings_snapshot` 调 `pi --list-models` 解析第一列 provider 去重（如 `deepseek`/`ollama`）返回 `provider_options`；失败/空回退默认 `ollama`，已保存 provider 不在检测列表时追加到下拉并选中，避免已保存配置消失；保留"自定义输入..."入口；Pi provider 变更（如 ollama→deepseek）也会清空当前临时 chat session
+    - 自定义 model/provider 在下拉框中出现并被记住：`populateModelSelect()` 已保存但不在当前目录内的值追加为下拉选项并选中（恢复 savedOption 行为），自定义 model 体验不回退
+    - 测试：Pi 翻译兜底走 Pi 不走 Codex、Pi 兜底失败不隐式回 Codex、`generate_pi_fallback_translation` 结构化/body-only/失败分层、`parse_pi_providers` 解析、provider 检测/失败回退/已保存 provider 保留、Codex 兜底不回归
+- **影响**：涉及 `app.py` / `llm_client.py` 与前端，拉取后需重启 Flask 并刷新页面；provider=Pi 时翻译兜底也走 Pi（需 pi CLI + 对应 provider/model 可用）。
+
 ### 2026-07-10 — v2.0.2.10 improve: 归档摘要跟随当前 Chat provider
 - **文件**
   - *app.py（+）*、*static/app.js（+）*、*static/index.html（+）*、*tests/test_api.py（+）*、*README.md（+）*

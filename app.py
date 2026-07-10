@@ -24,6 +24,7 @@ from daily_briefings import list_daily_briefing_files, parse_daily_briefing_date
 from llm_client import (
     LLMClientError,
     generate_codex_fallback_translation,
+    generate_pi_fallback_translation,
     generate_article_ai,
     generate_body_translation_only,
     generate_market_tag_summary,
@@ -31,6 +32,8 @@ from llm_client import (
     generate_tracked_topic_rule_draft,
     generate_tracked_topic_daily_summary,
     resolve_translation_default_model,
+    _pi_subprocess_env,
+    _parse_pi_stdout,
 )
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
@@ -1414,13 +1417,33 @@ def codex_settings_snapshot(saved_model: str) -> dict:
 
 
 PI_CHAT_MODEL_FALLBACKS = [DEFAULT_PI_CHAT_MODEL]
+PI_CHAT_PROVIDER_FALLBACKS = [DEFAULT_PI_CHAT_PROVIDER]
 
 
-def pi_chat_settings_snapshot(saved_model: str) -> dict:
+def parse_pi_providers(stdout: str) -> list[str]:
+    """解析 `pi --list-models` 表格第一列 provider，去重保序；跳过表头。"""
+    providers: list[str] = []
+    seen: set[str] = set()
+    for line in (stdout or "").splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        name = parts[0].strip()
+        if not name or name.lower() == "provider":
+            continue
+        if name not in seen:
+            seen.add(name)
+            providers.append(name)
+    return providers
+
+
+def pi_chat_settings_snapshot(saved_model: str, saved_provider: str = "") -> dict:
     cli_available = bool(shutil.which("pi"))
     exec_available = False
     last_error = ""
     status_bits: list[str] = []
+    provider_options = fallback_model_options(PI_CHAT_PROVIDER_FALLBACKS, source="fallback")
+    provider_source = "fallback"
 
     if not cli_available:
         status_bits.append("未发现 Pi CLI，使用默认候选。")
@@ -1442,6 +1465,34 @@ def pi_chat_settings_snapshot(saved_model: str) -> dict:
             last_error = trim_settings_error(exc)
             status_bits.append("pi 检查失败。")
 
+        # 检测可用 provider：解析 `pi --list-models` 第一列。失败/空回退默认，不丢已保存 provider。
+        if exec_available:
+            try:
+                models_probe = subprocess.run(
+                    ["pi", "--list-models"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                    cwd=str(BASE_DIR),
+                    env=_pi_subprocess_env(),
+                )
+                if models_probe.returncode == 0:
+                    detected = parse_pi_providers(models_probe.stdout or "")
+                    if detected:
+                        provider_options = [build_model_option(name, source="pi-list-models") for name in detected]
+                        provider_source = "pi-list-models"
+                        status_bits.append("pi --list-models 检测到 provider。")
+                    else:
+                        status_bits.append("pi --list-models 返回空，使用默认候选。")
+                else:
+                    status_bits.append("pi --list-models 不可读取，使用默认候选。")
+            except Exception as exc:  # pragma: no cover - env-specific
+                status_bits.append("pi --list-models 检测失败，使用默认候选。")
+
+    saved_provider = (saved_provider or "").strip()
+    provider_options = merge_model_options(provider_options, saved_provider)
+
     return {
         "service": {
             "cli_available": cli_available,
@@ -1453,10 +1504,14 @@ def pi_chat_settings_snapshot(saved_model: str) -> dict:
         "catalog": {
             "source": "fallback",
             "saved_model": (saved_model or "").strip(),
+            "saved_provider": saved_provider,
             "resolved_default_model": DEFAULT_PI_CHAT_MODEL,
+            "resolved_default_provider": DEFAULT_PI_CHAT_PROVIDER,
+            "provider_source": provider_source,
             "custom_allowed": True,
             "default_label": DEFAULT_PI_CHAT_MODEL,
             "options": merge_model_options(fallback_model_options(PI_CHAT_MODEL_FALLBACKS, source="fallback"), saved_model),
+            "provider_options": provider_options,
         },
     }
 
@@ -1466,9 +1521,10 @@ def serialize_runtime_settings() -> dict:
     translation_model = (settings["llm"]["translation"].get("model") or "").strip()
     codex_chat_model = (settings["llm"]["codex_chat"].get("model") or "").strip()
     pi_chat_model = (settings["llm"]["pi_chat"].get("model") or "").strip()
+    pi_chat_provider = (settings["llm"]["pi_chat"].get("provider") or "").strip()
     deepseek_snapshot = deepseek_settings_snapshot(translation_model)
     codex_snapshot = codex_settings_snapshot(codex_chat_model)
-    pi_snapshot = pi_chat_settings_snapshot(pi_chat_model)
+    pi_snapshot = pi_chat_settings_snapshot(pi_chat_model, pi_chat_provider)
     return {
         "api_status": {
             "deepseek": deepseek_snapshot["service"],
@@ -1818,93 +1874,6 @@ def run_codex_chat(
         "model": model,
         "answer": answer,
     }
-
-
-def _pi_subprocess_env() -> dict[str, str]:
-    env = os.environ.copy()
-    # Slock 会注入指向其 runtime-pkg 的 PI_PACKAGE_DIR，该目录缺少 pi 主题文件，
-    # 导致 pi 启动崩溃。清掉它，让 pi 使用自身真实安装目录。
-    env.pop("PI_PACKAGE_DIR", None)
-    return env
-
-
-def _parse_pi_stdout(stdout: str) -> tuple[str, str, bool, str]:
-    session_id = ""
-    answer_parts: list[str] = []
-    fallback_answer = ""
-    has_error = False
-    error_message = ""
-    stop_reason = ""
-
-    for line in stdout.splitlines():
-        raw = line.strip()
-        if not raw:
-            continue
-        try:
-            obj = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-
-        obj_type = obj.get("type")
-        if obj_type == "session":
-            session_id = (obj.get("id") or "").strip()
-            continue
-
-        if obj_type == "auto_retry_end":
-            if not obj.get("success"):
-                has_error = True
-                error_message = (obj.get("finalError") or "pi_auto_retry_failed")[:500]
-            continue
-
-        if obj_type == "message_update":
-            ev = obj.get("assistantMessageEvent") or {}
-            ev_type = ev.get("type")
-            if ev_type == "text_delta":
-                delta = ev.get("delta")
-                if isinstance(delta, str):
-                    answer_parts.append(delta)
-            elif ev_type == "text_end":
-                content = ev.get("content")
-                if isinstance(content, str):
-                    fallback_answer = content
-                partial = ev.get("partial") or {}
-                if not fallback_answer and isinstance(partial.get("content"), list):
-                    for chunk in partial["content"]:
-                        if isinstance(chunk, dict) and chunk.get("type") == "text":
-                            text = chunk.get("text")
-                            if isinstance(text, str):
-                                fallback_answer = text
-                                break
-                if partial.get("stopReason"):
-                    stop_reason = partial["stopReason"]
-            continue
-
-        if obj_type == "message_end":
-            message = obj.get("message") or {}
-            if message.get("stopReason"):
-                stop_reason = message["stopReason"]
-            if not fallback_answer and isinstance(message.get("content"), list):
-                for chunk in message["content"]:
-                    if isinstance(chunk, dict) and chunk.get("type") == "text":
-                        text = chunk.get("text")
-                        if isinstance(text, str):
-                            fallback_answer = text
-                            break
-            continue
-
-        if obj_type == "agent_end" and obj.get("willRetry"):
-            has_error = True
-            if not error_message:
-                error_message = "pi_will_retry"
-            continue
-
-    answer = ("".join(answer_parts) or fallback_answer).strip()
-    if stop_reason == "error" and not has_error:
-        has_error = True
-        if not error_message:
-            error_message = "pi_stop_reason_error"
-
-    return session_id, answer, has_error, error_message
 
 
 def run_pi_chat(
@@ -4706,12 +4675,24 @@ def process_pending_ai_once() -> bool:
         except LLMClientError as exc:
             primary_error = str(exc)
             try:
-                payload = generate_codex_fallback_translation(
-                    title=(detail["title"] or "").strip(),
-                    source=(detail["source"] or "").strip(),
-                    content=(detail["content"] or "").strip(),
-                    model=(llm_settings.get("codex_chat", {}).get("model") or "").strip(),
-                )
+                # 翻译兜底跟随当前 Chat provider：Codex 走 codex fallback；Pi 走 pi fallback，
+                # 不隐式回退 Codex（避免成本不可控 + 行为不透明）。
+                if current_chat_provider() == "pi":
+                    pi_cfg = current_pi_chat_config()
+                    payload = generate_pi_fallback_translation(
+                        title=(detail["title"] or "").strip(),
+                        source=(detail["source"] or "").strip(),
+                        content=(detail["content"] or "").strip(),
+                        pi_provider=pi_cfg["provider"],
+                        pi_model=pi_cfg["model"],
+                    )
+                else:
+                    payload = generate_codex_fallback_translation(
+                        title=(detail["title"] or "").strip(),
+                        source=(detail["source"] or "").strip(),
+                        content=(detail["content"] or "").strip(),
+                        model=(llm_settings.get("codex_chat", {}).get("model") or "").strip(),
+                    )
                 if (detail["source"] or "").strip() == "Twitter/X":
                     payload["key_points_zh"] = []
                     payload["conclusion_zh"] = ""
