@@ -2365,7 +2365,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.9";
+  version.textContent = "News Reader v2.0.2.10";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3891,10 +3891,8 @@ function renderDetailChat(item) {
   const activeKey = currentChatProvider();
   const providerMeta = providers[activeKey] || { available: true, model: currentChatModel(), label: activeKey === "pi" ? "Pi" : "Codex" };
   const chatEnabled = !!providerMeta.available;
-  // 归档摘要始终走 Codex（与当前 chat provider 选择无关，见 README/设置页边界），
-  // 因此归档按钮可用性只看 Codex 自身是否可用，不跟随当前 provider 的 available。
-  const codexArchiveAvailable = providers["codex"] ? !!providers["codex"].available : true;
-  const archiveEnabled = codexArchiveAvailable
+  // 归档跟随当前 Chat provider：按钮可用性看当前 provider 是否可用 + 已有 assistant 消息 + 非发送/归档中。
+  const archiveEnabled = chatEnabled
     && !state.detailChatSending
     && !state.detailChatArchiving
     && state.detailChatMessages.some((message) => message.role === "assistant");
@@ -4048,7 +4046,7 @@ async function archiveDetailChat() {
   if (!item) return;
   if (!state.detailChatMessages.some((message) => message.role === "assistant")) return;
 
-  const configuredModel = currentCodexChatModel();
+  const configuredModel = currentChatModel();
   state.detailChatArchiving = true;
   state.detailChatStatus = "正在归档到想法...";
   renderDetailChat(item);
@@ -4071,14 +4069,15 @@ async function archiveDetailChat() {
     state.detailChatStatus = "已归档到想法。";
   } catch (error) {
     const code = error instanceof Error ? error.message : "archive_request_failed";
+    const archiveLabel = currentChatProvider() === "pi" ? "Pi" : "Codex";
     const labelMap = {
       empty_archive_source: "没有可归档回答。",
       empty_archive_summary: "没有生成可归档结论。",
       invalid_archive_summary: "归档结果无效，请重试。",
       note_too_long: "想法过长，无法追加归档。",
-      provider_busy: "Codex 当前正忙，请稍后重试。",
-      provider_timeout: "归档超时，请稍后重试。",
-      provider_failed: "Codex 归档失败，请稍后重试。",
+      provider_busy: `${archiveLabel} 当前正忙，请稍后重试。`,
+      provider_timeout: `${archiveLabel} 归档超时，请稍后重试。`,
+      provider_failed: `${archiveLabel} 归档失败，请稍后重试。`,
     };
     state.detailChatStatus = labelMap[code] || "归档失败，请稍后重试。";
   } finally {

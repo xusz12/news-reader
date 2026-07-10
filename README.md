@@ -4,6 +4,17 @@
 
 ## What's Changed
 
+### 2026-07-10 — v2.0.2.10 improve: 归档摘要跟随当前 Chat provider
+- **文件**
+  - *app.py（+）*、*static/app.js（+）*、*static/index.html（+）*、*tests/test_api.py（+）*、*README.md（+）*
+    - `/api/news/<id>/chat/archive` 按 `current_chat_provider()` 分发：Codex 继续走 `run_codex_chat_archive`，Pi 新增 `run_pi_chat_archive()`
+    - `run_pi_chat_archive()` 复用 `build_chat_archive_prompt()`，单次调用 `pi -p --mode json --no-session --provider <pi_provider> --model <pi_model>`，不复用原 chat session、不自动 fallback Codex；复用 `_parse_pi_stdout()` 与 `_pi_subprocess_env()`（清理 `PI_PACKAGE_DIR`）
+    - 错误码保持中性：`provider_timeout` / `provider_failed` / `provider_busy` / `empty_archive_summary`（Pi `pi_timeout` / `pi_empty_archive` 映射到中性码）；前端归档错误文案按当前 provider label 显示（Pi/Codex 归档超时·失败·正忙），非 provider 类错误保持中性
+    - 归档成功响应返回实际 `provider` 与 `model`
+    - 前端归档按钮可用性改回跟随当前 Chat provider（移除 v2.0.2.9 的"归档始终走 Codex"绑定）；设置页与 README 同步为"归档跟随当前 Chat provider"
+    - 测试：反向改掉 v2.0.2.9 的"provider=Pi 仍走 Codex"用例为"provider=Pi 走 Pi"；新增 Pi archive timeout/empty 映射、`run_pi_chat_archive` 成功（含 `--no-session` 与 `PI_PACKAGE_DIR` 清理断言）与空摘要用例；Codex archive 不回归
+- **影响**：涉及 `app.py` 与前端，拉取后需重启 Flask 并刷新页面；provider=Pi 时归档也会走 Pi（需 pi CLI + ollama/minimax-m3:cloud 可用）。
+
 ### 2026-07-09 — v2.0.2.9 improve: Chat 新增可选 Pi provider（基于 `pi` CLI + ollama）
 - **文件**
   - *settings.py（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*tests/test_api.py（+）*、*README.md（+）*

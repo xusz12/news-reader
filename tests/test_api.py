@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import importlib
 import json
+import pytest
 import sqlite3
 import types
 from datetime import datetime, timedelta
 from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_settings(tmp_path: Path, monkeypatch):
+    # 默认隔离 app_settings：指向不存在的路径 → load_app_settings 返回 DEFAULT（chat.provider=codex），
+    # 避免测试读到本机运行态 app_settings.json（可能被设成 provider=pi）而分叉。
+    # 需要 provider=pi 的测试在自己的 body 里 setenv NEWS_READER_APP_SETTINGS_PATH 覆盖。
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(tmp_path / "absent-app_settings.json"))
 
 
 def make_api_daily(path: Path, title: str, url: str, summary: str | None = None):
@@ -4973,9 +4982,8 @@ def test_news_chat_archive_accepts_200_chars(tmp_path: Path, monkeypatch):
     assert res.get_json()["archive_summary"] == summary
 
 
-def test_news_chat_archive_works_under_pi_provider(tmp_path: Path, monkeypatch):
-    # 归档摘要首版固定走 Codex，与当前 chat provider 选择无关（README/设置页边界）。
-    # 这里把 chat provider 设成 pi，断言归档端点仍走 Codex 并成功，避免 UI/接口把可用归档挡掉。
+def test_news_chat_archive_follows_pi_provider(tmp_path: Path, monkeypatch):
+    # 归档跟随当前 Chat provider：provider=pi 时归档走 run_pi_chat_archive，不再走 Codex。
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
@@ -5008,27 +5016,132 @@ def test_news_chat_archive_works_under_pi_provider(tmp_path: Path, monkeypatch):
 
     item = client.get("/api/news?per=20").get_json()["items"][0]
 
-    archive_called = {}
+    pi_archive_called = {}
+    codex_archive_called = {}
 
-    def fake_archive(**kwargs):
-        archive_called.update(kwargs)
-        return {"provider": "codex", "model": kwargs["model"], "summary": "归档始终走 Codex。"}
+    def fake_pi_archive(**kwargs):
+        pi_archive_called.update(kwargs)
+        return {"provider": "pi", "model": kwargs["pi_model"], "summary": "Pi 归档结论。"}
 
-    monkeypatch.setattr(app_module, "run_codex_chat_archive", fake_archive)
+    def fake_codex_archive(**kwargs):
+        codex_archive_called.update(kwargs)
+        return {"provider": "codex", "model": kwargs["model"], "summary": "不应走 Codex"}
+
+    monkeypatch.setattr(app_module, "run_pi_chat_archive", fake_pi_archive)
+    monkeypatch.setattr(app_module, "run_codex_chat_archive", fake_codex_archive)
     res = client.post(
         f"/api/news/{item['id']}/chat/archive",
         json={
             "messages": [
                 {"role": "user", "content": "总结"},
-                {"role": "assistant", "content": "归档始终走 Codex。"},
+                {"role": "assistant", "content": "Pi 归档结论。"},
             ]
         },
     )
     assert res.status_code == 200
     payload = res.get_json()
     assert payload["ok"] is True
-    assert payload["archive_summary"] == "归档始终走 Codex。"
-    assert archive_called, "归档应走 run_codex_chat_archive，与 chat provider=pi 无关"
+    assert payload["provider"] == "pi"
+    assert payload["model"] == "minimax-m3:cloud"
+    assert payload["archive_summary"] == "Pi 归档结论。"
+    assert pi_archive_called, "provider=pi 时归档应走 run_pi_chat_archive"
+    assert not codex_archive_called, "provider=pi 时归档不应再走 Codex"
+
+
+def test_news_chat_archive_pi_timeout_maps_to_provider_timeout(tmp_path: Path, monkeypatch):
+    # provider=pi 时归档超时映射到中性错误码 provider_timeout（504），不引入 provider 专属码。
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Archive Pi Timeout](https://example.com/chat-archive-pi-timeout)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    monkeypatch.setattr(
+        app_module, "run_pi_chat_archive", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("pi_timeout"))
+    )
+    res = client.post(
+        f"/api/news/{item['id']}/chat/archive",
+        json={
+            "messages": [
+                {"role": "user", "content": "总结"},
+                {"role": "assistant", "content": "内容"},
+            ]
+        },
+    )
+    assert res.status_code == 504
+    assert res.get_json()["error"] == "provider_timeout"
+
+
+def test_news_chat_archive_pi_empty_maps_to_empty_summary(tmp_path: Path, monkeypatch):
+    # provider=pi 时归档返回空摘要 → 中性 empty_archive_summary（502）。
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Archive Pi Empty](https://example.com/chat-archive-pi-empty)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    monkeypatch.setattr(
+        app_module, "run_pi_chat_archive", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("pi_empty_archive"))
+    )
+    res = client.post(
+        f"/api/news/{item['id']}/chat/archive",
+        json={
+            "messages": [
+                {"role": "user", "content": "总结"},
+                {"role": "assistant", "content": "内容"},
+            ]
+        },
+    )
+    assert res.status_code == 502
+    assert res.get_json()["error"] == "empty_archive_summary"
 
 
 def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypatch):
@@ -5777,6 +5890,83 @@ def test_run_pi_chat_success(tmp_path: Path, monkeypatch):
     assert captured["env"].get("PI_PACKAGE_DIR") is None
     assert "--provider" in captured["args"] and "ollama" in captured["args"]
     assert "--model" in captured["args"] and "minimax-m3:cloud" in captured["args"]
+
+
+def test_run_pi_chat_archive_success(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs.get("env")
+
+        class Completed:
+            returncode = 0
+            stdout = (
+                '{"type":"session","id":"archive-session"}\n'
+                '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"归档结论"}}\n'
+                '{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}\n'
+            )
+            stderr = ""
+        return Completed()
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    result = app_module.run_pi_chat_archive(
+        title="News",
+        source="Reuters",
+        published_at="2026-06-11",
+        messages=[{"role": "user", "content": "总结"}, {"role": "assistant", "content": "结论"}],
+        pi_provider="ollama",
+        pi_model="minimax-m3:cloud",
+    )
+    assert result["provider"] == "pi"
+    assert result["model"] == "minimax-m3:cloud"
+    assert result["summary"] == "归档结论"
+    # 归档单次无会话：必须带 --no-session，不复用原 chat session。
+    assert "--no-session" in captured["args"]
+    assert "--session-id" not in captured["args"]
+    # 仍清理 PI_PACKAGE_DIR，避免 Slock 注入导致 pi 启动崩溃。
+    assert captured["env"] is not None
+    assert captured["env"].get("PI_PACKAGE_DIR") is None
+
+
+def test_run_pi_chat_archive_empty_raises(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+
+    monkeypatch.setattr(
+        app_module.subprocess,
+        "run",
+        lambda args, **kwargs: type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": '{"type":"session","id":"archive-session"}\n', "stderr": ""},
+        )(),
+    )
+    raised = False
+    try:
+        app_module.run_pi_chat_archive(
+            title="News",
+            source="Reuters",
+            published_at="2026-06-11",
+            messages=[{"role": "user", "content": "总结"}, {"role": "assistant", "content": "结论"}],
+            pi_provider="ollama",
+            pi_model="minimax-m3:cloud",
+        )
+    except RuntimeError as exc:
+        raised = True
+        assert "pi_empty_archive" in str(exc)
+    assert raised, "空摘要应抛 RuntimeError(pi_empty_archive)"
 
 
 def test_news_chat_dispatches_to_pi_when_configured(tmp_path: Path, monkeypatch):

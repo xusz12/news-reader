@@ -2060,6 +2060,60 @@ def run_codex_chat_archive(*, title: str, source: str, published_at: str, messag
     }
 
 
+def run_pi_chat_archive(*, title: str, source: str, published_at: str, messages: list[dict[str, str]], pi_provider: str, pi_model: str, timeout: int = 90) -> dict:
+    prompt = build_chat_archive_prompt(
+        title=title,
+        source=source,
+        published_at=published_at,
+        messages=messages,
+    )
+    # 归档是单次无会话调用：不复用原 chat session，避免把归档指令写进原会话上下文污染后续追问。
+    command = [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-session",
+        "--provider",
+        pi_provider,
+        "--model",
+        pi_model,
+        prompt,
+    ]
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(BASE_DIR),
+            env=_pi_subprocess_env(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("pi_timeout") from exc
+
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    _session_id, summary, has_error, error_message = _parse_pi_stdout(stdout)
+
+    if completed.returncode != 0:
+        detail = (stderr or stdout).strip() or "pi_failed"
+        raise RuntimeError(detail[:500])
+    if has_error:
+        raise RuntimeError(error_message or "pi_failed")
+
+    summary = " ".join((summary or "").split())
+    if not summary:
+        raise RuntimeError("pi_empty_archive")
+
+    return {
+        "provider": "pi",
+        "model": pi_model,
+        "summary": summary,
+    }
+
+
 def normalize_chat_messages(raw_messages: object, *, max_messages: int = 20, max_chars: int = 4000) -> list[dict[str, str]]:
     if not isinstance(raw_messages, list) or not raw_messages:
         raise ValueError("invalid_messages")
@@ -7089,7 +7143,10 @@ def api_news_chat_archive(item_id: str):
         return jsonify({"ok": False, "error": "empty_archive_source"}), 400
 
     requested_model = (body.get("model") or "").strip()
-    model = requested_model or current_codex_chat_model()
+    provider = current_chat_provider()
+    codex_model = requested_model or current_codex_chat_model()
+    pi_config = current_pi_chat_config()
+    pi_model = requested_model or pi_config["model"]
 
     conn = db_conn()
     try:
@@ -7114,18 +7171,28 @@ def api_news_chat_archive(item_id: str):
         return jsonify({"ok": False, "error": "provider_busy"}), 409
 
     try:
-        payload = run_codex_chat_archive(
-            title=(item["title"] or "").strip(),
-            source=(item["source"] or "").strip(),
-            published_at=(item["published_at"] or "").strip(),
-            messages=messages,
-            model=model,
-        )
+        if provider == "pi":
+            payload = run_pi_chat_archive(
+                title=(item["title"] or "").strip(),
+                source=(item["source"] or "").strip(),
+                published_at=(item["published_at"] or "").strip(),
+                messages=messages,
+                pi_provider=pi_config["provider"],
+                pi_model=pi_model,
+            )
+        else:
+            payload = run_codex_chat_archive(
+                title=(item["title"] or "").strip(),
+                source=(item["source"] or "").strip(),
+                published_at=(item["published_at"] or "").strip(),
+                messages=messages,
+                model=codex_model,
+            )
     except RuntimeError as exc:
         error = str(exc)
-        if error == "codex_timeout":
+        if error in {"codex_timeout", "pi_timeout"}:
             return jsonify({"ok": False, "error": "provider_timeout"}), 504
-        if error == "codex_empty_archive":
+        if error in {"codex_empty_archive", "pi_empty_archive"}:
             return jsonify({"ok": False, "error": "empty_archive_summary"}), 502
         return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
     finally:
@@ -7170,7 +7237,7 @@ def api_news_chat_archive(item_id: str):
             "ok": True,
             "item_id": item_id,
             "provider": payload.get("provider") or "codex",
-            "model": payload.get("model") or model,
+            "model": payload.get("model") or (pi_model if provider == "pi" else codex_model),
             "archive_summary": summary,
             "has_note": 1 if saved else 0,
             "note": (dict(saved) if saved else None),
