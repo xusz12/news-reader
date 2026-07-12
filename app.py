@@ -6366,6 +6366,19 @@ def api_market_trend_note_update(note_id: int):
     note_text = raw_note.strip()
     if not note_text:
         return jsonify({"ok": False, "error": "empty_note"}), 400
+
+    raw_date_key = (body.get("date_key") or body.get("date") or "").strip()
+    tag_key = (body.get("tag_key") or body.get("tag") or "").strip()
+    direction = (body.get("direction") or "").strip().lower()
+
+    if raw_date_key:
+        try:
+            date_key = parse_daily_briefing_date(raw_date_key)
+        except ValueError:
+            return jsonify({"ok": False, "error": "invalid_date"}), 400
+    else:
+        date_key = ""
+
     conn = db_conn()
     try:
         existing = conn.execute(
@@ -6379,15 +6392,45 @@ def api_market_trend_note_update(note_id: int):
         ).fetchone()
         if not existing:
             return jsonify({"ok": False, "error": "note_not_found"}), 404
+
+        new_date_key = date_key or existing["date_key"]
+        new_tag_key = tag_key or existing["tag"]
+        new_direction = direction or existing["direction"]
+
+        if new_direction not in MARKET_DIRECTIONS:
+            return jsonify({"ok": False, "error": "invalid_direction"}), 400
+
+        if not new_date_key:
+            return jsonify({"ok": False, "error": "missing_date"}), 400
+
+        tag_def = conn.execute(
+            "SELECT key, display_name FROM market_tag_definitions WHERE key=? AND active=1",
+            (new_tag_key,),
+        ).fetchone()
+        if not tag_def:
+            # Allow keeping an existing inactive tag; reject only when changing to an invalid tag
+            if tag_key and tag_key != existing["tag"]:
+                return jsonify({"ok": False, "error": "unsupported_tag"}), 400
+            tag_def = conn.execute(
+                "SELECT key, display_name FROM market_tag_definitions WHERE key=?",
+                (new_tag_key,),
+            ).fetchone()
+            if not tag_def:
+                tag_def = {"key": new_tag_key, "display_name": None}
+
         with conn:
             conn.execute(
-                "UPDATE market_trend_notes SET note=?, updated_at=? WHERE id=?",
-                (note_text, now_ts(), note_id),
+                """
+                UPDATE market_trend_notes
+                SET date_key=?, tag=?, direction=?, note=?, updated_at=?
+                WHERE id=?
+                """,
+                (new_date_key, new_tag_key, new_direction, note_text, now_ts(), note_id),
             )
         trend_notes = load_trend_notes_map(
             conn,
-            [(existing["date_key"], existing["tag"], existing["direction"])],
-        ).get((existing["date_key"], existing["tag"], existing["direction"]), [])
+            [(new_date_key, new_tag_key, new_direction)],
+        ).get((new_date_key, new_tag_key, new_direction), [])
         trend_note = next((note for note in trend_notes if note["id"] == note_id), None)
     finally:
         conn.close()
@@ -6395,10 +6438,10 @@ def api_market_trend_note_update(note_id: int):
     return jsonify(
         {
             "ok": True,
-            "date": existing["date_key"],
-            "tag": existing["display_name"] or existing["tag"],
-            "tag_key": existing["tag"],
-            "direction": existing["direction"],
+            "date": new_date_key,
+            "tag": tag_def["display_name"] or new_tag_key,
+            "tag_key": new_tag_key,
+            "direction": new_direction,
             "trend_note": trend_note,
             "trend_notes": trend_notes,
             "has_trend_note": 1 if trend_notes else 0,

@@ -7550,3 +7550,129 @@ def test_standalone_idea_crud_and_merge(tmp_path: Path, monkeypatch):
 
     # invalid filter type still rejected
     assert client.get("/api/ideas?type=weird").status_code == 400
+
+
+def test_market_trend_note_patch_date_tag_direction(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（1条）
+### [API 测试新闻](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-02 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    assert client.put(
+        f"/api/news/{item['id']}/market-tag",
+        json={"tag": "AI", "direction": "bullish"},
+    ).status_code == 200
+
+    # Create initial note: AI bullish on 2026-06-02
+    create_res = client.put(
+        "/api/market-trends/note",
+        json={"date_key": "2026-06-02", "tag_key": "AI", "direction": "bullish", "note": "初始想法"},
+    )
+    assert create_res.status_code == 200
+    note_id = create_res.get_json()["trend_note"]["id"]
+
+    # Backward compatibility: only update note text
+    patch_only_note = client.patch(
+        f"/api/market-trends/note/{note_id}",
+        json={"note": "仅更新正文"},
+    )
+    assert patch_only_note.status_code == 200
+    data = patch_only_note.get_json()
+    assert data["trend_note"]["note"] == "仅更新正文"
+    assert data["date"] == "2026-06-02"
+    assert data["tag_key"] == "AI"
+    assert data["direction"] == "bullish"
+
+    # Update all four fields: move to new date/tag/direction
+    patch_all = client.patch(
+        f"/api/market-trends/note/{note_id}",
+        json={
+            "note": "迁移后的想法",
+            "date_key": "2026-06-03",
+            "tag_key": "AI",
+            "direction": "bearish",
+        },
+    )
+    assert patch_all.status_code == 200
+    data = patch_all.get_json()
+    assert data["trend_note"]["note"] == "迁移后的想法"
+    assert data["date"] == "2026-06-03"
+    assert data["direction"] == "bearish"
+
+    # Old group should be empty
+    old_detail = client.get("/api/market-trends/detail?date=2026-06-02&tag=AI&direction=bullish")
+    assert old_detail.status_code == 200
+    assert old_detail.get_json()["trend_note_total"] == 0
+
+    # New group should contain the migrated note
+    new_detail = client.get("/api/market-trends/detail?date=2026-06-03&tag=AI&direction=bearish")
+    assert new_detail.status_code == 200
+    new_payload = new_detail.get_json()
+    assert new_payload["trend_note_total"] == 1
+    assert new_payload["trend_notes"][0]["note"] == "迁移后的想法"
+
+    # Invalid direction should be rejected
+    invalid = client.patch(
+        f"/api/market-trends/note/{note_id}",
+        json={"note": "无效方向", "direction": "sideways"},
+    )
+    assert invalid.status_code == 400
+    assert invalid.get_json()["ok"] is False
+
+    # Invalid tag should be rejected
+    invalid_tag = client.patch(
+        f"/api/market-trends/note/{note_id}",
+        json={"note": "无效板块", "tag_key": "Unknown"},
+    )
+    assert invalid_tag.status_code == 400
+    assert invalid_tag.get_json()["ok"] is False
+
+    # Empty note should be rejected
+    empty = client.patch(
+        f"/api/market-trends/note/{note_id}",
+        json={"note": "   "},
+    )
+    assert empty.status_code == 400
+    assert empty.get_json()["ok"] is False
+
+    # Invalid date format should be rejected
+    invalid_date_fmt = client.patch(
+        f"/api/market-trends/note/{note_id}",
+        json={"note": "日期格式非法", "date_key": "not-a-date"},
+    )
+    assert invalid_date_fmt.status_code == 400
+    assert invalid_date_fmt.get_json()["ok"] is False
+
+    # Invalid calendar date should be rejected
+    invalid_calendar = client.patch(
+        f"/api/market-trends/note/{note_id}",
+        json={"note": "日历日期不存在", "date_key": "2026-02-30"},
+    )
+    assert invalid_calendar.status_code == 400
+    assert invalid_calendar.get_json()["ok"] is False
+
+    # Valid date update should be accepted
+    valid_date = client.patch(
+        f"/api/market-trends/note/{note_id}",
+        json={"note": "日期有效", "date_key": "2026-06-01"},
+    )
+    assert valid_date.status_code == 200
+    data = valid_date.get_json()
+    assert data["date"] == "2026-06-01"
+    assert data["trend_note"]["note"] == "日期有效"

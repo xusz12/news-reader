@@ -207,6 +207,10 @@ const detailTrendIdeaText = document.getElementById("detailTrendIdeaText");
 const detailTrendIdeaEditBtn = document.getElementById("detailTrendIdeaEditBtn");
 const detailTrendIdeaDeleteBtn = document.getElementById("detailTrendIdeaDeleteBtn");
 const detailTrendIdeaEditor = document.getElementById("detailTrendIdeaEditor");
+const detailTrendIdeaEditMeta = document.getElementById("detailTrendIdeaEditMeta");
+const detailTrendIdeaDateSelect = document.getElementById("detailTrendIdeaDateSelect");
+const detailTrendIdeaTagSelect = document.getElementById("detailTrendIdeaTagSelect");
+const detailTrendIdeaDirectionSelect = document.getElementById("detailTrendIdeaDirectionSelect");
 const detailTrendIdeaInput = document.getElementById("detailTrendIdeaInput");
 const detailTrendIdeaSaveBtn = document.getElementById("detailTrendIdeaSaveBtn");
 const detailTrendIdeaCancelBtn = document.getElementById("detailTrendIdeaCancelBtn");
@@ -2390,7 +2394,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.3.1";
+  version.textContent = "News Reader v2.0.3.2";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3185,6 +3189,7 @@ function restoreMarketWorkbenchDetailState() {
 function setTrendIdeaEditorOpen(open) {
   if (!detailTrendIdeaEditor) return;
   detailTrendIdeaEditor.classList.toggle("hidden", !open);
+  if (detailTrendIdeaCard) detailTrendIdeaCard.classList.toggle("hidden", open);
 }
 
 function clearTrendIdeaDetailState() {
@@ -3237,11 +3242,15 @@ async function saveTrendNote(payload) {
   return data;
 }
 
-async function updateTrendNote(noteId, note) {
+async function updateTrendNote(noteId, { note, date_key, tag_key, direction }) {
+  const payload = { note };
+  if (date_key) payload.date_key = date_key;
+  if (tag_key) payload.tag_key = tag_key;
+  if (direction) payload.direction = direction;
   const res = await fetch(`/api/market-trends/note/${encodeURIComponent(noteId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ note }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error("trend_note_update_failed");
   const data = await res.json();
@@ -5463,6 +5472,91 @@ function removeIdeaRow(ideaId) {
   }
 }
 
+async function reloadIdeasAndSelect(targetIdeaId) {
+  if (!newsList) return;
+
+  if (state.collection === "notes") {
+    const data = await fetchIdeasPage(1);
+    resetList();
+    state.total = data.total;
+    setDateCounts(data.date_counts);
+    state.pages = data.pages;
+    state.page = 1;
+    state.hasMore = state.page < state.pages;
+    showListView();
+    data.items.forEach((item) => appendNewsRow(item, buildIdeaRow(item)));
+    renderMeta();
+    if (state.total === 0) {
+      setHint("还没有想法，去新闻详情或板块里记录第一条。");
+    } else if (state.hasMore) {
+      setHint("继续下滑加载更多");
+    } else {
+      setHint("已加载全部想法");
+    }
+    if (readObserver) {
+      readObserver.disconnect();
+      readObserver = null;
+    }
+    stopRowStatusPolling();
+    const matched = (data.items || []).find((item) => item.idea_id === targetIdeaId);
+    if (matched) {
+      openIdeaCard(matched);
+    } else {
+      state.selectedIdeaId = "";
+      syncIdeaRowSelection();
+      clearTrendIdeaDetailState();
+      renderDetailEmpty();
+    }
+    return;
+  }
+
+  if (state.collection === "market_tags") {
+    removeMarketWorkbenchSummaryInline();
+    const data = await fetchMarketWorkbenchPage(1);
+    resetList();
+    state.total = Number(data.total || 0);
+    state.pages = Number(data.pages || 1);
+    state.page = Number(data.page || 1);
+    state.hasMore = !!data.has_more;
+    state.marketWorkbenchSummary = data.summary || null;
+    state.marketWorkbenchPin = data.pin || null;
+    state.marketWorkbenchPinEditing = false;
+    showListView();
+    renderMeta();
+    renderMarketWorkbenchPinCard();
+    (data.items || []).forEach((item) => {
+      const row = item.entry_type === "trend_note" ? buildIdeaRow(item) : buildItemRow(item);
+      appendNewsRow(item, row);
+    });
+    if (state.marketWorkbenchTag) {
+      renderMarketWorkbenchSummaryInline();
+    } else {
+      removeMarketWorkbenchSummaryInline();
+    }
+    if (!state.total) {
+      setHint("当前板块筛选下暂无内容");
+    } else if (state.hasMore) {
+      setHint("继续下滑加载更多");
+    } else {
+      setHint("已加载当前板块集合的全部结果");
+    }
+    if (readObserver) {
+      readObserver.disconnect();
+      readObserver = null;
+    }
+    const matched = (data.items || []).find((item) => item.idea_id === targetIdeaId);
+    if (matched) {
+      openIdeaCard(matched);
+    } else {
+      state.selectedIdeaId = "";
+      syncIdeaRowSelection();
+      clearTrendIdeaDetailState();
+      renderDetailEmpty();
+    }
+    return;
+  }
+}
+
 function updateIdeaRow(item) {
   if (!newsList || !item?.idea_id) return;
   const row = newsList.querySelector(`.idea-item[data-idea-id="${CSS.escape(item.idea_id)}"]`);
@@ -7565,8 +7659,49 @@ detailNoteSaveBtn.addEventListener("click", async () => {
 
 if (detailTrendIdeaEditBtn) {
   detailTrendIdeaEditBtn.addEventListener("click", () => {
-    if (!state.selectedTrendIdea) return;
-    detailTrendIdeaInput.value = state.selectedTrendIdea.note || "";
+    const item = state.selectedTrendIdea;
+    if (!item) return;
+    detailTrendIdeaInput.value = item.note || "";
+
+    if (detailTrendIdeaEditMeta) {
+      detailTrendIdeaEditMeta.textContent = `${item.trend_date_key || ""} · 创建 ${item.created_at || "-"} · 更新 ${item.updated_at || "-"}`;
+    }
+
+    if (detailTrendIdeaDateSelect) {
+      const dateOptions = defaultTrendComposeDates();
+      if (item.trend_date_key && !dateOptions.includes(item.trend_date_key)) {
+        dateOptions.push(item.trend_date_key);
+      }
+      detailTrendIdeaDateSelect.innerHTML = "";
+      dateOptions.forEach((date) => {
+        const opt = document.createElement("option");
+        opt.value = date;
+        opt.textContent = date;
+        detailTrendIdeaDateSelect.appendChild(opt);
+      });
+      detailTrendIdeaDateSelect.value = item.trend_date_key || dateOptions[0] || "";
+    }
+
+    if (detailTrendIdeaTagSelect) {
+      const tagOptions = activeMarketTagChoices();
+      const currentTagIncluded = tagOptions.some((t) => t.key === item.tag_key);
+      if (item.tag_key && !currentTagIncluded) {
+        tagOptions.push({ key: item.tag_key, display_name: item.tag_label || item.tag_key });
+      }
+      detailTrendIdeaTagSelect.innerHTML = "";
+      tagOptions.forEach((tag) => {
+        const opt = document.createElement("option");
+        opt.value = tag.key;
+        opt.textContent = tag.display_name || tag.key;
+        detailTrendIdeaTagSelect.appendChild(opt);
+      });
+      if (item.tag_key) detailTrendIdeaTagSelect.value = item.tag_key;
+    }
+
+    if (detailTrendIdeaDirectionSelect) {
+      detailTrendIdeaDirectionSelect.value = item.direction || "bullish";
+    }
+
     setTrendIdeaEditorOpen(true);
     detailTrendIdeaInput.focus();
   });
@@ -7587,16 +7722,33 @@ if (detailTrendIdeaSaveBtn) {
     detailTrendIdeaSaveBtn.disabled = true;
     if (detailTrendIdeaCancelBtn) detailTrendIdeaCancelBtn.disabled = true;
     try {
-      const result = await updateTrendNote(item.trend_note_id, detailTrendIdeaInput.value);
+      const date_key = detailTrendIdeaDateSelect ? detailTrendIdeaDateSelect.value : item.trend_date_key;
+      const tag_key = detailTrendIdeaTagSelect ? detailTrendIdeaTagSelect.value : item.tag_key;
+      const direction = detailTrendIdeaDirectionSelect ? detailTrendIdeaDirectionSelect.value : item.direction;
+      const result = await updateTrendNote(item.trend_note_id, {
+        note: detailTrendIdeaInput.value,
+        date_key,
+        tag_key,
+        direction,
+      });
+      const moved = date_key !== item.trend_date_key || tag_key !== item.tag_key || direction !== item.direction;
       const updated = {
         ...item,
         note: result.trend_note.note,
         note_preview: result.trend_note.note,
+        trend_date_key: result.date,
+        tag_key: result.tag_key,
+        tag_label: result.tag,
+        direction: result.direction,
         updated_at: result.trend_note.updated_at,
       };
       state.selectedTrendIdea = updated;
-      updateIdeaRow(updated);
-      renderTrendIdeaDetail(updated);
+      if (moved) {
+        await reloadIdeasAndSelect(item.idea_id);
+      } else {
+        updateIdeaRow(updated);
+        renderTrendIdeaDetail(updated);
+      }
     } finally {
       detailTrendIdeaSaveBtn.disabled = false;
       if (detailTrendIdeaCancelBtn) detailTrendIdeaCancelBtn.disabled = false;
