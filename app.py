@@ -2371,7 +2371,7 @@ def load_idea_rows(conn: sqlite3.Connection, idea_type: str, sort_order: str) ->
                     "id": None,
                     "idea_id": f"trend:{row['id']}",
                     "idea_type": "trend_note",
-                    "idea_context_label": "趋势想法",
+                    "idea_context_label": "板块想法",
                     "trend_note_id": row["id"],
                     "trend_date_key": row["date_key"],
                     "tag_key": row["tag"],
@@ -3584,7 +3584,7 @@ def load_market_tag_feed(
                 "id": None,
                 "idea_id": f"trend:{row['id']}",
                 "idea_type": "trend_note",
-                "idea_context_label": "趋势想法",
+                "idea_context_label": "板块想法",
                 "trend_note_id": row["id"],
                 "trend_date_key": row["date_key"],
                 "tag_key": row["tag"],
@@ -3805,7 +3805,7 @@ def build_market_tag_summary_materials(tag_label: str, news_rows: list[dict], no
             blocks.append(
                 "\n".join(
                     [
-                        f"独立趋势想法 {index}",
+                        f"独立板块想法 {index}",
                         f"日期：{row.get('date_key') or ''}",
                         f"方向：{'看多' if row.get('direction') == 'bullish' else '看空'}",
                         f"内容：{truncate_daily_summary_text(row.get('note'), MARKET_WORKBENCH_SUMMARY_NOTE_LIMIT)}",
@@ -3813,7 +3813,7 @@ def build_market_tag_summary_materials(tag_label: str, news_rows: list[dict], no
                 )
             )
     else:
-        blocks.append("无独立趋势想法。")
+        blocks.append("无独立板块想法。")
     text = "\n\n".join(blocks).strip()
     if len(text) <= MARKET_WORKBENCH_SUMMARY_TEXT_LIMIT:
         return text

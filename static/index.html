@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.3.0</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.3.0" />
+    <title>News Reader v2.0.3.1</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.3.1" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.3.0</span>
+          <span class="topbar-version">v2.0.3.1</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -102,9 +102,9 @@
           <div id="ideaFilterBar" class="reminder-filter-bar hidden" aria-label="想法类型筛选">
             <button id="ideaFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
             <button id="ideaFilterArticleBtn" class="reminder-filter-btn" type="button">新闻想法</button>
-            <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">趋势想法</button>
+            <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">板块想法</button>
             <button id="ideaFilterStandaloneBtn" class="reminder-filter-btn" type="button">独立想法</button>
-            <button id="ideaNewBtn" class="detail-retry-btn" type="button">新想法</button>
+            <button id="ideaNewBtn" class="detail-retry-btn" type="button">新独立想法</button>
           </div>
           <section id="marketWorkbenchBar" class="search-page-controls hidden" aria-label="板块工作台筛选">
             <div class="search-page-form market-workbench-form">
@@ -116,7 +116,7 @@
                 <option value="bearish">看空</option>
               </select>
               <button id="marketWorkbenchSummaryBtn" class="detail-retry-btn hidden" type="button">总结近期趋势</button>
-              <button id="marketWorkbenchComposeBtn" class="detail-retry-btn" type="button">添加独立想法</button>
+              <button id="marketWorkbenchComposeBtn" class="detail-retry-btn" type="button">新板块想法</button>
             </div>
           </section>
           <div id="readLaterFilterBar" class="reminder-filter-bar hidden" aria-label="稍后阅读已读状态筛选">
@@ -172,7 +172,7 @@
         <div id="detailTrendComposerBody" class="detail-tag-admin-body hidden">
           <div class="detail-tag-admin-header">
             <div>
-              <h3 class="detail-title">写趋势想法</h3>
+              <h3 class="detail-title">写板块想法</h3>
               <div class="detail-meta">手动添加板块看多/看空信号与想法</div>
             </div>
           </div>
@@ -206,15 +206,15 @@
           <h3 id="detailTrendIdeaTitle" class="detail-title"></h3>
           <div id="detailTrendIdeaMeta" class="detail-meta"></div>
           <div class="detail-actions detail-trend-actions">
-            <button id="detailTrendIdeaEditBtn" class="detail-retry-btn" type="button">编辑趋势想法</button>
-            <button id="detailTrendIdeaDeleteBtn" class="detail-retry-btn" type="button">删除趋势想法</button>
+            <button id="detailTrendIdeaEditBtn" class="detail-retry-btn" type="button">编辑板块想法</button>
+            <button id="detailTrendIdeaDeleteBtn" class="detail-retry-btn" type="button">删除板块想法</button>
           </div>
           <section id="detailTrendIdeaCard" class="detail-note-card">
-            <h4>趋势想法全文</h4>
+            <h4>板块想法全文</h4>
             <p id="detailTrendIdeaText" class="detail-note-text"></p>
           </section>
           <section id="detailTrendIdeaEditor" class="detail-note-editor hidden">
-            <div class="detail-note-editor-title">编辑趋势想法</div>
+            <div class="detail-note-editor-title">编辑板块想法</div>
             <textarea id="detailTrendIdeaInput" class="detail-note-input" rows="6" maxlength="5000" placeholder="记录你对这个趋势单元格的判断..."></textarea>
             <div class="detail-note-actions">
               <button id="detailTrendIdeaSaveBtn" class="detail-retry-btn" type="button">保存</button>
@@ -243,7 +243,7 @@
           </section>
         </div>
         <div id="detailStandaloneIdeaNewBody" class="detail-trend-body hidden">
-          <h3 class="detail-title">新想法</h3>
+          <h3 class="detail-title">新独立想法</h3>
           <div class="detail-meta">不关联板块和新闻，为纯想法文本</div>
           <section class="detail-note-editor">
             <textarea id="detailStandaloneIdeaNewInput" class="detail-note-input" rows="6" maxlength="5000" placeholder="记录你的想法..."></textarea>
@@ -610,6 +610,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.3.0"></script>
+    <script src="/static/app.js?v=2.0.3.1"></script>
   </body>
 </html>

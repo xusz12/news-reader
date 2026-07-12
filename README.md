@@ -4,6 +4,16 @@
 
 ## What's Changed
 
+### 2026-07-12 — v2.0.3.1 improve: 统一独立想法、板块想法用户文案
+- **文件**
+  - *static/index.html（~）*、*static/app.js（~）*、*app.py（~）*、*README.md（+）*
+    - 板块集合内按钮「添加独立想法」→「新板块想法」
+    - 想法集合内按钮及新建页标题「新想法」→「新独立想法」
+    - 所有用户可见及 LLM prompt 中的「趋势想法」→「板块想法」（筛选、badge、编辑/删除/全文标题、保存校验/成功提示、删除确认、合并板块确认、idea_context_label、板块摘要 prompt）
+    - 仅改显示名称，不改 `market_trend_notes`、内部 `trend_note`、`type=trend`、CRUD/API/schema，不做数据库迁移
+    - 同步版本号 v2.0.3.1（title、顶栏、CSS/JS cache-bust、移动端更多面板）
+- **影响**：纯前端文案与版本号变更，拉取后刷新页面即可；涉及 `app.py` 的 `idea_context_label` 和摘要 prompt 改动需重启 Flask。
+
 ### 2026-07-12 — v2.0.3.0 improve: 想法集合新增纯文本独立想法 CRUD
 - **文件**
   - *schema.sql（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*、*README.md（+）*

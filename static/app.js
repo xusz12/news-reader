@@ -2390,7 +2390,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.3.0";
+  version.textContent = "News Reader v2.0.3.1";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3122,7 +3122,7 @@ function renderMeta() {
     const ideaNames = {
       all: "全部",
       article: "新闻想法",
-      trend: "趋势想法",
+      trend: "板块想法",
       standalone: "独立想法",
     };
     meta.textContent = `想法 · ${ideaNames[state.ideaFilter] || "全部"} · 共 ${state.total} 条`;
@@ -3435,7 +3435,7 @@ function renderTagAdminList() {
     if (!targetKey) return;
     const target = state.marketTagChoices.find((candidate) => candidate.key === targetKey);
     const ok = window.confirm(
-      `确认将“${selectedTag.display_name || selectedTag.key}”合并到“${target?.display_name || targetKey}”？该板块的新闻关联和趋势想法会迁移到目标板块，旧板块将被删除。`
+      `确认将“${selectedTag.display_name || selectedTag.key}”合并到“${target?.display_name || targetKey}”？该板块的新闻关联和板块想法会迁移到目标板块，旧板块将被删除。`
     );
     if (!ok) return;
     mergeBtn.disabled = true;
@@ -5302,7 +5302,7 @@ function buildIdeaRow(item) {
   const kindBadge = document.createElement("span");
   const badgeClass = item.idea_type === "trend_note" ? "trend" : item.idea_type === "standalone_note" ? "standalone" : "article";
   kindBadge.className = `note-badge idea-kind-badge ${badgeClass}`;
-  kindBadge.textContent = item.idea_type === "trend_note" ? "趋势想法" : item.idea_type === "standalone_note" ? "独立想法" : "新闻想法";
+  kindBadge.textContent = item.idea_type === "trend_note" ? "板块想法" : item.idea_type === "standalone_note" ? "独立想法" : "新闻想法";
 
   const text = document.createElement("span");
   text.className = "line1-text";
@@ -7372,11 +7372,11 @@ if (trendNoteComposeSaveBtn) {
     const direction = trendNoteDirectionSelect.value;
     const note = (trendNoteComposeInput.value || "").trim();
     if (!date || !tag || !direction) {
-      setHint("请先选择日期、板块和方向，再保存趋势想法");
+      setHint("请先选择日期、板块和方向，再保存板块想法");
       return;
     }
     if (!note) {
-      setHint("请先输入趋势想法内容，再保存");
+      setHint("请先输入板块想法内容，再保存");
       return;
     }
     trendNoteComposeSaveBtn.disabled = true;
@@ -7391,12 +7391,12 @@ if (trendNoteComposeSaveBtn) {
         await refreshMarketWorkbenchAfterTrendCompose();
         closeTrendComposerView();
         restoreMarketWorkbenchDetailState();
-        setHint("趋势想法已保存");
+        setHint("板块想法已保存");
         return;
       }
       closeTrendComposerView();
       renderDetailEmpty();
-      setHint("趋势想法已保存");
+      setHint("板块想法已保存");
     } finally {
       trendNoteComposeSaveBtn.disabled = false;
     }
@@ -7608,7 +7608,7 @@ if (detailTrendIdeaDeleteBtn) {
   detailTrendIdeaDeleteBtn.addEventListener("click", async () => {
     const item = state.selectedTrendIdea;
     if (!item) return;
-    const ok = window.confirm(`删除这条趋势想法？\n\n${item.tag_label || ""} · ${ideaDirectionLabel(item)} · ${item.trend_date_key || ""}`);
+    const ok = window.confirm(`删除这条板块想法？\n\n${item.tag_label || ""} · ${ideaDirectionLabel(item)} · ${item.trend_date_key || ""}`);
     if (!ok) return;
     detailTrendIdeaDeleteBtn.disabled = true;
     try {
@@ -7622,7 +7622,7 @@ if (detailTrendIdeaDeleteBtn) {
       syncIdeaRowSelection();
       renderMeta();
       renderTrendIdeaDetail(null);
-      setHint(state.total > 0 ? "趋势想法已删除" : "还没有想法，去新闻详情或板块里记录第一条。");
+      setHint(state.total > 0 ? "板块想法已删除" : "还没有想法，去新闻详情或板块里记录第一条。");
     } finally {
       detailTrendIdeaDeleteBtn.disabled = false;
     }
