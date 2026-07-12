@@ -129,7 +129,7 @@ items.id DESC
 
 ITEM_DATE_SQL = "COALESCE(NULLIF(items.date, ''), substr(items.published_at, 1, 10))"
 NEWS_SORT_ORDERS = {"default", "reverse"}
-IDEA_TYPE_FILTERS = {"all", "article", "trend"}
+IDEA_TYPE_FILTERS = {"all", "article", "trend", "standalone"}
 TRACKED_TOPIC_SCOPES = {"important", "all"}
 TRACKED_BACKFILL_MODES = {"recent_important", "all_important", "all_news"}
 TRACKED_MATCH_METHODS = {"keyword", "manual"}
@@ -2382,6 +2382,37 @@ def load_idea_rows(conn: sqlite3.Connection, idea_type: str, sort_order: str) ->
                     "summary": f"{row['date_key']} · {tag_label} · {direction_label}",
                     "source": "趋势",
                     "published_at": row["date_key"],
+                    "url": "",
+                    "note": row["note"],
+                    "note_preview": build_note_preview(row["note"]),
+                    "created_at": row["created_at"] or "",
+                    "updated_at": updated_at,
+                    "date_key": date_key,
+                    "date_label": date_label,
+                }
+            )
+
+    if idea_type in ("all", "standalone"):
+        standalone_rows = conn.execute(
+            """
+            SELECT id, note, created_at, updated_at
+            FROM standalone_ideas
+            """
+        ).fetchall()
+        for row in standalone_rows:
+            updated_at = row["updated_at"] or ""
+            date_key, date_label = derive_ts_date_meta(updated_at)
+            ideas.append(
+                {
+                    "id": None,
+                    "idea_id": f"standalone:{row['id']}",
+                    "idea_type": "standalone_note",
+                    "idea_context_label": "独立想法",
+                    "standalone_id": row["id"],
+                    "title": "独立想法",
+                    "summary": "",
+                    "source": "独立",
+                    "published_at": "",
                     "url": "",
                     "note": row["note"],
                     "note_preview": build_note_preview(row["note"]),
@@ -6410,6 +6441,111 @@ def api_market_trend_note_delete(note_id: int):
             "has_trend_note": 1 if trend_notes else 0,
         }
     )
+
+
+STANDALONE_IDEA_MAX_LEN = 5000
+
+
+@app.post("/api/standalone-ideas")
+def api_standalone_idea_create():
+    body = request.get_json(silent=True) or {}
+    raw_note = body.get("note")
+    if not isinstance(raw_note, str):
+        return jsonify({"ok": False, "error": "invalid_note"}), 400
+    note_text = raw_note.strip()
+    if not note_text:
+        return jsonify({"ok": False, "error": "empty_note"}), 400
+    if len(note_text) > STANDALONE_IDEA_MAX_LEN:
+        return jsonify({"ok": False, "error": "note_too_long"}), 400
+    ts = now_ts()
+    conn = db_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO standalone_ideas(note, created_at, updated_at) VALUES (?, ?, ?)",
+                (note_text, ts, ts),
+            )
+        idea_id = cur.lastrowid
+        row = conn.execute(
+            "SELECT id, note, created_at, updated_at FROM standalone_ideas WHERE id=?",
+            (idea_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "idea": _serialize_standalone_idea(row)})
+
+
+@app.patch("/api/standalone-ideas/<int:idea_id>")
+def api_standalone_idea_update(idea_id: int):
+    body = request.get_json(silent=True) or {}
+    raw_note = body.get("note")
+    if not isinstance(raw_note, str):
+        return jsonify({"ok": False, "error": "invalid_note"}), 400
+    note_text = raw_note.strip()
+    if not note_text:
+        return jsonify({"ok": False, "error": "empty_note"}), 400
+    if len(note_text) > STANDALONE_IDEA_MAX_LEN:
+        return jsonify({"ok": False, "error": "note_too_long"}), 400
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM standalone_ideas WHERE id=?",
+            (idea_id,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "idea_not_found"}), 404
+        with conn:
+            conn.execute(
+                "UPDATE standalone_ideas SET note=?, updated_at=? WHERE id=?",
+                (note_text, now_ts(), idea_id),
+            )
+        row = conn.execute(
+            "SELECT id, note, created_at, updated_at FROM standalone_ideas WHERE id=?",
+            (idea_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "idea": _serialize_standalone_idea(row)})
+
+
+@app.delete("/api/standalone-ideas/<int:idea_id>")
+def api_standalone_idea_delete(idea_id: int):
+    conn = db_conn()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM standalone_ideas WHERE id=?",
+            (idea_id,),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "idea_not_found"}), 404
+        with conn:
+            conn.execute("DELETE FROM standalone_ideas WHERE id=?", (idea_id,))
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+def _serialize_standalone_idea(row) -> dict:
+    updated_at = row["updated_at"] or ""
+    date_key, date_label = derive_ts_date_meta(updated_at)
+    return {
+        "id": None,
+        "idea_id": f"standalone:{row['id']}",
+        "idea_type": "standalone_note",
+        "idea_context_label": "独立想法",
+        "standalone_id": row["id"],
+        "title": "独立想法",
+        "summary": "",
+        "source": "独立",
+        "published_at": "",
+        "url": "",
+        "note": row["note"],
+        "note_preview": build_note_preview(row["note"]),
+        "created_at": row["created_at"] or "",
+        "updated_at": updated_at,
+        "date_key": date_key,
+        "date_label": date_label,
+    }
 
 
 @app.get("/api/reading-checkpoint")

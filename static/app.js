@@ -17,7 +17,7 @@ let state = {
   selectedReminderDraftId: null,
   selectedTrackedTopicId: null,
   reminderFilter: "active", // active | done | all
-  ideaFilter: "all", // all | article | trend
+  ideaFilter: "all", // all | article | trend | standalone
   itemsById: new Map(),
   reminderItems: [],
   dailyBriefings: [],
@@ -41,6 +41,7 @@ let state = {
   detailCacheByUrl: new Map(),
   readingCheckpoint: null,
   selectedTrendIdea: null,
+  selectedStandaloneIdea: null,
   marketTagChoices: [],
   marketWorkbenchTag: "",
   marketWorkbenchFilter: "all",
@@ -209,6 +210,21 @@ const detailTrendIdeaEditor = document.getElementById("detailTrendIdeaEditor");
 const detailTrendIdeaInput = document.getElementById("detailTrendIdeaInput");
 const detailTrendIdeaSaveBtn = document.getElementById("detailTrendIdeaSaveBtn");
 const detailTrendIdeaCancelBtn = document.getElementById("detailTrendIdeaCancelBtn");
+const detailStandaloneIdeaBody = document.getElementById("detailStandaloneIdeaBody");
+const detailStandaloneIdeaMeta = document.getElementById("detailStandaloneIdeaMeta");
+const detailStandaloneIdeaText = document.getElementById("detailStandaloneIdeaText");
+const detailStandaloneIdeaEditBtn = document.getElementById("detailStandaloneIdeaEditBtn");
+const detailStandaloneIdeaDeleteBtn = document.getElementById("detailStandaloneIdeaDeleteBtn");
+const detailStandaloneIdeaEditor = document.getElementById("detailStandaloneIdeaEditor");
+const detailStandaloneIdeaInput = document.getElementById("detailStandaloneIdeaInput");
+const detailStandaloneIdeaSaveBtn = document.getElementById("detailStandaloneIdeaSaveBtn");
+const detailStandaloneIdeaCancelBtn = document.getElementById("detailStandaloneIdeaCancelBtn");
+const detailStandaloneIdeaNewBody = document.getElementById("detailStandaloneIdeaNewBody");
+const detailStandaloneIdeaNewInput = document.getElementById("detailStandaloneIdeaNewInput");
+const detailStandaloneIdeaNewSaveBtn = document.getElementById("detailStandaloneIdeaNewSaveBtn");
+const detailStandaloneIdeaNewCancelBtn = document.getElementById("detailStandaloneIdeaNewCancelBtn");
+const ideaNewBtn = document.getElementById("ideaNewBtn");
+const ideaFilterStandaloneBtn = document.getElementById("ideaFilterStandaloneBtn");
 const detailTagAdminBody = document.getElementById("detailTagAdminBody");
 const detailTagCreateInput = document.getElementById("detailTagCreateInput");
 const detailTagCreateBtn = document.getElementById("detailTagCreateBtn");
@@ -1839,6 +1855,7 @@ function updateIdeaFilterBar() {
     [ideaFilterAllBtn, "all"],
     [ideaFilterArticleBtn, "article"],
     [ideaFilterTrendBtn, "trend"],
+    [ideaFilterStandaloneBtn, "standalone"],
   ].forEach(([button, value]) => {
     if (!button) return;
     button.classList.toggle("active", state.ideaFilter === value);
@@ -2373,7 +2390,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.2.11";
+  version.textContent = "News Reader v2.0.3.0";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3106,6 +3123,7 @@ function renderMeta() {
       all: "全部",
       article: "新闻想法",
       trend: "趋势想法",
+      standalone: "独立想法",
     };
     meta.textContent = `想法 · ${ideaNames[state.ideaFilter] || "全部"} · 共 ${state.total} 条`;
     pageInfo.textContent = `${state.page} / ${state.pages}`;
@@ -3173,6 +3191,19 @@ function clearTrendIdeaDetailState() {
   state.selectedTrendIdea = null;
   if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
   setTrendIdeaEditorOpen(false);
+  clearStandaloneIdeaDetailState();
+}
+
+function setStandaloneIdeaEditorOpen(open) {
+  if (!detailStandaloneIdeaEditor) return;
+  detailStandaloneIdeaEditor.classList.toggle("hidden", !open);
+}
+
+function clearStandaloneIdeaDetailState() {
+  state.selectedStandaloneIdea = null;
+  if (detailStandaloneIdeaBody) detailStandaloneIdeaBody.classList.add("hidden");
+  setStandaloneIdeaEditorOpen(false);
+  if (detailStandaloneIdeaNewBody) detailStandaloneIdeaNewBody.classList.add("hidden");
 }
 
 function emptyDetailMessage() {
@@ -5249,6 +5280,13 @@ async function openIdeaCard(item) {
     openDetailOnMobile();
     return;
   }
+  if (item.idea_type === "standalone_note") {
+    state.selectedId = null;
+    state.selectedTrendIdea = null;
+    renderStandaloneIdeaDetail(item);
+    openDetailOnMobile();
+    return;
+  }
   state.selectedTrendIdea = null;
   openItemDetail(item);
 }
@@ -5262,13 +5300,16 @@ function buildIdeaRow(item) {
   line1.className = "line1";
 
   const kindBadge = document.createElement("span");
-  kindBadge.className = `note-badge idea-kind-badge ${item.idea_type === "trend_note" ? "trend" : "article"}`;
-  kindBadge.textContent = item.idea_type === "trend_note" ? "趋势想法" : "新闻想法";
+  const badgeClass = item.idea_type === "trend_note" ? "trend" : item.idea_type === "standalone_note" ? "standalone" : "article";
+  kindBadge.className = `note-badge idea-kind-badge ${badgeClass}`;
+  kindBadge.textContent = item.idea_type === "trend_note" ? "趋势想法" : item.idea_type === "standalone_note" ? "独立想法" : "新闻想法";
 
   const text = document.createElement("span");
   text.className = "line1-text";
   if (item.idea_type === "trend_note") {
     text.textContent = `${item.updated_at || ""} · ${item.trend_date_key || ""}`;
+  } else if (item.idea_type === "standalone_note") {
+    text.textContent = item.updated_at || "";
   } else {
     text.textContent = `${item.source || "未知来源"} · ${item.updated_at || ""}`;
   }
@@ -5284,6 +5325,8 @@ function buildIdeaRow(item) {
   summary.className = "summary";
   if (item.idea_type === "trend_note") {
     summary.textContent = `${item.tag_label || ""} · ${ideaDirectionLabel(item)} · ${item.trend_date_key || ""}`;
+  } else if (item.idea_type === "standalone_note") {
+    summary.textContent = "";
   } else {
     summary.textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
   }
@@ -5291,7 +5334,7 @@ function buildIdeaRow(item) {
   const notePreview = document.createElement("p");
   notePreview.className = "row-note-preview";
   notePreview.textContent = item.note || item.note_preview || "";
-  if (item.idea_type === "trend_note") {
+  if (item.idea_type === "trend_note" || item.idea_type === "standalone_note") {
     notePreview.classList.add("full-text");
   }
 
@@ -5426,6 +5469,13 @@ function updateIdeaRow(item) {
   if (!row) return;
   const summary = row.querySelector(".summary");
   const notePreview = row.querySelector(".row-note-preview");
+  if (item.idea_type === "standalone_note") {
+    if (summary) summary.textContent = "";
+    if (notePreview) notePreview.textContent = item.note || item.note_preview || "";
+    const lineText = row.querySelector(".line1-text");
+    if (lineText) lineText.textContent = item.updated_at || "";
+    return;
+  }
   if (summary) {
     summary.textContent = `${item.tag_label || ""} · ${ideaDirectionLabel(item)} · ${item.trend_date_key || ""}`;
   }
@@ -5459,12 +5509,101 @@ function renderTrendIdeaDetail(item) {
 
   state.selectedTrendIdea = { ...item };
   detailEmpty.classList.add("hidden");
+  if (detailStandaloneIdeaBody) detailStandaloneIdeaBody.classList.add("hidden");
+  if (detailStandaloneIdeaNewBody) detailStandaloneIdeaNewBody.classList.add("hidden");
   detailTrendIdeaBody.classList.remove("hidden");
   setTrendIdeaEditorOpen(false);
   detailTrendIdeaTitle.textContent = `${item.tag_label || ""} · ${ideaDirectionLabel(item)}`;
   detailTrendIdeaMeta.textContent = `${item.trend_date_key || ""} · 创建 ${item.created_at || "-"} · 更新 ${item.updated_at || "-"}`;
   detailTrendIdeaText.textContent = item.note || "";
   updateWorkspaceLayout();
+}
+
+function renderStandaloneIdeaDetail(item) {
+  closeTagAdminView();
+  closeTrendComposerView();
+  resetDetailChatState({ keepProvider: true });
+  stopDetailPolling();
+  closeMarketPicker();
+  closeReminderEditor();
+  if (detailReminderCard) detailReminderCard.classList.add("hidden");
+  syncDetailReturnButton();
+  detailBody.classList.add("hidden");
+  if (detailDailyBody) detailDailyBody.classList.add("hidden");
+  detailChatBody.classList.add("hidden");
+  if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
+  if (!item) {
+    clearStandaloneIdeaDetailState();
+    renderDetailEmpty();
+    updateWorkspaceLayout();
+    return;
+  }
+  state.selectedStandaloneIdea = { ...item };
+  detailEmpty.classList.add("hidden");
+  if (detailStandaloneIdeaNewBody) detailStandaloneIdeaNewBody.classList.add("hidden");
+  detailStandaloneIdeaBody.classList.remove("hidden");
+  setStandaloneIdeaEditorOpen(false);
+  detailStandaloneIdeaMeta.textContent = `创建 ${item.created_at || "-"} · 更新 ${item.updated_at || "-"}`;
+  detailStandaloneIdeaText.textContent = item.note || "";
+  updateWorkspaceLayout();
+}
+
+function openStandaloneIdeaNewView() {
+  closeTagAdminView();
+  closeTrendComposerView();
+  resetDetailChatState({ keepProvider: true });
+  stopDetailPolling();
+  closeMarketPicker();
+  closeReminderEditor();
+  if (detailReminderCard) detailReminderCard.classList.add("hidden");
+  syncDetailReturnButton();
+  detailBody.classList.add("hidden");
+  if (detailDailyBody) detailDailyBody.classList.add("hidden");
+  detailChatBody.classList.add("hidden");
+  if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
+  detailStandaloneIdeaBody.classList.add("hidden");
+  state.selectedStandaloneIdea = null;
+  state.selectedIdeaId = "";
+  syncIdeaRowSelection();
+  detailEmpty.classList.add("hidden");
+  detailStandaloneIdeaNewBody.classList.remove("hidden");
+  if (detailStandaloneIdeaNewInput) detailStandaloneIdeaNewInput.value = "";
+  updateWorkspaceLayout();
+  if (detailStandaloneIdeaNewInput) detailStandaloneIdeaNewInput.focus();
+}
+
+async function createStandaloneIdea(note) {
+  const res = await fetch("/api/standalone-ideas", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  if (!res.ok) throw new Error("standalone_idea_create_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "standalone_idea_create_failed");
+  return data.idea;
+}
+
+async function updateStandaloneIdea(ideaId, note) {
+  const res = await fetch(`/api/standalone-ideas/${encodeURIComponent(ideaId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  if (!res.ok) throw new Error("standalone_idea_update_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "standalone_idea_update_failed");
+  return data.idea;
+}
+
+async function deleteStandaloneIdea(ideaId) {
+  const res = await fetch(`/api/standalone-ideas/${encodeURIComponent(ideaId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("standalone_idea_delete_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "standalone_idea_delete_failed");
+  return data;
 }
 
 async function fetchDailyBriefingsIndex() {
@@ -6398,6 +6537,7 @@ readFilterToggleBtn.addEventListener("click", async () => {
   [ideaFilterAllBtn, "all"],
   [ideaFilterArticleBtn, "article"],
   [ideaFilterTrendBtn, "trend"],
+  [ideaFilterStandaloneBtn, "standalone"],
 ].forEach(([button, filter]) => {
   if (!button) return;
   button.addEventListener("click", async () => {
@@ -7485,6 +7625,115 @@ if (detailTrendIdeaDeleteBtn) {
       setHint(state.total > 0 ? "趋势想法已删除" : "还没有想法，去新闻详情或板块里记录第一条。");
     } finally {
       detailTrendIdeaDeleteBtn.disabled = false;
+    }
+  });
+}
+
+if (ideaNewBtn) {
+  ideaNewBtn.addEventListener("click", () => {
+    openStandaloneIdeaNewView();
+  });
+}
+
+if (detailStandaloneIdeaNewSaveBtn) {
+  detailStandaloneIdeaNewSaveBtn.addEventListener("click", async () => {
+    const note = (detailStandaloneIdeaNewInput?.value || "").trim();
+    if (!note) {
+      setHint("请输入想法内容再保存");
+      return;
+    }
+    detailStandaloneIdeaNewSaveBtn.disabled = true;
+    if (detailStandaloneIdeaNewCancelBtn) detailStandaloneIdeaNewCancelBtn.disabled = true;
+    try {
+      const idea = await createStandaloneIdea(note);
+      await loadFirstPage();
+      state.selectedIdeaId = idea.idea_id;
+      syncIdeaRowSelection();
+      renderStandaloneIdeaDetail(idea);
+      setHint("独立想法已保存");
+    } catch (err) {
+      setHint("保存失败：" + (err.message || "未知错误"));
+    } finally {
+      detailStandaloneIdeaNewSaveBtn.disabled = false;
+      if (detailStandaloneIdeaNewCancelBtn) detailStandaloneIdeaNewCancelBtn.disabled = false;
+    }
+  });
+}
+
+if (detailStandaloneIdeaNewCancelBtn) {
+  detailStandaloneIdeaNewCancelBtn.addEventListener("click", () => {
+    clearStandaloneIdeaDetailState();
+    renderDetailEmpty();
+    updateWorkspaceLayout();
+  });
+}
+
+if (detailStandaloneIdeaEditBtn) {
+  detailStandaloneIdeaEditBtn.addEventListener("click", () => {
+    if (!state.selectedStandaloneIdea) return;
+    detailStandaloneIdeaInput.value = state.selectedStandaloneIdea.note || "";
+    setStandaloneIdeaEditorOpen(true);
+    detailStandaloneIdeaInput.focus();
+  });
+}
+
+if (detailStandaloneIdeaCancelBtn) {
+  detailStandaloneIdeaCancelBtn.addEventListener("click", () => {
+    if (!state.selectedStandaloneIdea) return;
+    detailStandaloneIdeaInput.value = state.selectedStandaloneIdea.note || "";
+    setStandaloneIdeaEditorOpen(false);
+  });
+}
+
+if (detailStandaloneIdeaSaveBtn) {
+  detailStandaloneIdeaSaveBtn.addEventListener("click", async () => {
+    const item = state.selectedStandaloneIdea;
+    if (!item) return;
+    const note = (detailStandaloneIdeaInput?.value || "").trim();
+    if (!note) {
+      setHint("想法内容不能为空");
+      return;
+    }
+    detailStandaloneIdeaSaveBtn.disabled = true;
+    if (detailStandaloneIdeaCancelBtn) detailStandaloneIdeaCancelBtn.disabled = true;
+    try {
+      const updated = await updateStandaloneIdea(item.standalone_id, note);
+      state.selectedStandaloneIdea = updated;
+      updateIdeaRow(updated);
+      renderStandaloneIdeaDetail(updated);
+      setHint("独立想法已更新");
+    } catch (err) {
+      setHint("更新失败：" + (err.message || "未知错误"));
+    } finally {
+      detailStandaloneIdeaSaveBtn.disabled = false;
+      if (detailStandaloneIdeaCancelBtn) detailStandaloneIdeaCancelBtn.disabled = false;
+    }
+  });
+}
+
+if (detailStandaloneIdeaDeleteBtn) {
+  detailStandaloneIdeaDeleteBtn.addEventListener("click", async () => {
+    const item = state.selectedStandaloneIdea;
+    if (!item) return;
+    const ok = window.confirm("删除这条独立想法？");
+    if (!ok) return;
+    detailStandaloneIdeaDeleteBtn.disabled = true;
+    try {
+      await deleteStandaloneIdea(item.standalone_id);
+      removeIdeaRow(item.idea_id);
+      updateIdeaDateCountOnDelete(item);
+      state.total = Math.max(0, Number(state.total || 0) - 1);
+      state.pages = Math.max(1, Math.ceil(state.total / state.per));
+      state.page = Math.min(state.page, state.pages);
+      state.selectedIdeaId = "";
+      syncIdeaRowSelection();
+      renderMeta();
+      clearStandaloneIdeaDetailState();
+      renderDetailEmpty();
+      updateWorkspaceLayout();
+      setHint(state.total > 0 ? "独立想法已删除" : "还没有想法，去新闻详情或板块里记录第一条。");
+    } finally {
+      detailStandaloneIdeaDeleteBtn.disabled = false;
     }
   });
 }

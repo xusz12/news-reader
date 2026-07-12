@@ -7472,3 +7472,81 @@ def test_settings_save_normalizes_deprecated_deepseek_model(tmp_path: Path, monk
         {"llm": {"translation": {"provider": "deepseek", "model": "deepseek-chat"}}}
     )
     assert normalized["llm"]["translation"]["model"] == "deepseek-v4-flash"
+
+
+def test_standalone_idea_crud_and_merge(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    # create
+    resp = client.post("/api/standalone-ideas", json={"note": "  第一个独立想法  "})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    idea = data["idea"]
+    assert idea["idea_type"] == "standalone_note"
+    assert idea["idea_id"].startswith("standalone:")
+    assert idea["standalone_id"] is not None
+    assert idea["note"] == "第一个独立想法"
+    assert idea["title"] == "独立想法"
+    idea_id = idea["standalone_id"]
+
+    # empty note rejected
+    assert client.post("/api/standalone-ideas", json={"note": "   "}).status_code == 400
+    assert client.post("/api/standalone-ideas", json={"note": ""}).status_code == 400
+    # invalid type
+    assert client.post("/api/standalone-ideas", json={"note": 123}).status_code == 400
+    # too long
+    assert client.post("/api/standalone-ideas", json={"note": "x" * 5001}).status_code == 400
+    # max length boundary ok
+    resp_max = client.post("/api/standalone-ideas", json={"note": "y" * 5000})
+    assert resp_max.status_code == 200
+
+    # list merged in /api/ideas
+    ideas = client.get("/api/ideas?per=100")
+    assert ideas.status_code == 200
+    payload = ideas.get_json()
+    standalone_items = [item for item in payload["items"] if item["idea_type"] == "standalone_note"]
+    assert len(standalone_items) == 2
+
+    # filter standalone only
+    standalone_only = client.get("/api/ideas?type=standalone&per=100")
+    assert standalone_only.status_code == 200
+    assert standalone_only.get_json()["total"] == 2
+    assert all(item["idea_type"] == "standalone_note" for item in standalone_only.get_json()["items"])
+
+    # filter article only — no standalone
+    article_only = client.get("/api/ideas?type=article&per=100")
+    assert article_only.status_code == 200
+    assert all(item["idea_type"] == "article_note" for item in article_only.get_json()["items"])
+
+    # update
+    resp = client.patch(f"/api/standalone-ideas/{idea_id}", json={"note": "  更新后的想法  "})
+    assert resp.status_code == 200
+    updated = resp.get_json()["idea"]
+    assert updated["note"] == "更新后的想法"
+
+    # update empty rejected
+    assert client.patch(f"/api/standalone-ideas/{idea_id}", json={"note": "  "}).status_code == 400
+    # update too long
+    assert client.patch(f"/api/standalone-ideas/{idea_id}", json={"note": "x" * 5001}).status_code == 400
+    # update non-existent
+    assert client.patch("/api/standalone-ideas/99999", json={"note": "test"}).status_code == 404
+
+    # delete
+    assert client.delete(f"/api/standalone-ideas/{idea_id}").status_code == 200
+    # delete again → 404
+    assert client.delete(f"/api/standalone-ideas/{idea_id}").status_code == 404
+
+    # verify deleted from ideas list
+    after_delete = client.get("/api/ideas?type=standalone&per=100")
+    assert after_delete.get_json()["total"] == 1
+
+    # invalid filter type still rejected
+    assert client.get("/api/ideas?type=weird").status_code == 400

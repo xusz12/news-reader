@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.2.11</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.2.11" />
+    <title>News Reader v2.0.3.0</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.3.0" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.2.11</span>
+          <span class="topbar-version">v2.0.3.0</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -103,6 +103,8 @@
             <button id="ideaFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
             <button id="ideaFilterArticleBtn" class="reminder-filter-btn" type="button">新闻想法</button>
             <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">趋势想法</button>
+            <button id="ideaFilterStandaloneBtn" class="reminder-filter-btn" type="button">独立想法</button>
+            <button id="ideaNewBtn" class="detail-retry-btn" type="button">新想法</button>
           </div>
           <section id="marketWorkbenchBar" class="search-page-controls hidden" aria-label="板块工作台筛选">
             <div class="search-page-form market-workbench-form">
@@ -217,6 +219,37 @@
             <div class="detail-note-actions">
               <button id="detailTrendIdeaSaveBtn" class="detail-retry-btn" type="button">保存</button>
               <button id="detailTrendIdeaCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+        </div>
+        <div id="detailStandaloneIdeaBody" class="detail-trend-body hidden">
+          <h3 id="detailStandaloneIdeaTitle" class="detail-title">独立想法</h3>
+          <div id="detailStandaloneIdeaMeta" class="detail-meta"></div>
+          <div class="detail-actions detail-trend-actions">
+            <button id="detailStandaloneIdeaEditBtn" class="detail-retry-btn" type="button">编辑</button>
+            <button id="detailStandaloneIdeaDeleteBtn" class="detail-retry-btn" type="button">删除</button>
+          </div>
+          <section id="detailStandaloneIdeaCard" class="detail-note-card">
+            <h4>独立想法全文</h4>
+            <p id="detailStandaloneIdeaText" class="detail-note-text"></p>
+          </section>
+          <section id="detailStandaloneIdeaEditor" class="detail-note-editor hidden">
+            <div class="detail-note-editor-title">编辑独立想法</div>
+            <textarea id="detailStandaloneIdeaInput" class="detail-note-input" rows="6" maxlength="5000" placeholder="记录你的想法..."></textarea>
+            <div class="detail-note-actions">
+              <button id="detailStandaloneIdeaSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="detailStandaloneIdeaCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+        </div>
+        <div id="detailStandaloneIdeaNewBody" class="detail-trend-body hidden">
+          <h3 class="detail-title">新想法</h3>
+          <div class="detail-meta">不关联板块和新闻，为纯想法文本</div>
+          <section class="detail-note-editor">
+            <textarea id="detailStandaloneIdeaNewInput" class="detail-note-input" rows="6" maxlength="5000" placeholder="记录你的想法..."></textarea>
+            <div class="detail-note-actions">
+              <button id="detailStandaloneIdeaNewSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="detailStandaloneIdeaNewCancelBtn" class="detail-retry-btn" type="button">取消</button>
             </div>
           </section>
         </div>
@@ -577,6 +610,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.2.11"></script>
+    <script src="/static/app.js?v=2.0.3.0"></script>
   </body>
 </html>

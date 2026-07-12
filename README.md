@@ -4,6 +4,18 @@
 
 ## What's Changed
 
+### 2026-07-12 — v2.0.3.0 improve: 想法集合新增纯文本独立想法 CRUD
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*、*tests/test_api.py（+）*、*README.md（+）*
+    - 新增 `standalone_ideas(id, note, created_at, updated_at)` 表，不含新闻 URL、板块、方向等关联字段；`schema.sql` 使用 `CREATE TABLE IF NOT EXISTS`，首次启动自动建表，不影响现有数据
+    - `IDEA_TYPE_FILTERS` 新增 `standalone`；`load_idea_rows` 在 `all` 和 `standalone` 筛选下加载独立想法，输出 `idea_type=standalone_note`、`idea_id=standalone:<id>`，按 `updated_at` 排序
+    - 新增 `POST /api/standalone-ideas`（新建，trim 后非空且最多 5000 字）、`PATCH /api/standalone-ideas/<id>`（编辑）、`DELETE /api/standalone-ideas/<id>`（删除），非法 ID 返回 404
+    - 前端想法集合工具栏新增"新想法"按钮和"独立想法"筛选；点击"新想法"右栏进入新建态，纯文本输入框（maxlength=5000），保存后列表出现并自动选中；查看态显示创建/更新时间、全文，支持编辑、删除；取消新建清空右栏
+    - 不迁移、不改写现有 `article_notes` / `market_trend_notes`，不接入板块工作台、趋势总结、新闻详情、搜索或 LLM 上下文
+    - 测试：独立想法新建、空文本/超长拒绝、列表合并与类型筛选、编辑、删除、非法 ID、无效筛选类型
+- **影响**：涉及 `schema.sql` / `app.py` 与前端，拉取后需重启 Flask 并刷新页面；首次启动自动建 `standalone_ideas` 表，不需要手动迁移。
+
+
 ### 2026-07-10 — v2.0.2.11 fix: 翻译兜底跟随 Chat provider + Pi provider 自定义输入与记忆
 - **文件**
   - *llm_client.py（+）*、*app.py（+）*、*static/app.js（+）*、*static/index.html（+）*、*tests/test_api.py（+）*、*README.md（+）*

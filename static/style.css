@@ -3904,3 +3904,12 @@ html[data-detail-font="large"] {
     justify-content: flex-start;
   }
 }
+
+.idea-kind-badge.standalone {
+  background: var(--accent-bg, rgba(99, 102, 241, 0.12));
+  color: var(--accent, #6366f1);
+}
+
+#ideaNewBtn {
+  margin-left: auto;
+}
