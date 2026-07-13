@@ -7823,13 +7823,177 @@ def test_review_create_missing_fields(tmp_path: Path, monkeypatch):
     base = {"source_type": "standalone_idea", "source_key": str(idea_id)}
     # missing judgment
     assert client.post("/api/reviews", json={**base, "criteria": "c", "plan_review_date": "2026-10-01"}).status_code == 400
-    # missing criteria
-    assert client.post("/api/reviews", json={**base, "judgment": "j", "plan_review_date": "2026-10-01"}).status_code == 400
+    # missing criteria is now OK (optional)
+    resp = client.post("/api/reviews", json={**base, "judgment": "j", "plan_review_date": "2026-10-01"})
+    assert resp.status_code == 200
+    assert resp.get_json()["review"]["source_note"]
     # missing date
     assert client.post("/api/reviews", json={**base, "judgment": "j", "criteria": "c"}).status_code == 400
     # invalid date
     assert client.post("/api/reviews", json={**base, "judgment": "j", "criteria": "c", "plan_review_date": "bad"}).status_code == 400
 
+
+def test_review_revise_without_criteria(tmp_path: Path, monkeypatch):
+    """Criteria is optional in revise."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "V1判断", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/revise", json={
+        "judgment": "V2判断", "revision_reason": "新证据", "event_date": "2026-07-06",
+    })
+    assert resp.status_code == 200
+    review = resp.get_json()["review"]
+    assert review["current_version"] == 2
+    assert review["versions"][1]["criteria"] == ""
+
+
+def test_review_retrack_without_criteria(tmp_path: Path, monkeypatch):
+    """Criteria is optional in retrack."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "V1判断", "plan_review_date": "2020-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Complete the chain first
+    client.post(f"/api/reviews/{chain_id}/complete", json={
+        "result": "confirmed", "actual_text": "结果", "experience": "经验",
+    })
+    # Retrack without criteria
+    resp = client.post(f"/api/reviews/{chain_id}/retrack", json={
+        "judgment": "新判断", "plan_review_date": "2099-12-01",
+    })
+    assert resp.status_code == 200
+    assert resp.get_json()["review"]["source_note"]
+
+
+
+
+def test_review_list_date_key_label(tmp_path: Path, monkeypatch):
+    """Reviews list should return date_key/date_label derived from plan_review_date."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "未来判断", "plan_review_date": "2099-03-15",
+    })
+    r = client.get("/api/reviews?per=100")
+    assert r.status_code == 200
+    item = r.get_json()["items"][0]
+    assert item["date_key"] == "2099-03-15"
+    assert item["date_label"] == "2099年3月15日"
+
+
+def test_review_list_groups_same_plan_date_together(tmp_path: Path, monkeypatch):
+    """Reviews with the same plan_review_date must be contiguous regardless of updated_at order."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    # A1 and A2 share plan date; B has a different plan date
+    idea_a1 = _create_standalone_idea(client, "A1 想法")
+    idea_b = _create_standalone_idea(client, "B 想法")
+    idea_a2 = _create_standalone_idea(client, "A2 想法")
+
+    r_a1 = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_a1),
+        "judgment": "A1", "plan_review_date": "2026-08-12",
+    })
+    r_b = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_b),
+        "judgment": "B", "plan_review_date": "2026-09-01",
+    })
+    r_a2 = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_a2),
+        "judgment": "A2", "plan_review_date": "2026-08-12",
+    })
+    id_a1 = r_a1.get_json()["review"]["id"]
+    id_b = r_b.get_json()["review"]["id"]
+    id_a2 = r_a2.get_json()["review"]["id"]
+
+    # Force interleaved updated_at: A2 newest, B middle, A1 oldest
+    db_path = tmp_path / "news_index.sqlite3"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "UPDATE review_chains SET updated_at = ? WHERE id = ?",
+        ("2026-07-13T10:00:00", id_a1),
+    )
+    conn.execute(
+        "UPDATE review_chains SET updated_at = ? WHERE id = ?",
+        ("2026-07-13T11:00:00", id_b),
+    )
+    conn.execute(
+        "UPDATE review_chains SET updated_at = ? WHERE id = ?",
+        ("2026-07-13T12:00:00", id_a2),
+    )
+    conn.commit()
+    conn.close()
+
+    r = client.get("/api/reviews?per=100")
+    assert r.status_code == 200
+    items = r.get_json()["items"]
+    date_keys = [item["date_key"] for item in items]
+    # Same plan date should be contiguous, and latest-updated within group comes first
+    assert date_keys == ["2026-08-12", "2026-08-12", "2026-09-01"], date_keys
+    assert items[0]["id"] == id_a2
+    assert items[1]["id"] == id_a1
+    assert items[2]["id"] == id_b
+
+
+def test_review_initial_event_date_is_today_not_plan_date(tmp_path: Path, monkeypatch):
+    """Initial revision event must record the actual creation date, not plan_review_date."""
+    client, app_module = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "V1", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    detail = client.get(f"/api/reviews/{chain_id}").get_json()["review"]
+    assert len(detail["events"]) == 1
+    ev = detail["events"][0]
+    assert ev["event_type"] == "revision"
+    assert ev["version_id"] is None
+    today = app_module._today_str()
+    assert ev["event_date"] == today, f"event_date {ev['event_date']} != today {today}"
+    assert ev["event_date"] != "2099-01-01"
+
+
+def test_review_old_record_event_date_fallback_to_created_at(tmp_path: Path, monkeypatch):
+    """Old records whose initial revision stored plan_review_date should display created_at."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "V1", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Simulate legacy record: force initial event_date to plan_review_date
+    conn = sqlite3.connect(str(tmp_path / "news_index.sqlite3"))
+    conn.execute(
+        "UPDATE review_events SET event_date = '2099-01-01' WHERE chain_id = ? AND event_type = 'revision' AND version_id IS NULL",
+        (chain_id,),
+    )
+    conn.commit()
+    conn.close()
+    detail = client.get(f"/api/reviews/{chain_id}").get_json()["review"]
+    ev = detail["events"][0]
+    assert ev["event_date"] == detail["created_at"][:10]
+    assert ev["event_date"] != "2099-01-01"
+
+
+def test_review_criteria_empty_in_versions(tmp_path: Path, monkeypatch):
+    """When criteria is omitted, version criteria should be empty string, not missing."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "无标准判断", "plan_review_date": "2099-01-01",
+    })
+    review = r.get_json()["review"]
+    assert review["versions"][0]["criteria"] == ""
 
 def test_review_list_and_filter(tmp_path: Path, monkeypatch):
     client, _ = _setup_review_env(tmp_path, monkeypatch)
@@ -8031,6 +8195,32 @@ def test_review_retrack(tmp_path: Path, monkeypatch):
     assert new_review["status"] == "active"
     assert new_review["current_version"] == 1
     assert new_review["source_note"] == "这项政策长期可能利好新能源"  # snapshot preserved
+
+
+def test_review_retrack_event_date_is_today(tmp_path: Path, monkeypatch):
+    """Retracked chain's first 'retracked' event must use actual creation date, not plan_review_date."""
+    client, app_module = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2020-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    client.post(f"/api/reviews/{chain_id}/complete", json={
+        "result": "refuted", "actual_text": "a", "experience": "e",
+    })
+    future = "2027-12-01"
+    resp = client.post(f"/api/reviews/{chain_id}/retrack", json={
+        "judgment": "新判断", "criteria": "新标准", "plan_review_date": future,
+    })
+    assert resp.status_code == 200
+    new_review = resp.get_json()["review"]
+    assert new_review["plan_review_date"] == future
+    retracked_events = [e for e in new_review["events"] if e["event_type"] == "retracked"]
+    assert len(retracked_events) == 1
+    today = app_module._today_str()
+    assert retracked_events[0]["event_date"] == today
+    assert retracked_events[0]["event_date"] != future
 
 
 def test_review_retrack_not_done(tmp_path: Path, monkeypatch):
@@ -8616,6 +8806,229 @@ vm.runInContext(source, context, { filename: "static/app.js" });
 });
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+def test_review_timeline_criteria_empty_not_rendered():
+    """Criteria must not render an empty '成立标准：' tag when criteria is blank."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) {
+  throw new Error("front-end bootstrap marker missing");
+}
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by criteria render regression test");
+source = source.replace("let state = {", "var state = {");
+
+function makeElement(tag) {
+  const children = [];
+  const el = {
+    tagName: tag,
+    className: "",
+    textContent: "",
+    innerHTML: "",
+    dataset: {},
+    style: {},
+    classList: {
+      add: (c) => { el.className += (el.className ? " " : "") + c; },
+      remove: (c) => { el.className = el.className.split(" ").filter(x => x !== c).join(" "); },
+      toggle: (c, force) => { force ? el.classList.add(c) : el.classList.remove(c); },
+      contains: (c) => el.className.split(" ").includes(c),
+    },
+    appendChild: (child) => { children.push(child); return child; },
+    removeChild: (child) => { const i = children.indexOf(child); if (i >= 0) children.splice(i, 1); return child; },
+    remove: () => {},
+    querySelector: (sel) => query(el, sel),
+    querySelectorAll: (sel) => queryAll(el, sel),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    setAttribute: (k, v) => { el[k] = v; },
+    removeAttribute: (k) => { delete el[k]; },
+    focus: () => {},
+    blur: () => {},
+    click: () => {},
+    get children() { return children; },
+  };
+  return el;
+}
+
+function query(root, sel) {
+  const parts = sel.split(/[.>#]/).filter(Boolean);
+  const cls = sel.includes(".") ? sel.split(".")[1] : null;
+  for (const c of root.children) {
+    if (cls && c.className.split(" ").includes(cls)) return c;
+    const r = query(c, sel); if (r) return r;
+  }
+  return null;
+}
+function queryAll(root, sel) {
+  const cls = sel.includes(".") ? sel.split(".")[1] : null;
+  let out = [];
+  for (const c of root.children) {
+    if (cls && c.className.split(" ").includes(cls)) out.push(c);
+    out = out.concat(queryAll(c, sel));
+  }
+  return out;
+}
+
+const root = makeElement("div");
+const detailReviewTimeline = root;
+const detailReviewBody = makeElement("div");
+const detailReviewSourceInfo = makeElement("div");
+
+document = {
+  getElementById: (id) => {
+    if (id === "detailReviewTimeline") return detailReviewTimeline;
+    if (id === "detailReviewBody") return detailReviewBody;
+    if (id === "detailReviewSourceInfo") return detailReviewSourceInfo;
+    return makeElement("div");
+  },
+  querySelector: () => makeElement("div"),
+  querySelectorAll: () => [],
+  createElement: (tag) => makeElement(tag),
+  addEventListener: () => {},
+  body: makeElement("body"),
+  documentElement: makeElement("html"),
+};
+
+const noop = () => {};
+const localStorage = { getItem: () => null, setItem: noop };
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  localStorage,
+};
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const context = {
+  console, document, window, localStorage, IntersectionObserver,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+context.renderReviewTimeline({
+  versions: [
+    { version_no: 1, judgment: "V1", criteria: "", revision_reason: "" },
+    { version_no: 2, judgment: "V2", criteria: "标准", revision_reason: "修正" },
+  ],
+  events: [],
+});
+
+const criteriaEls = queryAll(detailReviewTimeline, ".review-timeline-criteria");
+if (criteriaEls.length !== 1) {
+  throw new Error(`expected exactly 1 criteria element, got ${criteriaEls.length}`);
+}
+if (criteriaEls[0].textContent !== "成立标准：标准") {
+  throw new Error(`unexpected criteria text: ${criteriaEls[0].textContent}`);
+}
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_review_create_cancel_restores_news_detail_from_any_collection():
+    """Canceling '加入复盘' from a non-feed news collection should restore the news detail."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) {
+  throw new Error("front-end bootstrap marker missing");
+}
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by cancel restore regression test");
+source = source.replace("let state = {", "var state = {");
+
+function makeButton() {
+  const listeners = [];
+  return {
+    addEventListener: (type, fn) => { listeners.push([type, fn]); },
+    removeEventListener: () => {},
+    click: () => { listeners.filter(([t]) => t === "click").forEach(([, fn]) => fn()); },
+    classList: { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false },
+  };
+}
+
+const noop = () => {};
+const element = new Proxy(noop, {
+  get(target, prop) {
+    if (["addEventListener", "removeEventListener", "appendChild", "removeChild", "setAttribute", "removeAttribute", "focus", "blur", "click"].includes(prop)) return noop;
+    if (["querySelectorAll", "getElementsByTagName"].includes(prop)) return () => [];
+    if (prop === "querySelector") return () => element;
+    if (prop === "classList") return { add: noop, remove: noop, toggle: noop, contains: () => false };
+    if (prop === "style" || prop === "dataset") return element;
+    if (prop === "children" || prop === "options") return [];
+    if (prop === "length") return 0;
+    if (["value", "textContent", "innerHTML", "className"].includes(prop)) return "";
+    if (prop === "checked" || prop === "disabled") return false;
+    if (prop === Symbol.iterator) return function* () {};
+    return element;
+  },
+  set() { return true; },
+  apply() { return undefined; },
+});
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const cancelBtn = makeButton();
+const document = {
+  getElementById: (id) => {
+    if (id === "reviewCreateCancelBtn") return cancelBtn;
+    return element;
+  },
+  querySelector: () => element,
+  querySelectorAll: () => [],
+  createElement: () => element,
+  addEventListener: noop,
+  body: element,
+  documentElement: element,
+};
+const fetch = async () => ({ ok: true, json: async () => ({ ok: true }) });
+const localStorage = { getItem: () => null, setItem: noop };
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  localStorage,
+};
+const context = {
+  console, document, window, localStorage, IntersectionObserver, fetch,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+const renderedItems = [];
+let detailEmptyCalled = false;
+context.renderDetail = (item) => { renderedItems.push(item); };
+context.renderDetailEmpty = () => { detailEmptyCalled = true; };
+context.state.itemsById = new Map([
+  ["news-42", { id: "news-42", url: "https://example.com/news-42", title: "T", summary: "S", source: "Reuters", published_at: "2026-07-01" }],
+]);
+context.state.collection = "daily"; // not feed
+context.state.selectedId = "news-42";
+
+context.openReviewCreateFromArticle();
+if (!context.state.pendingReviewSource) {
+  throw new Error("pendingReviewSource was not set");
+}
+if (context.state.pendingReviewSource._prevSelectedId !== "news-42") {
+  throw new Error("_prevSelectedId was not saved");
+}
+
+// Cancel should restore the news detail regardless of collection
+context.document.getElementById("reviewCreateCancelBtn").click();
+if (renderedItems.length !== 1 || renderedItems[0].id !== "news-42") {
+  throw new Error(`renderDetail not called with news-42, got ${JSON.stringify(renderedItems)}`);
+}
+if (detailEmptyCalled) {
+  throw new Error("renderDetailEmpty should not be called when news item is restorable");
+}
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
 
 def test_review_create_source_key_extraction():
     """"加入复盘" open handlers must extract numeric source keys from composite idea_id."""

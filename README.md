@@ -4,6 +4,17 @@
 
 ## What's Changed
 
+### 2026-07-13 — v2.1.0.1 fix: 复盘导航、滚动、内容与日期语义修复
+
+- 加入复盘取消按钮恢复来源页（新闻/板块/独立想法详情）
+- 复盘右栏可滚动（overflow-y: auto）
+- 复盘集合中栏不再显示 unknown 日期分组
+- 复盘列表 row 显示完整想法内容（移除 max-height 截断）
+- 复盘右栏新增来源想法全文与关联新闻要点
+- 进展事件只显示 event_date，不再重复 created_at
+- 成立标准改为可选（前端+后端）
+- 同步版本号 v2.1.0.1（title、顶栏、CSS/JS cache-bust、移动端更多面板）
+
 ### 2026-07-13 — v2.1.0 feat: 版本化判断复盘功能
 - **文件**
   - *schema.sql（+）*、*app.py（+）*、*tests/test_api.py（+）*、*static/index.html（~）*、*static/app.js（~）*、*static/style.css（~）*、*README.md（+）*

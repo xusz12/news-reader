@@ -2486,7 +2486,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0";
+  version.textContent = "News Reader v2.1.0.1";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3149,6 +3149,7 @@ function updateFeedHeader() {
     notes: ["个人判断", "想法"],
     tracked: ["主题时间线", "跟踪"],
     market_tags: ["板块工作台", "板块"],
+    reviews: ["版本化判断复盘", "复盘"],
   };
   const [kicker, title] = headers[state.collection] || headers.feed;
   feedKicker.textContent = kicker;
@@ -5940,6 +5941,9 @@ function renderReviewDetail(review) {
   }
   if (detailReviewRetrackBtn) detailReviewRetrackBtn.classList.toggle("hidden", !isDone);
 
+  // Source content + news highlights
+  renderReviewSourceInfo(review);
+
   // Timeline
   renderReviewTimeline(review);
 
@@ -5948,6 +5952,81 @@ function renderReviewDetail(review) {
 
   // Store current review for form handlers
   state.currentReview = review;
+}
+
+function renderReviewSourceInfo(review) {
+  // Remove existing source-info section
+  const existing = detailReviewBody.querySelector(".review-source-info");
+  if (existing) existing.remove();
+
+  const snap = review.source_snapshot || {};
+  const sourceNote = snap.source_note || review.source_note || "";
+  const newsList = snap.news_list || [];
+  if (!sourceNote && !newsList.length) return;
+
+  const section = document.createElement("section");
+  section.className = "review-source-info";
+
+  if (sourceNote) {
+    const noteDiv = document.createElement("div");
+    noteDiv.className = "review-source-note";
+    const label = document.createElement("div");
+    label.className = "review-timeline-header";
+    label.textContent = "来源想法";
+    noteDiv.appendChild(label);
+    const text = document.createElement("div");
+    text.className = "review-source-note-text";
+    text.textContent = sourceNote;
+    noteDiv.appendChild(text);
+    section.appendChild(noteDiv);
+  }
+
+  if (newsList.length) {
+    const newsDiv = document.createElement("div");
+    newsDiv.className = "review-source-news";
+    const label = document.createElement("div");
+    label.className = "review-timeline-header";
+    label.textContent = "关联新闻";
+    newsDiv.appendChild(label);
+    newsList.forEach((n) => {
+      const card = document.createElement("div");
+      card.className = "review-timeline-card evidence-card";
+      if (n.source || n.published_at) {
+        const meta = document.createElement("div");
+        meta.className = "review-timeline-evidence-meta";
+        meta.textContent = [n.source, n.published_at].filter(Boolean).join(" · ");
+        card.appendChild(meta);
+      }
+      const title = document.createElement("div");
+      title.className = "review-timeline-evidence-title";
+      title.textContent = n.title || "(无标题)";
+      card.appendChild(title);
+      if (n.summary) {
+        const summary = document.createElement("div");
+        summary.className = "review-timeline-evidence-summary";
+        summary.textContent = n.summary;
+        card.appendChild(summary);
+      }
+      if (n.url) {
+        const link = document.createElement("a");
+        link.className = "review-timeline-evidence-link";
+        link.href = n.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "查看原文";
+        card.appendChild(link);
+      }
+      newsDiv.appendChild(card);
+    });
+    section.appendChild(newsDiv);
+  }
+
+  // Insert after result badge, before timeline
+  if (detailReviewTimeline && detailReviewTimeline.parentElement === detailReviewBody) {
+    detailReviewBody.insertBefore(section, detailReviewTimeline);
+  } else {
+    detailReviewBody.appendChild(section);
+  }
 }
 
 function renderReviewTimeline(review) {
@@ -5982,10 +6061,12 @@ function renderReviewTimeline(review) {
       judgment.textContent = v.judgment;
       card.appendChild(judgment);
 
-      const criteria = document.createElement("div");
-      criteria.className = "review-timeline-criteria";
-      criteria.textContent = `成立标准：${v.criteria}`;
-      card.appendChild(criteria);
+      if (v.criteria) {
+        const criteria = document.createElement("div");
+        criteria.className = "review-timeline-criteria";
+        criteria.textContent = `成立标准：${v.criteria}`;
+        card.appendChild(criteria);
+      }
 
       if (v.revision_reason) {
         const reason = document.createElement("div");
@@ -6022,10 +6103,7 @@ function renderReviewTimeline(review) {
       header.appendChild(typeLabel);
       const time = document.createElement("span");
       time.className = "review-timeline-time";
-      const timeParts = [];
-      if (e.event_date) timeParts.push(e.event_date);
-      if (e.created_at) timeParts.push(e.created_at.slice(0, 16).replace("T", " "));
-      time.textContent = timeParts.join(" · ");
+      time.textContent = e.event_date || (e.created_at ? e.created_at.slice(0, 10) : "");
       header.appendChild(time);
       card.appendChild(header);
 
@@ -6809,8 +6887,9 @@ function buildDateSectionRow(item) {
 }
 
 function appendNewsRow(item, row) {
-  const dateKey = item.date_key || "unknown";
-  if (dateKey !== lastRenderedDateKey) {
+  // Review items don't have date_key; skip date-section header for them
+  const dateKey = item.date_key;
+  if (dateKey && dateKey !== lastRenderedDateKey) {
     const section = buildDateSectionRow(item);
     if (listHint && listHint.parentElement === newsList) {
       newsList.insertBefore(section, listHint);
@@ -6818,6 +6897,8 @@ function appendNewsRow(item, row) {
       newsList.appendChild(section);
     }
     lastRenderedDateKey = dateKey;
+  } else if (!dateKey) {
+    lastRenderedDateKey = null;
   }
   if (listHint && listHint.parentElement === newsList) {
     newsList.insertBefore(row, listHint);
@@ -8684,6 +8765,11 @@ function openReviewCreateFromStandaloneIdea() {
 
 function openReviewCreateForm(ctx) {
   state.pendingReviewSource = ctx;
+  // Save source context for cancel-to-restore
+  state.pendingReviewSource._prevCollection = state.collection;
+  state.pendingReviewSource._prevSelectedId = state.selectedId;
+  state.pendingReviewSource._prevSelectedTrendIdea = state.selectedTrendIdea;
+  state.pendingReviewSource._prevSelectedStandaloneIdea = state.selectedStandaloneIdea;
   hideAllDetailPanelsForReview();
   closeAllReviewPanels();
   detailReviewCreateBody.classList.remove("hidden");
@@ -8752,8 +8838,21 @@ if (reviewCreateRemindAt) {
 
 if (reviewCreateCancelBtn) {
   reviewCreateCancelBtn.addEventListener("click", () => {
+    const ctx = state.pendingReviewSource;
     closeAllReviewPanels();
     state.pendingReviewSource = null;
+    if (ctx && ctx._prevSelectedId) {
+      const item = state.itemsById.get(ctx._prevSelectedId);
+      if (item) { renderDetail(item); return; }
+    }
+    if (ctx && ctx._prevSelectedTrendIdea) {
+      renderTrendIdeaDetail(ctx._prevSelectedTrendIdea);
+      return;
+    }
+    if (ctx && ctx._prevSelectedStandaloneIdea) {
+      renderStandaloneIdeaDetail(ctx._prevSelectedStandaloneIdea);
+      return;
+    }
     renderDetailEmpty();
   });
 }
@@ -8774,7 +8873,6 @@ if (reviewCreateSaveBtn) {
       }
     }
     if (!judgment) { setHint("请填写验证判断"); return; }
-    if (!criteria) { setHint("请填写成立标准"); return; }
     if (!planDate) { setHint("请选择计划验证日期"); return; }
     try {
       const review = await createReview({
@@ -8866,7 +8964,6 @@ if (reviewReviseSaveBtn) {
     const reason = reviewReviseReason ? reviewReviseReason.value.trim() : "";
     const date = reviewReviseDate ? reviewReviseDate.value.trim() : "";
     if (!judgment) { setHint("请填写新判断"); return; }
-    if (!criteria) { setHint("请填写新成立标准"); return; }
     if (!reason) { setHint("请填写修正原因"); return; }
     if (!date) { setHint("请选择日期"); return; }
     try {
@@ -8905,10 +9002,12 @@ if (detailReviewCompleteBtn) {
         j.className = "review-timeline-judgment";
         j.textContent = v.judgment;
         card.appendChild(j);
-        const c = document.createElement("div");
-        c.className = "review-timeline-criteria";
-        c.textContent = `成立标准：${v.criteria}`;
-        card.appendChild(c);
+        if (v.criteria) {
+          const c = document.createElement("div");
+          c.className = "review-timeline-criteria";
+          c.textContent = `成立标准：${v.criteria}`;
+          card.appendChild(c);
+        }
         if (v.revision_reason) {
           const r = document.createElement("div");
           r.className = "review-timeline-reason";
@@ -9027,7 +9126,6 @@ if (reviewRetrackSaveBtn) {
     const criteria = reviewRetrackCriteria ? reviewRetrackCriteria.value.trim() : "";
     const date = reviewRetrackDate ? reviewRetrackDate.value.trim() : "";
     if (!judgment) { setHint("请填写新判断"); return; }
-    if (!criteria) { setHint("请填写成立标准"); return; }
     if (!date) { setHint("请选择计划验证日期"); return; }
     try {
       const updated = await reviewRetrack(review.id, { judgment, criteria, plan_review_date: date });

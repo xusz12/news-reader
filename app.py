@@ -8249,6 +8249,9 @@ def _serialize_review_chain(row: sqlite3.Row, conn: sqlite3.Connection) -> dict:
     chain["effective_status"] = _effective_status(
         chain.get("status", "active"), chain.get("plan_review_date", "")
     )
+    # Date grouping for list view (plan_review_date)
+    plan_date = (chain.get("plan_review_date") or "").strip()
+    chain["date_key"], chain["date_label"] = derive_date_meta(None, plan_date)
     # Get current version info
     v_row = conn.execute(
         "SELECT version_no, judgment, criteria, revision_reason, created_at "
@@ -8293,12 +8296,16 @@ def _serialize_review_chain_detail(row: sqlite3.Row, conn: sqlite3.Connection) -
         (chain["id"],),
     ).fetchall()
     chain["events"] = []
+    chain_created_at = chain.get("created_at", "")
     for e in events:
         ev = dict(e)
         try:
             ev["metadata"] = json.loads(e["metadata_json"] or "{}")
         except (json.JSONDecodeError, TypeError):
             ev["metadata"] = {}
+        # Old records stored plan_review_date as the initial event_date; display actual creation date
+        if ev["event_type"] == "revision" and ev["version_id"] is None and chain_created_at:
+            ev["event_date"] = chain_created_at[:10]
         chain["events"].append(ev)
     # All evidence
     evidence = conn.execute(
@@ -8356,7 +8363,7 @@ def api_reviews_list():
 
         offset = (page - 1) * per
         rows = conn.execute(
-            f"SELECT c.* {base_sql}{where_clause} ORDER BY c.updated_at DESC LIMIT ? OFFSET ?",
+            f"SELECT c.* {base_sql}{where_clause} ORDER BY c.plan_review_date ASC, c.updated_at DESC, c.id DESC LIMIT ? OFFSET ?",
             params + [per, offset],
         ).fetchall()
 
@@ -8399,8 +8406,6 @@ def api_review_create():
 
     if not judgment:
         return jsonify({"ok": False, "error": "missing_judgment"}), 400
-    if not criteria:
-        return jsonify({"ok": False, "error": "missing_criteria"}), 400
     if not plan_review_date:
         return jsonify({"ok": False, "error": "missing_plan_review_date"}), 400
     if len(judgment) > REVIEW_TEXT_MAX_LEN or len(criteria) > REVIEW_TEXT_MAX_LEN:
@@ -8454,7 +8459,7 @@ def api_review_create():
                 """INSERT INTO review_events
                    (chain_id, event_type, event_text, event_date, version_id, metadata_json, created_at)
                    VALUES (?, 'revision', '', ?, NULL, '{}', ?)""",
-                (chain_id, plan_review_date, ts),
+                (chain_id, _today_str(), ts),
             )
 
         row = conn.execute("SELECT * FROM review_chains WHERE id=?", (chain_id,)).fetchone()
@@ -8547,8 +8552,6 @@ def api_review_revise(chain_id: int):
 
     if not judgment:
         return jsonify({"ok": False, "error": "missing_judgment"}), 400
-    if not criteria:
-        return jsonify({"ok": False, "error": "missing_criteria"}), 400
     if not revision_reason:
         return jsonify({"ok": False, "error": "missing_revision_reason"}), 400
     if not event_date:
@@ -8716,8 +8719,6 @@ def api_review_retrack(chain_id: int):
 
     if not judgment:
         return jsonify({"ok": False, "error": "missing_judgment"}), 400
-    if not criteria:
-        return jsonify({"ok": False, "error": "missing_criteria"}), 400
     if not plan_review_date:
         return jsonify({"ok": False, "error": "missing_plan_review_date"}), 400
     try:
@@ -8760,7 +8761,7 @@ def api_review_retrack(chain_id: int):
                 """INSERT INTO review_events
                    (chain_id, event_type, event_text, event_date, version_id, metadata_json, created_at)
                    VALUES (?, 'retracked', ?, ?, NULL, '{"parent_chain_id": ' + ? + '}', ?)""",
-                (new_chain_id, f"从复盘 #{chain_id} 派生", plan_review_date, str(chain_id), ts),
+                (new_chain_id, f"从复盘 #{chain_id} 派生", _today_str(), str(chain_id), ts),
             )
 
         row = conn.execute("SELECT * FROM review_chains WHERE id=?", (new_chain_id,)).fetchone()
