@@ -4,6 +4,8 @@ import importlib
 import json
 import pytest
 import sqlite3
+import subprocess
+import textwrap
 import types
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -7676,3 +7678,1024 @@ def test_market_trend_note_patch_date_tag_direction(tmp_path: Path, monkeypatch)
     data = valid_date.get_json()
     assert data["date"] == "2026-06-01"
     assert data["trend_note"]["note"] == "日期有效"
+
+
+# ── 复盘功能测试 (v2.1.0) ──
+
+
+def _setup_review_env(tmp_path: Path, monkeypatch):
+    """Set up a clean env with DB and reindexed news for review tests."""
+    db_path = tmp_path / "news_index.sqlite3"
+    daily_dir = tmp_path / "DailyNews"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-07-01.md").write_text(
+        """## Reuters · World（1条）
+### [复盘测试新闻](https://example.com/review-test)
+- 发布时间：2026-07-01 12:00:00
+- 摘要：新能源政策即将出台
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    client.post("/api/reindex", json={})
+    return client, app_module
+
+
+def _create_standalone_idea(client, note: str = "这项政策长期可能利好新能源") -> int:
+    resp = client.post("/api/standalone-ideas", json={"note": note})
+    assert resp.status_code == 200
+    return resp.get_json()["idea"]["standalone_id"]
+
+
+def _create_article_note(client, url: str, note: str = "新能源板块即将大涨") -> None:
+    resp = client.put(f"/api/news/url/{url}/note", json={"note": note})
+    if resp.status_code != 200:
+        # fallback: use item-based note endpoint
+        # find item_id for this url
+        news = client.get("/api/news?per=100").get_json()
+        for item in news["items"]:
+            if item["url"] == url:
+                resp = client.put(f"/api/news/{item['id']}/note", json={"note": note})
+                assert resp.status_code == 200
+                return
+        raise RuntimeError(f"cannot find item with url {url}")
+
+
+def test_review_schema_migration_idempotent(tmp_path: Path, monkeypatch):
+    """Schema migration should be idempotent — ensure_db twice without error."""
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    app_module.ensure_db()  # second call should not error
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    # Verify review tables exist
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    assert "review_chains" in tables
+    assert "review_versions" in tables
+    assert "review_events" in tables
+    assert "review_evidence" in tables
+    # Verify news_reminders has review_chain_id
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(news_reminders)").fetchall()}
+    assert "review_chain_id" in cols
+    conn.close()
+
+
+def test_review_create_from_standalone_idea(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+
+    resp = client.post("/api/reviews", json={
+        "source_type": "standalone_idea",
+        "source_key": str(idea_id),
+        "judgment": "政策实施后三个月内新能源融资成本下降",
+        "criteria": "新能源企业平均融资成本数据下降5%以上",
+        "plan_review_date": "2026-10-01",
+    })
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    review = data["review"]
+    assert review["status"] == "active"
+    assert review["effective_status"] == "in_progress"
+    assert review["current_version"] == 1
+    assert review["source_note"] == "这项政策长期可能利好新能源"
+    assert len(review["versions"]) == 1
+    assert review["versions"][0]["judgment"] == "政策实施后三个月内新能源融资成本下降"
+    assert len(review["events"]) == 1
+
+
+def test_review_create_from_article_note(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    url = "https://example.com/review-test"
+    # Create article note
+    news = client.get("/api/news?per=100").get_json()
+    item_id = None
+    for item in news["items"]:
+        if item["url"] == url:
+            item_id = item["id"]
+            break
+    assert item_id is not None
+    resp = client.put(f"/api/news/{item_id}/note", json={"note": "新能源板块要涨"})
+    assert resp.status_code == 200
+
+    resp = client.post("/api/reviews", json={
+        "source_type": "article_note",
+        "source_key": url,
+        "judgment": "新能源板块一周内上涨",
+        "criteria": "板块指数涨幅超过3%",
+        "plan_review_date": "2026-07-08",
+    })
+    assert resp.status_code == 200
+    review = resp.get_json()["review"]
+    assert review["source_note"] == "新能源板块要涨"
+    assert review["source_snapshot"]["news_list"][0]["title"] == "复盘测试新闻"
+
+
+def test_review_create_source_not_found(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    resp = client.post("/api/reviews", json={
+        "source_type": "standalone_idea",
+        "source_key": "99999",
+        "judgment": "test",
+        "criteria": "test",
+        "plan_review_date": "2026-10-01",
+    })
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "source_not_found"
+
+
+def test_review_create_missing_fields(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    base = {"source_type": "standalone_idea", "source_key": str(idea_id)}
+    # missing judgment
+    assert client.post("/api/reviews", json={**base, "criteria": "c", "plan_review_date": "2026-10-01"}).status_code == 400
+    # missing criteria
+    assert client.post("/api/reviews", json={**base, "judgment": "j", "plan_review_date": "2026-10-01"}).status_code == 400
+    # missing date
+    assert client.post("/api/reviews", json={**base, "judgment": "j", "criteria": "c"}).status_code == 400
+    # invalid date
+    assert client.post("/api/reviews", json={**base, "judgment": "j", "criteria": "c", "plan_review_date": "bad"}).status_code == 400
+
+
+def test_review_list_and_filter(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+
+    # Create in_progress review (future date)
+    client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "未来判断", "criteria": "标准", "plan_review_date": "2099-01-01",
+    })
+    # Create pending_review review (past date)
+    idea_id2 = _create_standalone_idea(client, "第二条想法")
+    client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id2),
+        "judgment": "到期判断", "criteria": "标准2", "plan_review_date": "2020-01-01",
+    })
+
+    # All
+    r = client.get("/api/reviews?per=100")
+    assert r.status_code == 200
+    assert r.get_json()["total"] == 2
+
+    # In progress
+    r = client.get("/api/reviews?status=in_progress")
+    assert r.get_json()["total"] == 1
+    assert r.get_json()["items"][0]["current_judgment"] == "未来判断"
+
+    # Pending review
+    r = client.get("/api/reviews?status=pending_review")
+    assert r.get_json()["total"] == 1
+    assert r.get_json()["items"][0]["effective_status"] == "pending_review"
+
+    # Done (none yet)
+    r = client.get("/api/reviews?status=done")
+    assert r.get_json()["total"] == 0
+
+
+def test_review_progress(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+
+    resp = client.post(f"/api/reviews/{chain_id}/progress", json={
+        "event_text": "新政策已发布",
+        "event_date": "2026-07-05",
+        "evidence": [{"news_title": "新政策发布", "news_url": "https://example.com/policy", "news_summary": "政策细则"}],
+    })
+    assert resp.status_code == 200
+    review = resp.get_json()["review"]
+    assert len(review["events"]) == 2  # initial revision + progress
+    assert review["events"][-1]["event_type"] == "progress"
+    assert len(review["evidence"]) == 1
+    assert review["evidence"][0]["news_title"] == "新政策发布"
+
+
+def test_review_revise(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "V1判断", "criteria": "V1标准", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+
+    resp = client.post(f"/api/reviews/{chain_id}/revise", json={
+        "judgment": "V2判断", "criteria": "V2标准",
+        "revision_reason": "新证据出现", "event_date": "2026-07-06",
+    })
+    assert resp.status_code == 200
+    review = resp.get_json()["review"]
+    assert review["current_version"] == 2
+    assert len(review["versions"]) == 2
+    assert review["versions"][0]["judgment"] == "V1判断"
+    assert review["versions"][1]["judgment"] == "V2判断"
+    assert review["versions"][1]["revision_reason"] == "新证据出现"
+
+
+def test_review_complete(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2020-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+
+    resp = client.post(f"/api/reviews/{chain_id}/complete", json={
+        "result": "confirmed",
+        "actual_text": "新能源融资成本确实下降",
+        "bias_text": "低估了政策力度",
+        "experience": "关注政策实施力度而非仅看方向",
+    })
+    assert resp.status_code == 200
+    review = resp.get_json()["review"]
+    assert review["status"] == "done"
+    assert review["effective_status"] == "done"
+    assert review["result"] == "confirmed"
+    assert review["experience"] == "关注政策实施力度而非仅看方向"
+    assert review["completed_at"] != ""
+
+
+def test_review_complete_missing_experience(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2020-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/complete", json={
+        "result": "confirmed", "actual_text": "a", "bias_text": "b",
+    })
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "missing_experience"
+
+
+def test_review_complete_invalid_result(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2020-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/complete", json={
+        "result": "wrong", "actual_text": "a", "bias_text": "b", "experience": "e",
+    })
+    assert resp.status_code == 400
+
+
+def test_review_done_blocks_actions(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2020-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    client.post(f"/api/reviews/{chain_id}/complete", json={
+        "result": "confirmed", "actual_text": "a", "bias_text": "b", "experience": "e",
+    })
+    # Cannot revise
+    assert client.post(f"/api/reviews/{chain_id}/revise", json={
+        "judgment": "j2", "criteria": "c2", "revision_reason": "r", "event_date": "2026-07-06",
+    }).status_code == 409
+    # Cannot progress
+    assert client.post(f"/api/reviews/{chain_id}/progress", json={
+        "event_text": "t", "event_date": "2026-07-06",
+    }).status_code == 409
+    # Cannot continue observing
+    assert client.post(f"/api/reviews/{chain_id}/continue-observing", json={
+        "new_review_date": "2026-12-01",
+    }).status_code == 409
+
+
+def test_review_continue_observing(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2020-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/continue-observing", json={
+        "event_text": "暂不可判断，继续观察",
+        "new_review_date": "2026-12-01",
+    })
+    assert resp.status_code == 200
+    review = resp.get_json()["review"]
+    assert review["status"] == "active"  # still active, not done
+    assert review["plan_review_date"] == "2026-12-01"
+    assert review["effective_status"] == "in_progress"  # future date
+    # Check event recorded
+    assert any(e["event_type"] == "continue_observing" for e in review["events"])
+
+
+def test_review_retrack(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2020-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    client.post(f"/api/reviews/{chain_id}/complete", json={
+        "result": "refuted", "actual_text": "a", "bias_text": "b", "experience": "e",
+    })
+    # Retrack
+    resp = client.post(f"/api/reviews/{chain_id}/retrack", json={
+        "judgment": "新判断", "criteria": "新标准", "plan_review_date": "2027-01-01",
+    })
+    assert resp.status_code == 200
+    new_review = resp.get_json()["review"]
+    assert new_review["parent_chain_id"] == chain_id
+    assert new_review["status"] == "active"
+    assert new_review["current_version"] == 1
+    assert new_review["source_note"] == "这项政策长期可能利好新能源"  # snapshot preserved
+
+
+def test_review_retrack_not_done(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/retrack", json={
+        "judgment": "j2", "criteria": "c2", "plan_review_date": "2027-01-01",
+    })
+    assert resp.status_code == 409
+
+
+def test_review_evidence_add_and_delete(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Add
+    resp = client.post(f"/api/reviews/{chain_id}/evidence", json={
+        "news_title": "证据新闻", "news_url": "https://example.com/ev1", "news_summary": "摘要",
+    })
+    assert resp.status_code == 200
+    ev_id = resp.get_json()["evidence_id"]
+    # Delete
+    resp = client.delete(f"/api/reviews/{chain_id}/evidence/{ev_id}")
+    assert resp.status_code == 200
+    # Verify gone
+    detail = client.get(f"/api/reviews/{chain_id}").get_json()["review"]
+    assert len(detail["evidence"]) == 0
+
+
+def test_review_evidence_wrong_chain(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r1 = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j1", "criteria": "c1", "plan_review_date": "2099-01-01",
+    })
+    chain1 = r1.get_json()["review"]["id"]
+    idea_id2 = _create_standalone_idea(client, "想法2")
+    r2 = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id2),
+        "judgment": "j2", "criteria": "c2", "plan_review_date": "2099-01-01",
+    })
+    chain2 = r2.get_json()["review"]["id"]
+    client.post(f"/api/reviews/{chain2}/evidence", json={
+        "news_title": "证据", "news_url": "https://example.com/ev",
+    })
+    # Try to delete chain2's evidence from chain1
+    ev_id = client.get(f"/api/reviews/{chain2}").get_json()["review"]["evidence"][0]["id"]
+    resp = client.delete(f"/api/reviews/{chain1}/evidence/{ev_id}")
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "evidence_not_belong"
+
+
+def test_review_source_snapshot_survives_idea_deletion(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client, "原始想法文本")
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Delete the original idea
+    client.delete(f"/api/standalone-ideas/{idea_id}")
+    # Review should still be readable with snapshot
+    detail = client.get(f"/api/reviews/{chain_id}").get_json()["review"]
+    assert detail["source_note"] == "原始想法文本"
+    assert detail["source_snapshot"]["source_note"] == "原始想法文本"
+
+
+def test_review_reminder_decoupled(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    # Create review with reminder
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+        "add_reminder": True,
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Find the reminder
+    reminders = client.get("/api/reminders?filter=all").get_json()["items"]
+    review_reminders = [rm for rm in reminders if rm.get("review_chain_id") == chain_id]
+    assert len(review_reminders) == 1
+    reminder_id = review_reminders[0]["id"]
+    # Delete the reminder
+    client.delete(f"/api/reminders/{reminder_id}")
+    # Review should be unaffected
+    detail = client.get(f"/api/reviews/{chain_id}").get_json()["review"]
+    assert detail["status"] == "active"
+    assert detail["plan_review_date"] == "2099-01-01"
+
+
+def test_review_reminder_create_endpoint(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Create reminder via dedicated endpoint
+    resp = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2026-08-01",
+        "note": "记得回来复盘",
+    })
+    assert resp.status_code == 200
+    assert resp.get_json()["reminder_id"] is not None
+
+
+def test_review_full_text_search(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client, "新能源政策观察")
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "新能源融资成本将下降", "criteria": "融资成本数据",
+        "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Add evidence
+    client.post(f"/api/reviews/{chain_id}/evidence", json={
+        "news_title": "新能源融资报告", "news_url": "https://example.com/report",
+    })
+    # Search by judgment text
+    r = client.get("/api/reviews?q=融资成本")
+    assert r.status_code == 200
+    assert r.get_json()["total"] == 1
+    # Search by evidence title
+    r = client.get("/api/reviews?q=融资报告")
+    assert r.get_json()["total"] == 1
+    # Search by source note
+    r = client.get("/api/reviews?q=新能源政策")
+    assert r.get_json()["total"] == 1
+    # No match
+    r = client.get("/api/reviews?q=完全不相关")
+    assert r.get_json()["total"] == 0
+
+
+def test_review_detail_not_found(tmp_path: Path, monkeypatch):
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    assert client.get("/api/reviews/99999").status_code == 404
+
+
+def test_review_progress_with_evidence_complete(tmp_path: Path, monkeypatch):
+    """Progress with evidence should create both event and evidence atomically."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/progress", json={
+        "event_text": "新证据出现",
+        "event_date": "2026-07-05",
+        "evidence": [
+            {"news_title": "证据1", "news_url": "https://example.com/e1"},
+            {"news_title": "证据2", "news_url": "https://example.com/e2"},
+        ],
+    })
+    assert resp.status_code == 200
+    review = resp.get_json()["review"]
+    assert len(review["evidence"]) == 2
+    # Evidence should be linked to the progress event
+    event_id = review["events"][-1]["id"]
+    assert all(ev["event_id"] == event_id for ev in review["evidence"])
+
+
+def test_review_news_reminders_migration_compatible(tmp_path: Path, monkeypatch):
+    """Old reminders without review_chain_id should still work after migration."""
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    # Insert a legacy reminder directly
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """INSERT INTO news_reminders
+           (item_id, item_title_snapshot, item_url_snapshot, event_title, event_date,
+            remind_at, note, status, created_at, updated_at)
+           VALUES (NULL, 'old', 'http://old', 'old event', '2026-07-01',
+                   '2026-07-01', '', 'active', '2026-07-01 00:00:00', '2026-07-01 00:00:00')"""
+    )
+    conn.commit()
+    conn.close()
+    # Reload and ensure_db again
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    r = client.get("/api/reminders?filter=all")
+    assert r.status_code == 200
+    items = r.get_json()["items"]
+    assert any(i["event_title"] == "old event" for i in items)
+
+
+def test_review_create_remind_at_default(tmp_path: Path, monkeypatch):
+    """add_reminder with no remind_at should default to plan_review_date 09:00."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+        "add_reminder": True,
+    })
+    chain_id = r.get_json()["review"]["id"]
+    reminders = client.get("/api/reminders?filter=all").get_json()["items"]
+    review_reminders = [rm for rm in reminders if rm.get("review_chain_id") == chain_id]
+    assert len(review_reminders) == 1
+    assert "09:00" in review_reminders[0]["remind_at"]
+
+
+def test_review_create_remind_at_custom(tmp_path: Path, monkeypatch):
+    """add_reminder with explicit remind_at should use it."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+        "add_reminder": True,
+        "remind_at": "2099-01-01T14:30",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    reminders = client.get("/api/reminders?filter=all").get_json()["items"]
+    review_reminders = [rm for rm in reminders if rm.get("review_chain_id") == chain_id]
+    assert len(review_reminders) == 1
+    assert "14:30" in review_reminders[0]["remind_at"]
+
+
+def test_review_create_remind_at_invalid(tmp_path: Path, monkeypatch):
+    """add_reminder with invalid remind_at should fail."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+        "add_reminder": True,
+        "remind_at": "not-a-time",
+    })
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "invalid_remind_at"
+
+
+def test_review_create_no_reminder_when_unchecked(tmp_path: Path, monkeypatch):
+    """add_reminder=False should not create any reminder."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+        "add_reminder": False,
+    })
+    chain_id = r.get_json()["review"]["id"]
+    reminders = client.get("/api/reminders?filter=all").get_json()["items"]
+    assert not any(rm.get("review_chain_id") == chain_id for rm in reminders)
+
+
+def test_review_reminder_endpoint_custom_remind_at(tmp_path: Path, monkeypatch):
+    """Dedicated reminder endpoint should accept remind_at."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2026-08-01",
+        "remind_at": "2026-08-01T10:00",
+    })
+    assert resp.status_code == 200
+    reminders = client.get("/api/reminders?filter=all").get_json()["items"]
+    review_reminders = [rm for rm in reminders if rm.get("review_chain_id") == chain_id]
+    assert len(review_reminders) == 1
+    assert "10:00" in review_reminders[0]["remind_at"]
+
+
+def test_review_reminder_endpoint_invalid_remind_at(tmp_path: Path, monkeypatch):
+    """Dedicated reminder endpoint should reject invalid remind_at."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2026-08-01",
+        "remind_at": "garbage",
+    })
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "invalid_remind_at"
+
+
+def test_review_create_remind_at_trailing_garbage(tmp_path: Path, monkeypatch):
+    """Trailing characters after YYYY-MM-DDTHH:MM must be rejected."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+        "add_reminder": True,
+        "remind_at": "2099-01-01T14:30abc",
+    })
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "invalid_remind_at"
+
+
+def test_review_reminder_endpoint_trailing_garbage(tmp_path: Path, monkeypatch):
+    """Dedicated reminder endpoint must reject trailing garbage."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2026-08-01",
+        "remind_at": "2026-08-01T10:00abc",
+    })
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "invalid_remind_at"
+
+
+def test_review_create_remind_at_semantic_invalid(tmp_path: Path, monkeypatch):
+    """Non-existent date/time (e.g. 24:00) must be rejected."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    for bad in ("2099-02-30T09:00", "2099-01-01T24:00", "2099-01-01T09:00+08:00"):
+        r = client.post("/api/reviews", json={
+            "source_type": "standalone_idea", "source_key": str(idea_id),
+            "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+            "add_reminder": True,
+            "remind_at": bad,
+        })
+        assert r.status_code == 400, f"expected 400 for {bad}"
+        assert r.get_json()["error"] == "invalid_remind_at"
+
+
+def test_review_reminder_endpoint_semantic_invalid(tmp_path: Path, monkeypatch):
+    """Dedicated endpoint must reject non-existent date/time and seconds."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    for bad in ("2026-02-30T10:00", "2026-08-01T10:00:00", "2026-08-01T24:00"):
+        resp = client.post(f"/api/reviews/{chain_id}/reminders", json={
+            "event_date": "2026-08-01",
+            "remind_at": bad,
+        })
+        assert resp.status_code == 400, f"expected 400 for {bad}"
+        assert resp.get_json()["error"] == "invalid_remind_at"
+
+
+def test_review_create_remind_at_canonical_format(tmp_path: Path, monkeypatch):
+    """Review create should store remind_at in canonical space format."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+        "add_reminder": True,
+        "remind_at": "2099-01-01T14:30",
+    })
+    assert r.status_code == 200
+    chain_id = r.get_json()["review"]["id"]
+    reminders = client.get("/api/reminders?filter=all").get_json()["items"]
+    review_reminders = [rm for rm in reminders if rm.get("review_chain_id") == chain_id]
+    assert len(review_reminders) == 1
+    assert review_reminders[0]["remind_at"] == "2099-01-01 14:30:00"
+
+
+def test_review_reminder_endpoint_canonical_format(tmp_path: Path, monkeypatch):
+    """Dedicated reminder endpoint should store remind_at in canonical space format."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    resp = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2026-08-01",
+        "remind_at": "2026-08-01T10:00",
+    })
+    assert resp.status_code == 200
+    reminders = client.get("/api/reminders?filter=all").get_json()["items"]
+    review_reminders = [rm for rm in reminders if rm.get("review_chain_id") == chain_id]
+    assert len(review_reminders) == 1
+    assert review_reminders[0]["remind_at"] == "2026-08-01 10:00:00"
+
+
+def test_review_reminder_is_due_with_canonical_format(tmp_path: Path, monkeypatch):
+    """A reminder set to a past time today must be marked is_due in the list and SQL summary."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "j", "criteria": "c", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Pick a time one hour ago to guarantee it is past, while still using today's date.
+    now = datetime.now()
+    past = now - timedelta(hours=1)
+    remind_at_str = past.strftime("%Y-%m-%dT%H:%M")
+    resp = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": past.strftime("%Y-%m-%d"),
+        "remind_at": remind_at_str,
+    })
+    assert resp.status_code == 200
+
+    reminders = client.get("/api/reminders?filter=all").get_json()["items"]
+    review_reminders = [rm for rm in reminders if rm.get("review_chain_id") == chain_id]
+    assert len(review_reminders) == 1
+    assert review_reminders[0]["is_due"] is True
+    # The SQL-level summary should also reflect at least one due reminder.
+    summary = client.get("/api/reminders").get_json()["summary"]
+    assert summary["due_total"] >= 1
+
+
+def test_review_search_snapshot_news_title(tmp_path: Path, monkeypatch):
+    """Full-text search should find reviews by snapshot-associated news title."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    _create_article_note(client, "https://example.com/review-test", "新闻想法备注")
+    r = client.post("/api/reviews", json={
+        "source_type": "article_note", "source_key": "https://example.com/review-test",
+        "judgment": "判断A", "criteria": "标准A", "plan_review_date": "2099-01-01",
+    })
+    assert r.status_code == 200
+    # The snapshot should contain the news title "复盘测试新闻"
+    r = client.get("/api/reviews?q=复盘测试新闻")
+    assert r.get_json()["total"] == 1
+
+
+def test_review_search_snapshot_news_summary(tmp_path: Path, monkeypatch):
+    """Full-text search should find reviews by snapshot-associated news summary."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    _create_article_note(client, "https://example.com/review-test", "新闻想法备注")
+    r = client.post("/api/reviews", json={
+        "source_type": "article_note", "source_key": "https://example.com/review-test",
+        "judgment": "判断B", "criteria": "标准B", "plan_review_date": "2099-01-01",
+    })
+    assert r.status_code == 200
+    # The snapshot should contain the news summary "新能源政策即将出台"
+    r = client.get("/api/reviews?q=新能源政策即将出台")
+    assert r.get_json()["total"] == 1
+
+
+def test_review_search_evidence_url(tmp_path: Path, monkeypatch):
+    """Full-text search should find reviews by evidence URL."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client)
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "判断C", "criteria": "标准C", "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    client.post(f"/api/reviews/{chain_id}/evidence", json={
+        "news_title": "证据标题",
+        "news_url": "https://evidence-test-url.example.com/unique",
+    })
+    r = client.get("/api/reviews?q=evidence-test-url")
+    assert r.get_json()["total"] == 1
+
+
+def test_review_search_no_duplicate(tmp_path: Path, monkeypatch):
+    """Search results should not duplicate reviews even with multiple matches."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    idea_id = _create_standalone_idea(client, "新能源政策观察")
+    r = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "新能源融资成本将下降", "criteria": "融资成本数据",
+        "plan_review_date": "2099-01-01",
+    })
+    chain_id = r.get_json()["review"]["id"]
+    # Add evidence that also matches the search term
+    client.post(f"/api/reviews/{chain_id}/evidence", json={
+        "news_title": "新能源融资报告", "news_url": "https://example.com/report",
+    })
+    r = client.get("/api/reviews?q=新能源")
+    assert r.get_json()["total"] == 1
+    assert len(r.get_json()["items"]) == 1
+
+
+
+def test_review_create_function_loads_in_global_scope():
+    """Review creation must remain callable after the front-end script has loaded."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) {
+  throw new Error("front-end bootstrap marker missing");
+}
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by scope regression test");
+
+const noop = () => {};
+const element = new Proxy(noop, {
+  get(target, prop) {
+    if (["addEventListener", "removeEventListener", "appendChild", "removeChild", "setAttribute", "removeAttribute", "focus", "blur", "click"].includes(prop)) return noop;
+    if (["querySelectorAll", "getElementsByTagName"].includes(prop)) return () => [];
+    if (prop === "querySelector") return () => element;
+    if (prop === "classList") return { add: noop, remove: noop, toggle: noop, contains: () => false };
+    if (prop === "style" || prop === "dataset") return element;
+    if (prop === "children" || prop === "options") return [];
+    if (prop === "length") return 0;
+    if (["value", "textContent", "innerHTML", "className"].includes(prop)) return "";
+    if (prop === "checked" || prop === "disabled") return false;
+    if (prop === Symbol.iterator) return function* () {};
+    return element;
+  },
+  set() { return true; },
+  apply() { return undefined; },
+});
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const document = {
+  getElementById: () => element,
+  querySelector: () => element,
+  querySelectorAll: () => [],
+  createElement: () => element,
+  addEventListener: noop,
+  body: element,
+  documentElement: element,
+};
+const requests = [];
+const fetch = async (url, init = {}) => {
+  requests.push([url, init]);
+  const isReviewCreate = url === "/api/reviews" && init.method === "POST";
+  return {
+    ok: true,
+    json: async () => isReviewCreate
+      ? { ok: true, review: { id: "new-review" } }
+      : { ok: true, items: [], summary: {}, page: 1, pages: 1, total: 0, has_more: false },
+  };
+};
+const localStorage = { getItem: () => null, setItem: noop };
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  localStorage,
+};
+const context = {
+  console, document, window, localStorage, IntersectionObserver, fetch,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+(async () => {
+  if (typeof context.createReview !== "function") {
+    throw new Error(`createReview type=${typeof context.createReview}`);
+  }
+  const review = await context.createReview({ source_type: "standalone_idea", source_key: "1" });
+  if (review.id !== "new-review") throw new Error("createReview response was not returned");
+  if (!requests.some(([url, init]) => url === "/api/reviews" && init.method === "POST")) {
+    throw new Error("createReview did not issue POST /api/reviews");
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+def test_review_create_source_key_extraction():
+    """"加入复盘" open handlers must extract numeric source keys from composite idea_id."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) {
+  throw new Error("front-end bootstrap marker missing");
+}
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by source_key regression test");
+source = source.replace("let state = {", "var state = {");
+
+const noop = () => {};
+const element = new Proxy(noop, {
+  get(target, prop) {
+    if (["addEventListener", "removeEventListener", "appendChild", "removeChild", "setAttribute", "removeAttribute", "focus", "blur", "click"].includes(prop)) return noop;
+    if (["querySelectorAll", "getElementsByTagName"].includes(prop)) return () => [];
+    if (prop === "querySelector") return () => element;
+    if (prop === "classList") return { add: noop, remove: noop, toggle: noop, contains: () => false };
+    if (prop === "style" || prop === "dataset") return element;
+    if (prop === "children" || prop === "options") return [];
+    if (prop === "length") return 0;
+    if (["value", "textContent", "innerHTML", "className"].includes(prop)) return "";
+    if (prop === "checked" || prop === "disabled") return false;
+    if (prop === Symbol.iterator) return function* () {};
+    return element;
+  },
+  set() { return true; },
+  apply() { return undefined; },
+});
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const document = {
+  getElementById: () => element,
+  querySelector: () => element,
+  querySelectorAll: () => [],
+  createElement: () => element,
+  addEventListener: noop,
+  body: element,
+  documentElement: element,
+};
+const fetch = async () => ({ ok: true, json: async () => ({ ok: true }) });
+const localStorage = { getItem: () => null, setItem: noop };
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  localStorage,
+};
+const context = {
+  console, document, window, localStorage, IntersectionObserver, fetch,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+
+// Article path: source_key should be the news URL.
+context.state.itemsById = new Map([
+  ["item-1", { url: "https://example.com/news-1", title: "t", summary: "s" }]
+]);
+context.state.selectedId = "item-1";
+context.openReviewCreateFromArticle();
+assert(context.state.pendingReviewSource.source_type === "article_note", "article type mismatch");
+assert(context.state.pendingReviewSource.source_key === "https://example.com/news-1", "article source_key should be URL");
+
+// Trend path: source_key should be numeric trend_note_id.
+context.state.selectedTrendIdea = { trend_note_id: 7, note: "n", tag_label: "", trend_date_key: "" };
+context.openReviewCreateFromTrendIdea();
+assert(context.state.pendingReviewSource.source_type === "market_trend_note", "trend type mismatch");
+assert(context.state.pendingReviewSource.source_key === "7", "trend source_key should be numeric id");
+
+// Standalone path: source_key should be numeric standalone_id.
+context.state.selectedStandaloneIdea = { standalone_id: 42, note: "n", created_at: "2026-07-01" };
+context.openReviewCreateFromStandaloneIdea();
+assert(context.state.pendingReviewSource.source_type === "standalone_idea", "standalone type mismatch");
+assert(context.state.pendingReviewSource.source_key === "42", "standalone source_key should be numeric id");
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)

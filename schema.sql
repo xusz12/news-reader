@@ -270,3 +270,74 @@ CREATE TABLE IF NOT EXISTS standalone_ideas (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- ── 复盘功能 (v2.1.0) ──
+
+CREATE TABLE IF NOT EXISTS review_chains (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  parent_chain_id INTEGER DEFAULT NULL REFERENCES review_chains(id),
+  source_type TEXT NOT NULL,             -- 'article_note' | 'market_trend_note' | 'standalone_idea'
+  source_key TEXT NOT NULL,              -- article_note: url; others: str(id)
+  source_note TEXT NOT NULL,             -- 原想法正文快照
+  source_created_at TEXT NOT NULL,
+  source_tag_key TEXT DEFAULT '',
+  source_tag_label TEXT DEFAULT '',
+  source_snapshot_json TEXT NOT NULL DEFAULT '{}',  -- 完整来源快照（关联新闻等）
+  status TEXT NOT NULL DEFAULT 'active', -- 'active' | 'done'
+  current_version INTEGER NOT NULL DEFAULT 1,
+  plan_review_date TEXT NOT NULL,
+  result TEXT DEFAULT '',                -- 'confirmed' | 'refuted' | 'inconclusive'
+  actual_text TEXT DEFAULT '',
+  bias_text TEXT DEFAULT '',
+  experience TEXT DEFAULT '',
+  completed_at TEXT DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_chains_status_date
+ON review_chains(status, plan_review_date);
+
+CREATE INDEX IF NOT EXISTS idx_review_chains_source
+ON review_chains(source_type, source_key);
+
+CREATE TABLE IF NOT EXISTS review_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chain_id INTEGER NOT NULL REFERENCES review_chains(id) ON DELETE CASCADE,
+  version_no INTEGER NOT NULL,
+  judgment TEXT NOT NULL,
+  criteria TEXT NOT NULL,
+  revision_reason TEXT DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(chain_id, version_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_versions_chain
+ON review_versions(chain_id, version_no);
+
+CREATE TABLE IF NOT EXISTS review_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chain_id INTEGER NOT NULL REFERENCES review_chains(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,              -- 'progress' | 'revision' | 'review_completed' | 'continue_observing' | 'retracked'
+  event_text TEXT DEFAULT '',
+  event_date TEXT NOT NULL,
+  version_id INTEGER DEFAULT NULL REFERENCES review_versions(id),
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_events_chain
+ON review_events(chain_id, created_at);
+
+CREATE TABLE IF NOT EXISTS review_evidence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chain_id INTEGER NOT NULL REFERENCES review_chains(id) ON DELETE CASCADE,
+  event_id INTEGER DEFAULT NULL REFERENCES review_events(id) ON DELETE CASCADE,
+  news_title TEXT NOT NULL,
+  news_summary TEXT DEFAULT '',
+  news_url TEXT NOT NULL,
+  added_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_evidence_chain
+ON review_evidence(chain_id);

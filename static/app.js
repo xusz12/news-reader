@@ -18,6 +18,12 @@ let state = {
   selectedTrackedTopicId: null,
   reminderFilter: "active", // active | done | all
   ideaFilter: "all", // all | article | trend | standalone
+  reviewFilter: "all", // all | in_progress | pending_review | done
+  selectedReviewId: null,
+  reviewListItems: [],
+  currentReview: null,
+  pendingReviewSource: null,
+  reviewReminderUserTouched: false,
   itemsById: new Map(),
   reminderItems: [],
   dailyBriefings: [],
@@ -125,8 +131,73 @@ const navRemindersBtn = document.getElementById("navRemindersBtn");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
+const navReviewsBtn = document.getElementById("navReviewsBtn");
 const navTrackedBtn = document.getElementById("navTrackedBtn");
 const navMarketTagsBtn = document.getElementById("navMarketTagsBtn");
+// Review elements
+const reviewFilterBar = document.getElementById("reviewFilterBar");
+const reviewFilterAllBtn = document.getElementById("reviewFilterAllBtn");
+const reviewFilterActiveBtn = document.getElementById("reviewFilterActiveBtn");
+const reviewFilterPendingBtn = document.getElementById("reviewFilterPendingBtn");
+const reviewFilterDoneBtn = document.getElementById("reviewFilterDoneBtn");
+const detailReviewBody = document.getElementById("detailReviewBody");
+const detailReviewCreateBody = document.getElementById("detailReviewCreateBody");
+const detailReviewAddBtn = document.getElementById("detailReviewAddBtn");
+const detailTrendIdeaReviewBtn = document.getElementById("detailTrendIdeaReviewBtn");
+const detailStandaloneIdeaReviewBtn = document.getElementById("detailStandaloneIdeaReviewBtn");
+// Review detail elements
+const detailReviewTitle = document.getElementById("detailReviewTitle");
+const detailReviewMeta = document.getElementById("detailReviewMeta");
+const detailReviewResultBadge = document.getElementById("detailReviewResultBadge");
+const detailReviewTimeline = document.getElementById("detailReviewTimeline");
+const detailReviewProgressBtn = document.getElementById("detailReviewProgressBtn");
+const detailReviewReviseBtn = document.getElementById("detailReviewReviseBtn");
+const detailReviewCompleteBtn = document.getElementById("detailReviewCompleteBtn");
+const detailReviewRetrackBtn = document.getElementById("detailReviewRetrackBtn");
+const detailReviewProgressForm = document.getElementById("detailReviewProgressForm");
+const detailReviewReviseForm = document.getElementById("detailReviewReviseForm");
+const detailReviewCompleteForm = document.getElementById("detailReviewCompleteForm");
+const detailReviewRetrackForm = document.getElementById("detailReviewRetrackForm");
+// Review create form elements
+const reviewCreateSourceNote = document.getElementById("reviewCreateSourceNote");
+const reviewCreateSourceMeta = document.getElementById("reviewCreateSourceMeta");
+const reviewCreateJudgment = document.getElementById("reviewCreateJudgment");
+const reviewCreateCriteria = document.getElementById("reviewCreateCriteria");
+const reviewCreateDate = document.getElementById("reviewCreateDate");
+const reviewCreateAddReminder = document.getElementById("reviewCreateAddReminder");
+const reviewCreateRemindAt = document.getElementById("reviewCreateRemindAt");
+const reviewCreateSaveBtn = document.getElementById("reviewCreateSaveBtn");
+const reviewCreateCancelBtn = document.getElementById("reviewCreateCancelBtn");
+// Review progress form elements
+const reviewProgressText = document.getElementById("reviewProgressText");
+const reviewProgressDate = document.getElementById("reviewProgressDate");
+const reviewProgressSaveBtn = document.getElementById("reviewProgressSaveBtn");
+const reviewProgressCancelBtn = document.getElementById("reviewProgressCancelBtn");
+// Review revise form elements
+const reviewReviseJudgment = document.getElementById("reviewReviseJudgment");
+const reviewReviseCriteria = document.getElementById("reviewReviseCriteria");
+const reviewReviseReason = document.getElementById("reviewReviseReason");
+const reviewReviseDate = document.getElementById("reviewReviseDate");
+const reviewReviseSaveBtn = document.getElementById("reviewReviseSaveBtn");
+const reviewReviseCancelBtn = document.getElementById("reviewReviseCancelBtn");
+// Review complete form elements
+const reviewCompleteVersions = document.getElementById("reviewCompleteVersions");
+const reviewCompleteActual = document.getElementById("reviewCompleteActual");
+const reviewCompleteResult = document.getElementById("reviewCompleteResult");
+const reviewCompleteBias = document.getElementById("reviewCompleteBias");
+const reviewCompleteExperience = document.getElementById("reviewCompleteExperience");
+const reviewCompleteSaveBtn = document.getElementById("reviewCompleteSaveBtn");
+const reviewCompleteCancelBtn = document.getElementById("reviewCompleteCancelBtn");
+const reviewContinueObserveSection = document.getElementById("reviewContinueObserveSection");
+const reviewContinueDate = document.getElementById("reviewContinueDate");
+const reviewContinueSaveBtn = document.getElementById("reviewContinueSaveBtn");
+const reviewContinueDoneBtn = document.getElementById("reviewContinueDoneBtn");
+// Review retrack form elements
+const reviewRetrackJudgment = document.getElementById("reviewRetrackJudgment");
+const reviewRetrackCriteria = document.getElementById("reviewRetrackCriteria");
+const reviewRetrackDate = document.getElementById("reviewRetrackDate");
+const reviewRetrackSaveBtn = document.getElementById("reviewRetrackSaveBtn");
+const reviewRetrackCancelBtn = document.getElementById("reviewRetrackCancelBtn");
 const mobileCollectionTriggerBtn = document.getElementById("mobileCollectionTriggerBtn");
 const mobileReadLaterTabBtn = document.getElementById("mobileReadLaterTabBtn");
 const mobileMoreTabBtn = document.getElementById("mobileMoreTabBtn");
@@ -1618,6 +1689,9 @@ function iconSvg(name, filled = false) {
   if (name === "sort-desc") {
     return `<svg ${common}><path d="M8 7v10"/><path d="m5.5 14.5 2.5 2.5 2.5-2.5"/><path d="M14 8.5h2"/><path d="M14 12h3"/><path d="M14 15.5h4"/></svg>`;
   }
+  if (name === "target") {
+    return `<svg ${common}><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="M2 12h3"/><path d="M19 12h3"/></svg>`;
+  }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
 
@@ -1854,6 +1928,21 @@ function updateIdeaFilterBar() {
   if (!ideaFilterBar) return;
   const visible = state.collection === "notes";
   ideaFilterBar.classList.toggle("hidden", !visible);
+  if (reviewFilterBar) {
+    const reviewVisible = state.collection === "reviews";
+    reviewFilterBar.classList.toggle("hidden", !reviewVisible);
+    if (reviewVisible) {
+      [
+        [reviewFilterAllBtn, "all"],
+        [reviewFilterActiveBtn, "in_progress"],
+        [reviewFilterPendingBtn, "pending_review"],
+        [reviewFilterDoneBtn, "done"],
+      ].forEach(([button, value]) => {
+        if (!button) return;
+        button.classList.toggle("active", state.reviewFilter === value);
+      });
+    }
+  }
   if (!visible) return;
   [
     [ideaFilterAllBtn, "all"],
@@ -2201,6 +2290,7 @@ function updateCollectionButtons() {
   if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
   if (navTrackedBtn) navTrackedBtn.classList.toggle("active", state.collection === "tracked");
   if (navMarketTagsBtn) navMarketTagsBtn.classList.toggle("active", state.collection === "market_tags");
+  if (navReviewsBtn) navReviewsBtn.classList.toggle("active", state.collection === "reviews");
   if (mobileCollectionTriggerBtn) {
     mobileCollectionTriggerBtn.classList.toggle("active", state.collection === "feed");
     mobileCollectionTriggerBtn.textContent = "新闻";
@@ -2240,6 +2330,7 @@ function updateMobileFilterCollectionText() {
     notes: "想法",
     tracked: "跟踪",
     market_tags: "板块",
+    reviews: "复盘",
   };
   mobileFilterCollection.textContent = `当前视图：${names[state.collection] || "新闻"}`;
 }
@@ -2318,6 +2409,7 @@ function renderMobileMoreOptions() {
       items: [
         { key: "tracked", label: "跟踪", desc: "长期主题与时间线" },
         { key: "market_tags", label: "板块", desc: "板块工作台与置顶信息" },
+        { key: "reviews", label: "复盘", desc: "版本化判断复盘" },
       ],
     },
   ];
@@ -2394,7 +2486,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.0.3.2";
+  version.textContent = "News Reader v2.1.0";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3133,6 +3225,17 @@ function renderMeta() {
     pageInfo.textContent = `${state.page} / ${state.pages}`;
     return;
   }
+  if (state.collection === "reviews") {
+    const reviewFilterNames = {
+      all: "全部",
+      in_progress: "进行中",
+      pending_review: "待复盘",
+      done: "已完成",
+    };
+    meta.textContent = `复盘 · ${reviewFilterNames[state.reviewFilter] || "全部"} · 共 ${state.total} 条`;
+    pageInfo.textContent = `${state.page} / ${state.pages}`;
+    return;
+  }
   if (state.collection === "tracked") {
     const topic = selectedTrackedTopic();
     meta.textContent = topic
@@ -3214,6 +3317,7 @@ function clearStandaloneIdeaDetailState() {
 function emptyDetailMessage() {
   if (state.collection === "daily") return "选择一份日报查看详情";
   if (state.collection === "notes") return "选择一条想法查看详情";
+  if (state.collection === "reviews") return "选择一条复盘查看详情";
   if (state.collection === "market_tags") return state.marketWorkbenchTag ? "选择一条板块内容查看详情" : "选择一条板块新闻查看详情";
   return "选择一条新闻查看摘要与正文";
 }
@@ -4227,6 +4331,10 @@ function refreshDetailNoteUI(item) {
   detailNoteToggleBtn.setAttribute("aria-label", hasNote ? "编辑想法" : "写想法");
   detailNoteCard.classList.toggle("hidden", !hasNote);
   detailNoteText.textContent = hasNote ? noteText : "";
+  if (detailReviewAddBtn) {
+    detailReviewAddBtn.classList.toggle("hidden", !hasNote);
+    applyIcon(detailReviewAddBtn, "target", { label: "加入复盘" });
+  }
   if (!detailNoteEditor.classList.contains("hidden") && !detailNoteSaveBtn.disabled) {
     detailNoteInput.value = noteText;
   }
@@ -4698,6 +4806,7 @@ function renderDetail(item) {
     if (detailDailyBody) detailDailyBody.classList.add("hidden");
     detailBody.classList.add("hidden");
     detailChatBody.classList.add("hidden");
+    closeAllReviewPanels();
     renderDetailEmpty();
     updateWorkspaceLayout();
     return;
@@ -4705,6 +4814,7 @@ function renderDetail(item) {
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
+  closeAllReviewPanels();
   detailEmpty.classList.add("hidden");
   detailBody.classList.remove("hidden");
   syncDetailReturnButton();
@@ -5396,6 +5506,93 @@ function buildMarketOverviewRow(item) {
   return li;
 }
 
+
+function reviewStatusLabel(status) {
+  if (status === "done") return "已完成";
+  if (status === "pending_review") return "待复盘";
+  return "进行中";
+}
+
+function reviewResultLabel(result) {
+  if (result === "confirmed") return "成立";
+  if (result === "refuted") return "未成立";
+  if (result === "inconclusive") return "暂不可判断";
+  return "";
+}
+
+function reviewSourceTypeLabel(sourceType) {
+  if (sourceType === "article_note") return "新闻想法";
+  if (sourceType === "market_trend_note") return "板块想法";
+  if (sourceType === "standalone_idea") return "独立想法";
+  return sourceType;
+}
+
+function buildReviewRow(item) {
+  const li = document.createElement("li");
+  li.className = "news-item review-item";
+  li.dataset.reviewId = String(item.id);
+  if (String(state.selectedReviewId) === String(item.id)) li.classList.add("selected");
+
+  const line1 = document.createElement("div");
+  line1.className = "line1";
+  const statusBadge = document.createElement("span");
+  const effStatus = item.effective_status || "in_progress";
+  statusBadge.className = `note-badge review-status-badge ${effStatus}`;
+  statusBadge.textContent = reviewStatusLabel(effStatus);
+  line1.appendChild(statusBadge);
+
+  const versionBadge = document.createElement("span");
+  versionBadge.className = "note-badge review-version-badge";
+  versionBadge.textContent = `V${item.current_version || 1}`;
+  line1.appendChild(versionBadge);
+
+  const resultBadge = document.createElement("span");
+  if (item.result && item.status === "done") {
+    resultBadge.className = `note-badge review-result-badge ${item.result}`;
+    resultBadge.textContent = reviewResultLabel(item.result);
+    line1.appendChild(resultBadge);
+  }
+
+  const text = document.createElement("span");
+  text.className = "line1-text";
+  const parts = [];
+  if (item.plan_review_date) parts.push(`计划 ${item.plan_review_date}`);
+  if (item.latest_event_at) parts.push(`最近 ${item.latest_event_at.slice(0, 10)}`);
+  text.textContent = parts.join(" · ");
+  line1.appendChild(text);
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = item.current_judgment || "(无判断)";
+
+  const summary = document.createElement("p");
+  summary.className = "summary";
+  const summaryParts = [];
+  summaryParts.push(reviewSourceTypeLabel(item.source_type));
+  if (item.source_tag_label) summaryParts.push(item.source_tag_label);
+  summary.textContent = summaryParts.join(" · ");
+
+  const notePreview = document.createElement("p");
+  notePreview.className = "row-note-preview";
+  notePreview.textContent = item.source_note || "";
+  notePreview.classList.add("full-text");
+
+  li.appendChild(line1);
+  li.appendChild(title);
+  li.appendChild(summary);
+  li.appendChild(notePreview);
+
+  li.addEventListener("click", async () => {
+    await openReviewCard(item);
+  });
+  return li;
+}
+
+function syncReviewRowSelection() {
+  newsList.querySelectorAll(".review-item").forEach((row) => {
+    row.classList.toggle("selected", row.dataset.reviewId === String(state.selectedReviewId));
+  });
+}
 function removeMarketWorkbenchSummaryInline() {
   if (!newsList) return;
   newsList.querySelectorAll(".market-summary-row").forEach((node) => node.remove());
@@ -5594,6 +5791,7 @@ function renderTrendIdeaDetail(item) {
   detailBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
   detailChatBody.classList.add("hidden");
+  closeAllReviewPanels();
   if (!item) {
     clearTrendIdeaDetailState();
     renderDetailEmpty();
@@ -5625,6 +5823,7 @@ function renderStandaloneIdeaDetail(item) {
   detailBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
   detailChatBody.classList.add("hidden");
+  closeAllReviewPanels();
   if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
   if (!item) {
     clearStandaloneIdeaDetailState();
@@ -5642,6 +5841,283 @@ function renderStandaloneIdeaDetail(item) {
   updateWorkspaceLayout();
 }
 
+
+function closeAllReviewPanels() {
+  if (detailReviewBody) detailReviewBody.classList.add("hidden");
+  if (detailReviewCreateBody) detailReviewCreateBody.classList.add("hidden");
+}
+
+function hideAllDetailPanelsForReview() {
+  closeTagAdminView();
+  closeTrendComposerView();
+  resetDetailChatState({ keepProvider: true });
+  stopDetailPolling();
+  closeMarketPicker();
+  closeReminderEditor();
+  if (detailReminderCard) detailReminderCard.classList.add("hidden");
+  if (detailBody) detailBody.classList.add("hidden");
+  if (detailDailyBody) detailDailyBody.classList.add("hidden");
+  if (detailChatBody) detailChatBody.classList.add("hidden");
+  if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
+  if (detailStandaloneIdeaBody) detailStandaloneIdeaBody.classList.add("hidden");
+  if (detailStandaloneIdeaNewBody) detailStandaloneIdeaNewBody.classList.add("hidden");
+  if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
+  if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
+  if (detailTagAdminBody) detailTagAdminBody.classList.add("hidden");
+}
+
+async function openReviewCard(item) {
+  if (!item) return;
+  state.selectedReviewId = item.id;
+  syncReviewRowSelection();
+  hideAllDetailPanelsForReview();
+  detailEmpty.classList.add("hidden");
+  closeAllReviewPanels();
+  detailReviewBody.classList.remove("hidden");
+
+  // Show loading state
+  detailReviewTitle.textContent = "加载中…";
+  detailReviewMeta.textContent = "";
+  if (detailReviewResultBadge) {
+    detailReviewResultBadge.classList.add("hidden");
+    detailReviewResultBadge.textContent = "";
+    detailReviewResultBadge.className = "review-result-badge hidden";
+  }
+  detailReviewTimeline.innerHTML = "";
+  hideAllReviewForms();
+
+  try {
+    const review = await fetchReviewDetail(item.id);
+    renderReviewDetail(review);
+  } catch (err) {
+    detailReviewTitle.textContent = "加载失败";
+    detailReviewMeta.textContent = String(err.message || err);
+  }
+  openDetailOnMobile();
+  updateWorkspaceLayout();
+}
+
+function hideAllReviewForms() {
+  if (detailReviewProgressForm) detailReviewProgressForm.classList.add("hidden");
+  if (detailReviewReviseForm) detailReviewReviseForm.classList.add("hidden");
+  if (detailReviewCompleteForm) detailReviewCompleteForm.classList.add("hidden");
+  if (detailReviewRetrackForm) detailReviewRetrackForm.classList.add("hidden");
+}
+
+function renderReviewDetail(review) {
+  const effStatus = review.effective_status || "in_progress";
+  const isDone = review.status === "done";
+  const isPending = effStatus === "pending_review";
+
+  detailReviewTitle.textContent = review.current_judgment || "(无判断)";
+
+  const metaParts = [];
+  metaParts.push(reviewSourceTypeLabel(review.source_type));
+  if (review.source_tag_label) metaParts.push(review.source_tag_label);
+  metaParts.push(`计划复盘 ${review.plan_review_date || "-"}`);
+  if (review.current_version > 1) metaParts.push(`当前 V${review.current_version}`);
+  if (review.completed_at) metaParts.push(`完成于 ${review.completed_at.slice(0, 10)}`);
+  detailReviewMeta.textContent = metaParts.join(" · ");
+
+  // Result badge
+  if (detailReviewResultBadge) {
+    if (isDone && review.result) {
+      detailReviewResultBadge.className = `review-result-badge ${review.result}`;
+      detailReviewResultBadge.textContent = reviewResultLabel(review.result);
+      detailReviewResultBadge.classList.remove("hidden");
+    } else {
+      detailReviewResultBadge.className = "review-result-badge hidden";
+      detailReviewResultBadge.textContent = "";
+    }
+  }
+
+  // Toolbar button visibility
+  if (detailReviewProgressBtn) detailReviewProgressBtn.classList.toggle("hidden", isDone);
+  if (detailReviewReviseBtn) detailReviewReviseBtn.classList.toggle("hidden", isDone);
+  if (detailReviewCompleteBtn) {
+    detailReviewCompleteBtn.classList.toggle("hidden", isDone);
+    detailReviewCompleteBtn.textContent = isPending ? "开始复盘" : "提前复盘";
+  }
+  if (detailReviewRetrackBtn) detailReviewRetrackBtn.classList.toggle("hidden", !isDone);
+
+  // Timeline
+  renderReviewTimeline(review);
+
+  // Hide all forms
+  hideAllReviewForms();
+
+  // Store current review for form handlers
+  state.currentReview = review;
+}
+
+function renderReviewTimeline(review) {
+  const timeline = detailReviewTimeline;
+  if (!timeline) return;
+  timeline.innerHTML = "";
+
+  // Versions
+  if (review.versions && review.versions.length) {
+    const versionsHeader = document.createElement("div");
+    versionsHeader.className = "review-timeline-header";
+    versionsHeader.textContent = "判断版本";
+    timeline.appendChild(versionsHeader);
+
+    review.versions.forEach((v) => {
+      const card = document.createElement("div");
+      card.className = "review-timeline-card version-card";
+      const header = document.createElement("div");
+      header.className = "review-timeline-card-header";
+      const versionLabel = document.createElement("span");
+      versionLabel.className = "note-badge review-version-badge";
+      versionLabel.textContent = `V${v.version_no}`;
+      header.appendChild(versionLabel);
+      const time = document.createElement("span");
+      time.className = "review-timeline-time";
+      time.textContent = v.created_at ? v.created_at.slice(0, 16).replace("T", " ") : "";
+      header.appendChild(time);
+      card.appendChild(header);
+
+      const judgment = document.createElement("div");
+      judgment.className = "review-timeline-judgment";
+      judgment.textContent = v.judgment;
+      card.appendChild(judgment);
+
+      const criteria = document.createElement("div");
+      criteria.className = "review-timeline-criteria";
+      criteria.textContent = `成立标准：${v.criteria}`;
+      card.appendChild(criteria);
+
+      if (v.revision_reason) {
+        const reason = document.createElement("div");
+        reason.className = "review-timeline-reason";
+        reason.textContent = `修正原因：${v.revision_reason}`;
+        card.appendChild(reason);
+      }
+      timeline.appendChild(card);
+    });
+  }
+
+  // Events
+  if (review.events && review.events.length) {
+    const eventsHeader = document.createElement("div");
+    eventsHeader.className = "review-timeline-header";
+    eventsHeader.textContent = "进展事件";
+    timeline.appendChild(eventsHeader);
+
+    review.events.forEach((e) => {
+      const card = document.createElement("div");
+      card.className = "review-timeline-card event-card";
+      const header = document.createElement("div");
+      header.className = "review-timeline-card-header";
+      const typeLabel = document.createElement("span");
+      typeLabel.className = `note-badge review-event-badge ${e.event_type}`;
+      const typeNames = {
+        revision: "创建/修正",
+        progress: "进展",
+        review_completed: "完成",
+        continue_observing: "继续观察",
+        retracked: "再次跟踪",
+      };
+      typeLabel.textContent = typeNames[e.event_type] || e.event_type;
+      header.appendChild(typeLabel);
+      const time = document.createElement("span");
+      time.className = "review-timeline-time";
+      const timeParts = [];
+      if (e.event_date) timeParts.push(e.event_date);
+      if (e.created_at) timeParts.push(e.created_at.slice(0, 16).replace("T", " "));
+      time.textContent = timeParts.join(" · ");
+      header.appendChild(time);
+      card.appendChild(header);
+
+      if (e.event_text) {
+        const text = document.createElement("div");
+        text.className = "review-timeline-event-text";
+        text.textContent = e.event_text;
+        card.appendChild(text);
+      }
+      timeline.appendChild(card);
+    });
+  }
+
+  // Evidence
+  if (review.evidence && review.evidence.length) {
+    const evidenceHeader = document.createElement("div");
+    evidenceHeader.className = "review-timeline-header";
+    evidenceHeader.textContent = "证据新闻";
+    timeline.appendChild(evidenceHeader);
+
+    review.evidence.forEach((ev) => {
+      const card = document.createElement("div");
+      card.className = "review-timeline-card evidence-card";
+      const title = document.createElement("div");
+      title.className = "review-timeline-evidence-title";
+      title.textContent = ev.news_title || "(无标题)";
+      card.appendChild(title);
+      if (ev.news_summary) {
+        const summary = document.createElement("div");
+        summary.className = "review-timeline-evidence-summary";
+        summary.textContent = ev.news_summary;
+        card.appendChild(summary);
+      }
+      if (ev.news_url) {
+        const link = document.createElement("a");
+        link.className = "review-timeline-evidence-link";
+        link.href = ev.news_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "查看原文";
+        card.appendChild(link);
+      }
+      if (review.status !== "done") {
+        const delBtn = document.createElement("button");
+        delBtn.className = "detail-retry-btn review-evidence-delete-btn";
+        delBtn.type = "button";
+        delBtn.textContent = "删除";
+        delBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          try {
+            const updated = await reviewDeleteEvidence(review.id, ev.id);
+            renderReviewDetail(updated);
+          } catch (err) {
+            setHint(`删除证据失败：${err.message || err}`);
+          }
+        });
+        card.appendChild(delBtn);
+      }
+      timeline.appendChild(card);
+    });
+  }
+
+  // Completed summary
+  if (review.status === "done") {
+    const doneHeader = document.createElement("div");
+    doneHeader.className = "review-timeline-header";
+    doneHeader.textContent = "复盘总结";
+    timeline.appendChild(doneHeader);
+
+    const card = document.createElement("div");
+    card.className = "review-timeline-card done-card";
+    if (review.actual_text) {
+      const actual = document.createElement("div");
+      actual.className = "review-timeline-done-field";
+      actual.textContent = `实际发生：${review.actual_text}`;
+      card.appendChild(actual);
+    }
+    if (review.bias_text) {
+      const bias = document.createElement("div");
+      bias.className = "review-timeline-done-field";
+      bias.textContent = `评价与偏差：${review.bias_text}`;
+      card.appendChild(bias);
+    }
+    if (review.experience) {
+      const exp = document.createElement("div");
+      exp.className = "review-timeline-done-field";
+      exp.textContent = `经验：${review.experience}`;
+      card.appendChild(exp);
+    }
+    timeline.appendChild(card);
+  }
+}
 function openStandaloneIdeaNewView() {
   closeTagAdminView();
   closeTrendComposerView();
@@ -5988,6 +6464,111 @@ async function fetchIdeasPage(page) {
   return res.json();
 }
 
+async function fetchReviewsPage(page) {
+  const params = new URLSearchParams({
+    page: String(page),
+    per: String(state.per),
+    status: state.reviewFilter,
+  });
+  const res = await fetch(`/api/reviews?${params.toString()}`);
+  if (!res.ok) throw new Error("reviews_fetch_failed");
+  return res.json();
+}
+
+async function fetchReviewDetail(chainId) {
+  const res = await fetch(`/api/reviews/${encodeURIComponent(chainId)}`);
+  if (!res.ok) throw new Error("review_detail_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "review_detail_fetch_failed");
+  return data.review;
+}
+
+async function createReview(payload) {
+  const res = await fetch("/api/reviews", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "review_create_failed");
+  return data.review;
+}
+
+async function reviewProgress(chainId, payload) {
+  const res = await fetch(`/api/reviews/${encodeURIComponent(chainId)}/progress`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "review_progress_failed");
+  return data.review;
+}
+
+async function reviewRevise(chainId, payload) {
+  const res = await fetch(`/api/reviews/${encodeURIComponent(chainId)}/revise`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "review_revise_failed");
+  return data.review;
+}
+
+async function reviewComplete(chainId, payload) {
+  const res = await fetch(`/api/reviews/${encodeURIComponent(chainId)}/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "review_complete_failed");
+  return data.review;
+}
+
+async function reviewContinueObserving(chainId, payload) {
+  const res = await fetch(`/api/reviews/${encodeURIComponent(chainId)}/continue-observing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "review_continue_failed");
+  return data.review;
+}
+
+async function reviewRetrack(chainId, payload) {
+  const res = await fetch(`/api/reviews/${encodeURIComponent(chainId)}/retrack`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "review_retrack_failed");
+  return data.review;
+}
+
+async function reviewAddEvidence(chainId, payload) {
+  const res = await fetch(`/api/reviews/${encodeURIComponent(chainId)}/evidence`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "review_evidence_add_failed");
+  return data.review;
+}
+
+async function reviewDeleteEvidence(chainId, evidenceId) {
+  const res = await fetch(`/api/reviews/${encodeURIComponent(chainId)}/evidence/${encodeURIComponent(evidenceId)}`, {
+    method: "DELETE",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "review_evidence_delete_failed");
+  return data.review;
+}
+
 async function fetchTrackedTopics() {
   const res = await fetch("/api/tracked-topics");
   if (!res.ok) throw new Error("tracked_topics_fetch_failed");
@@ -6191,6 +6772,9 @@ function resetList() {
   clearFeedEndAutoReadTimer();
   feedEndAutoReadFiredKey = "";
   state.selectedTrendIdea = null;
+  state.selectedReviewId = null;
+  state.currentReview = null;
+  state.pendingReviewSource = null;
   state.tagAdminOpen = false;
   state.trendComposeOpen = false;
   state.dateCounts = new Map();
@@ -6424,6 +7008,31 @@ async function loadFirstPage(page = 1) {
       return;
     }
 
+    if (state.collection === "reviews") {
+      const data = await fetchReviewsPage(1);
+      state.total = Number(data.total || 0);
+      state.pages = Number(data.pages || 1);
+      state.page = 1;
+      state.hasMore = !!data.has_more;
+      state.dateCounts = new Map();
+      showListView();
+      (data.items || []).forEach((item) => appendNewsRow(item, buildReviewRow(item)));
+      renderMeta();
+      if (state.total === 0) {
+        setHint("还没有复盘，从任意想法右栏点击“加入复盘”开始。");
+      } else if (state.hasMore) {
+        setHint("继续下滑加载更多");
+      } else {
+        setHint("已加载全部复盘");
+      }
+      if (readObserver) {
+        readObserver.disconnect();
+        readObserver = null;
+      }
+      stopRowStatusPolling();
+      return;
+    }
+
     if (state.collection === "market_tags") {
       removeMarketWorkbenchSummaryInline();
       const data = await fetchMarketWorkbenchPage(1);
@@ -6550,6 +7159,24 @@ async function loadNextPage() {
       state.hasMore = state.page < state.pages;
       renderMeta();
       setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部想法");
+    } finally {
+      state.loading = false;
+    }
+    return;
+  }
+  if (state.collection === "reviews") {
+    if (!state.hasMore) return;
+    const next = state.page + 1;
+    state.loading = true;
+    try {
+      const data = await fetchReviewsPage(next);
+      (data.items || []).forEach((item) => appendNewsRow(item, buildReviewRow(item)));
+      state.page = Number(data.page || next);
+      state.pages = Number(data.pages || state.pages);
+      state.total = Number(data.total || state.total);
+      state.hasMore = !!data.has_more;
+      renderMeta();
+      setHint(state.hasMore ? "继续下滑加载更多" : "已加载全部复盘");
     } finally {
       state.loading = false;
     }
@@ -6752,6 +7379,8 @@ async function switchCollection(collection) {
     return;
   }
   removeMarketWorkbenchSummaryInline();
+  closeAllReviewPanels();
+  state.selectedReviewId = null;
   state.collection = collection;
   closeMobileFilterSheet();
   closeMobileCollectionSheet();
@@ -6798,6 +7427,35 @@ navReadLaterBtn.addEventListener("click", async () => {
 if (navNotesBtn) {
   navNotesBtn.addEventListener("click", async () => {
     await switchCollection("notes");
+  });
+}
+if (navReviewsBtn) {
+  navReviewsBtn.addEventListener("click", async () => {
+    await switchCollection("reviews");
+  });
+}
+if (reviewFilterAllBtn) {
+  reviewFilterAllBtn.addEventListener("click", async () => {
+    state.reviewFilter = "all";
+    await loadFirstPage();
+  });
+}
+if (reviewFilterActiveBtn) {
+  reviewFilterActiveBtn.addEventListener("click", async () => {
+    state.reviewFilter = "in_progress";
+    await loadFirstPage();
+  });
+}
+if (reviewFilterPendingBtn) {
+  reviewFilterPendingBtn.addEventListener("click", async () => {
+    state.reviewFilter = "pending_review";
+    await loadFirstPage();
+  });
+}
+if (reviewFilterDoneBtn) {
+  reviewFilterDoneBtn.addEventListener("click", async () => {
+    state.reviewFilter = "done";
+    await loadFirstPage();
   });
 }
 if (navTrackedBtn) {
@@ -7971,3 +8629,414 @@ fetchRuntimeSettings()
   })
   .catch(() => {});
 autoReindexAndLoad();
+
+// ===== Review: "加入复盘" create flow =====
+
+function openReviewCreateFromArticle() {
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  if (!item) {
+    setHint("请先选择一条新闻想法");
+    return;
+  }
+  const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
+  const noteText = normalizedDetailNote(cached);
+  openReviewCreateForm({
+    source_type: "article_note",
+    source_key: item.url || "",
+    source_note: noteText || item.summary || "",
+    source_tag_label: "",
+    source_meta: `${item.source || ""} · ${item.published_at || ""}`,
+    news_list: [{ title: item.title || "", summary: item.summary || "", url: item.url || "" }],
+  });
+}
+
+function openReviewCreateFromTrendIdea() {
+  const item = state.selectedTrendIdea;
+  if (!item) {
+    setHint("请先选择一条板块想法");
+    return;
+  }
+  openReviewCreateForm({
+    source_type: "market_trend_note",
+    source_key: String(item.trend_note_id || ""),
+    source_note: item.note || "",
+    source_tag_label: item.tag_label || "",
+    source_meta: `${item.tag_label || ""} · ${item.trend_date_key || ""}`,
+    news_list: [],
+  });
+}
+
+function openReviewCreateFromStandaloneIdea() {
+  const item = state.selectedStandaloneIdea;
+  if (!item) {
+    setHint("请先选择一条独立想法");
+    return;
+  }
+  openReviewCreateForm({
+    source_type: "standalone_idea",
+    source_key: String(item.standalone_id || ""),
+    source_note: item.note || "",
+    source_tag_label: "",
+    source_meta: `创建 ${item.created_at || "-"}`,
+    news_list: [],
+  });
+}
+
+function openReviewCreateForm(ctx) {
+  state.pendingReviewSource = ctx;
+  hideAllDetailPanelsForReview();
+  closeAllReviewPanels();
+  detailReviewCreateBody.classList.remove("hidden");
+  reviewCreateSourceNote.textContent = ctx.source_note || "";
+  reviewCreateSourceMeta.textContent = ctx.source_meta || "";
+  if (reviewCreateJudgment) reviewCreateJudgment.value = "";
+  if (reviewCreateCriteria) reviewCreateCriteria.value = "";
+  const today = new Date();
+  const defaultDate = new Date(today);
+  defaultDate.setMonth(today.getMonth() + 1);
+  if (reviewCreateDate) reviewCreateDate.value = defaultDate.toISOString().slice(0, 10);
+  if (reviewCreateAddReminder) reviewCreateAddReminder.checked = false;
+  if (reviewCreateRemindAt) {
+    reviewCreateRemindAt.value = "";
+    reviewCreateRemindAt.classList.add("hidden");
+  }
+  state.reviewReminderUserTouched = false;
+  openDetailOnMobile();
+  updateWorkspaceLayout();
+}
+
+if (detailReviewAddBtn) {
+  detailReviewAddBtn.addEventListener("click", openReviewCreateFromArticle);
+}
+if (detailTrendIdeaReviewBtn) {
+  detailTrendIdeaReviewBtn.addEventListener("click", openReviewCreateFromTrendIdea);
+}
+if (detailStandaloneIdeaReviewBtn) {
+  detailStandaloneIdeaReviewBtn.addEventListener("click", openReviewCreateFromStandaloneIdea);
+}
+
+if (reviewCreateAddReminder) {
+  reviewCreateAddReminder.addEventListener("change", () => {
+    if (!reviewCreateRemindAt) return;
+    const checked = reviewCreateAddReminder.checked;
+    reviewCreateRemindAt.classList.toggle("hidden", !checked);
+    if (checked) {
+      const planDate = reviewCreateDate ? reviewCreateDate.value.trim() : "";
+      if (planDate && !state.reviewReminderUserTouched) {
+        reviewCreateRemindAt.value = `${planDate}T09:00`;
+      }
+    }
+  });
+}
+
+if (reviewCreateDate) {
+  reviewCreateDate.addEventListener("change", () => {
+    if (!reviewCreateRemindAt || !reviewCreateAddReminder) return;
+    if (reviewCreateAddReminder.checked && !state.reviewReminderUserTouched) {
+      const planDate = reviewCreateDate.value.trim();
+      if (planDate) {
+        reviewCreateRemindAt.value = `${planDate}T09:00`;
+      }
+    }
+  });
+}
+
+if (reviewCreateRemindAt) {
+  reviewCreateRemindAt.addEventListener("input", () => {
+    state.reviewReminderUserTouched = true;
+  });
+  reviewCreateRemindAt.addEventListener("change", () => {
+    state.reviewReminderUserTouched = true;
+  });
+}
+
+if (reviewCreateCancelBtn) {
+  reviewCreateCancelBtn.addEventListener("click", () => {
+    closeAllReviewPanels();
+    state.pendingReviewSource = null;
+    renderDetailEmpty();
+  });
+}
+
+if (reviewCreateSaveBtn) {
+  reviewCreateSaveBtn.addEventListener("click", async () => {
+    const ctx = state.pendingReviewSource;
+    if (!ctx) return;
+    const judgment = reviewCreateJudgment ? reviewCreateJudgment.value.trim() : "";
+    const criteria = reviewCreateCriteria ? reviewCreateCriteria.value.trim() : "";
+    const planDate = reviewCreateDate ? reviewCreateDate.value.trim() : "";
+    const addReminder = reviewCreateAddReminder ? reviewCreateAddReminder.checked : false;
+    let remindAt = "";
+    if (addReminder) {
+      remindAt = reviewCreateRemindAt ? reviewCreateRemindAt.value.trim() : "";
+      if (!remindAt) {
+        remindAt = `${planDate}T09:00`;
+      }
+    }
+    if (!judgment) { setHint("请填写验证判断"); return; }
+    if (!criteria) { setHint("请填写成立标准"); return; }
+    if (!planDate) { setHint("请选择计划验证日期"); return; }
+    try {
+      const review = await createReview({
+        source_type: ctx.source_type,
+        source_key: ctx.source_key,
+        judgment,
+        criteria,
+        plan_review_date: planDate,
+        add_reminder: addReminder,
+        remind_at: remindAt,
+      });
+      state.pendingReviewSource = null;
+      setHint("复盘已创建");
+      state.collection = "reviews";
+      state.reviewFilter = "all";
+      await loadFirstPage();
+      state.selectedReviewId = review.id;
+      syncReviewRowSelection();
+      await openReviewCard(review);
+    } catch (err) {
+      setHint(`创建复盘失败：${err.message || err}`);
+    }
+  });
+}
+
+// ===== Review: progress form =====
+
+if (detailReviewProgressBtn) {
+  detailReviewProgressBtn.addEventListener("click", () => {
+    hideAllReviewForms();
+    if (reviewProgressText) reviewProgressText.value = "";
+    if (reviewProgressDate) reviewProgressDate.value = new Date().toISOString().slice(0, 10);
+    if (detailReviewProgressForm) detailReviewProgressForm.classList.remove("hidden");
+  });
+}
+
+if (reviewProgressCancelBtn) {
+  reviewProgressCancelBtn.addEventListener("click", () => {
+    if (detailReviewProgressForm) detailReviewProgressForm.classList.add("hidden");
+  });
+}
+
+if (reviewProgressSaveBtn) {
+  reviewProgressSaveBtn.addEventListener("click", async () => {
+    const review = state.currentReview;
+    if (!review) return;
+    const text = reviewProgressText ? reviewProgressText.value.trim() : "";
+    const date = reviewProgressDate ? reviewProgressDate.value.trim() : "";
+    if (!text) { setHint("请填写进展内容"); return; }
+    if (!date) { setHint("请选择日期"); return; }
+    try {
+      const updated = await reviewProgress(review.id, { event_text: text, event_date: date });
+      renderReviewDetail(updated);
+      setHint("进展已记录");
+    } catch (err) {
+      setHint(`记录进展失败：${err.message || err}`);
+    }
+  });
+}
+
+// ===== Review: revise form =====
+
+if (detailReviewReviseBtn) {
+  detailReviewReviseBtn.addEventListener("click", () => {
+    hideAllReviewForms();
+    const review = state.currentReview;
+    if (review) {
+      if (reviewReviseJudgment) reviewReviseJudgment.value = review.current_judgment || "";
+      if (reviewReviseCriteria) reviewReviseCriteria.value = review.current_criteria || "";
+    }
+    if (reviewReviseReason) reviewReviseReason.value = "";
+    if (reviewReviseDate) reviewReviseDate.value = new Date().toISOString().slice(0, 10);
+    if (detailReviewReviseForm) detailReviewReviseForm.classList.remove("hidden");
+  });
+}
+
+if (reviewReviseCancelBtn) {
+  reviewReviseCancelBtn.addEventListener("click", () => {
+    if (detailReviewReviseForm) detailReviewReviseForm.classList.add("hidden");
+  });
+}
+
+if (reviewReviseSaveBtn) {
+  reviewReviseSaveBtn.addEventListener("click", async () => {
+    const review = state.currentReview;
+    if (!review) return;
+    const judgment = reviewReviseJudgment ? reviewReviseJudgment.value.trim() : "";
+    const criteria = reviewReviseCriteria ? reviewReviseCriteria.value.trim() : "";
+    const reason = reviewReviseReason ? reviewReviseReason.value.trim() : "";
+    const date = reviewReviseDate ? reviewReviseDate.value.trim() : "";
+    if (!judgment) { setHint("请填写新判断"); return; }
+    if (!criteria) { setHint("请填写新成立标准"); return; }
+    if (!reason) { setHint("请填写修正原因"); return; }
+    if (!date) { setHint("请选择日期"); return; }
+    try {
+      const updated = await reviewRevise(review.id, { judgment, criteria, revision_reason: reason, event_date: date });
+      renderReviewDetail(updated);
+      setHint("判断已修正");
+    } catch (err) {
+      setHint(`修正判断失败：${err.message || err}`);
+    }
+  });
+}
+
+// ===== Review: complete form =====
+
+if (detailReviewCompleteBtn) {
+  detailReviewCompleteBtn.addEventListener("click", () => {
+    hideAllReviewForms();
+    const review = state.currentReview;
+    if (review && reviewCompleteVersions) {
+      reviewCompleteVersions.innerHTML = "";
+      (review.versions || []).forEach((v) => {
+        const card = document.createElement("div");
+        card.className = "review-complete-version-card";
+        const header = document.createElement("div");
+        header.className = "review-complete-version-header";
+        const badge = document.createElement("span");
+        badge.className = "note-badge review-version-badge";
+        badge.textContent = `V${v.version_no}`;
+        header.appendChild(badge);
+        const time = document.createElement("span");
+        time.className = "review-timeline-time";
+        time.textContent = v.created_at ? v.created_at.slice(0, 16).replace("T", " ") : "";
+        header.appendChild(time);
+        card.appendChild(header);
+        const j = document.createElement("div");
+        j.className = "review-timeline-judgment";
+        j.textContent = v.judgment;
+        card.appendChild(j);
+        const c = document.createElement("div");
+        c.className = "review-timeline-criteria";
+        c.textContent = `成立标准：${v.criteria}`;
+        card.appendChild(c);
+        if (v.revision_reason) {
+          const r = document.createElement("div");
+          r.className = "review-timeline-reason";
+          r.textContent = `修正原因：${v.revision_reason}`;
+          card.appendChild(r);
+        }
+        reviewCompleteVersions.appendChild(card);
+      });
+    }
+    if (reviewCompleteActual) reviewCompleteActual.value = review ? review.actual_text || "" : "";
+    if (reviewCompleteResult) reviewCompleteResult.value = "";
+    if (reviewCompleteBias) reviewCompleteBias.value = review ? review.bias_text || "" : "";
+    if (reviewCompleteExperience) reviewCompleteExperience.value = "";
+    if (reviewContinueObserveSection) reviewContinueObserveSection.classList.add("hidden");
+    if (detailReviewCompleteForm) detailReviewCompleteForm.classList.remove("hidden");
+  });
+}
+
+if (reviewCompleteResult) {
+  reviewCompleteResult.addEventListener("change", () => {
+    if (reviewContinueObserveSection) {
+      reviewContinueObserveSection.classList.toggle("hidden", reviewCompleteResult.value !== "inconclusive");
+    }
+  });
+}
+
+if (reviewCompleteCancelBtn) {
+  reviewCompleteCancelBtn.addEventListener("click", () => {
+    if (detailReviewCompleteForm) detailReviewCompleteForm.classList.add("hidden");
+  });
+}
+
+if (reviewCompleteSaveBtn) {
+  reviewCompleteSaveBtn.addEventListener("click", async () => {
+    const review = state.currentReview;
+    if (!review) return;
+    const result = reviewCompleteResult ? reviewCompleteResult.value.trim() : "";
+    const actual = reviewCompleteActual ? reviewCompleteActual.value.trim() : "";
+    const bias = reviewCompleteBias ? reviewCompleteBias.value.trim() : "";
+    const experience = reviewCompleteExperience ? reviewCompleteExperience.value.trim() : "";
+    if (!result) { setHint("请选择复盘结果"); return; }
+    if (!experience) { setHint("请填写经验"); return; }
+    try {
+      const updated = await reviewComplete(review.id, { result, actual_text: actual, bias_text: bias, experience });
+      renderReviewDetail(updated);
+      setHint("复盘已完成");
+    } catch (err) {
+      setHint(`完成复盘失败：${err.message || err}`);
+    }
+  });
+}
+
+if (reviewContinueSaveBtn) {
+  reviewContinueSaveBtn.addEventListener("click", async () => {
+    const review = state.currentReview;
+    if (!review) return;
+    const newDate = reviewContinueDate ? reviewContinueDate.value.trim() : "";
+    if (!newDate) { setHint("请选择新的验证日期"); return; }
+    try {
+      const updated = await reviewContinueObserving(review.id, { new_review_date: newDate });
+      renderReviewDetail(updated);
+      setHint("已继续观察");
+    } catch (err) {
+      setHint(`继续观察失败：${err.message || err}`);
+    }
+  });
+}
+
+if (reviewContinueDoneBtn) {
+  reviewContinueDoneBtn.addEventListener("click", async () => {
+    const review = state.currentReview;
+    if (!review) return;
+    const actual = reviewCompleteActual ? reviewCompleteActual.value.trim() : "";
+    const bias = reviewCompleteBias ? reviewCompleteBias.value.trim() : "";
+    const experience = reviewCompleteExperience ? reviewCompleteExperience.value.trim() : "";
+    if (!experience) { setHint("请填写经验"); return; }
+    try {
+      const updated = await reviewComplete(review.id, { result: "inconclusive", actual_text: actual, bias_text: bias, experience });
+      renderReviewDetail(updated);
+      setHint("复盘已结束（暂不可判断）");
+    } catch (err) {
+      setHint(`结束复盘失败：${err.message || err}`);
+    }
+  });
+}
+
+// ===== Review: retrack form =====
+
+if (detailReviewRetrackBtn) {
+  detailReviewRetrackBtn.addEventListener("click", () => {
+    hideAllReviewForms();
+    const review = state.currentReview;
+    if (review) {
+      if (reviewRetrackJudgment) reviewRetrackJudgment.value = review.current_judgment || "";
+      if (reviewRetrackCriteria) reviewRetrackCriteria.value = review.current_criteria || "";
+    }
+    const today = new Date();
+    const defaultDate = new Date(today);
+    defaultDate.setMonth(today.getMonth() + 1);
+    if (reviewRetrackDate) reviewRetrackDate.value = defaultDate.toISOString().slice(0, 10);
+    if (detailReviewRetrackForm) detailReviewRetrackForm.classList.remove("hidden");
+  });
+}
+
+if (reviewRetrackCancelBtn) {
+  reviewRetrackCancelBtn.addEventListener("click", () => {
+    if (detailReviewRetrackForm) detailReviewRetrackForm.classList.add("hidden");
+  });
+}
+
+if (reviewRetrackSaveBtn) {
+  reviewRetrackSaveBtn.addEventListener("click", async () => {
+    const review = state.currentReview;
+    if (!review) return;
+    const judgment = reviewRetrackJudgment ? reviewRetrackJudgment.value.trim() : "";
+    const criteria = reviewRetrackCriteria ? reviewRetrackCriteria.value.trim() : "";
+    const date = reviewRetrackDate ? reviewRetrackDate.value.trim() : "";
+    if (!judgment) { setHint("请填写新判断"); return; }
+    if (!criteria) { setHint("请填写成立标准"); return; }
+    if (!date) { setHint("请选择计划验证日期"); return; }
+    try {
+      const updated = await reviewRetrack(review.id, { judgment, criteria, plan_review_date: date });
+      state.selectedReviewId = updated.id;
+      await loadFirstPage();
+      await openReviewCard(updated);
+      setHint("已派生新复盘链");
+    } catch (err) {
+      setHint(`再次跟踪失败：${err.message || err}`);
+    }
+  });
+}

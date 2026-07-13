@@ -4,6 +4,21 @@
 
 ## What's Changed
 
+### 2026-07-13 — v2.1.0 feat: 版本化判断复盘功能
+- **文件**
+  - *schema.sql（+）*、*app.py（+）*、*tests/test_api.py（+）*、*static/index.html（~）*、*static/app.js（~）*、*static/style.css（~）*、*README.md（+）*
+    - 新增 4 张复盘表：`review_chains`、`review_versions`、`review_events`、`review_evidence`，子表 `ON DELETE CASCADE`
+    - `news_reminders` 新增可空 `review_chain_id` 列，提醒与复盘解耦
+    - 新增约 13 个 API 端点：复盘列表/筛选/全文检索、详情、创建（三类来源 + 快照冻结）、记录进展、修正判断（V1/V2/V3 版本链）、完成复盘（三档结果 + 经验必填）、继续观察、再次跟踪（派生新链 + 血缘）、证据新增/删除（归属校验）、复盘专用提醒
+    - 来源快照不可变：原想法编辑/删除后复盘历史完整可读
+    - 状态机：`active + 未到期 → in_progress`、`active + 到期 → pending_review`、`done → done`（不可逆）
+    - 前端新增"复盘"集合导航（全部/进行中/待复盘/已完成），列表卡片显示当前判断、来源、版本、计划日期、结果及颜色
+    - 三类想法右栏均增加"加入复盘"按钮
+    - 右栏详情：时间线展示版本链、进展事件、证据新闻、复盘总结
+    - 表单：记录进展、修正判断、完成复盘（含版本链只读 + 实际发生/偏差/经验）、继续观察、再次跟踪
+    - 同步版本号 v2.1.0（title、顶栏、CSS/JS cache-bust、移动端更多面板）
+- **影响**：涉及数据库 schema 变更，拉取后需重启 Flask（自动执行迁移）；页面刷新后可见复盘集合。
+
 ### 2026-07-12 — v2.0.3.2 improve: 板块想法与独立想法右栏统一顶部工具栏
 - **文件**
   - *static/index.html（~）*、*static/app.js（~）*、*app.py（~）*、*tests/test_api.py（+）*、*README.md（+）*

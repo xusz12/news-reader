@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.0.3.2</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.3.2" />
+    <title>News Reader v2.1.0</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.1.0" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.0.3.2</span>
+          <span class="topbar-version">v2.1.0</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -67,6 +67,7 @@
         <div class="nav-group">
           <h2>研究</h2>
           <button id="navNotesBtn" class="nav-btn">想法</button>
+          <button id="navReviewsBtn" class="nav-btn">复盘</button>
           <button id="navTrackedBtn" class="nav-btn">跟踪</button>
         </div>
         <div class="nav-group">
@@ -105,6 +106,12 @@
             <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">板块想法</button>
             <button id="ideaFilterStandaloneBtn" class="reminder-filter-btn" type="button">独立想法</button>
             <button id="ideaNewBtn" class="detail-retry-btn" type="button">新独立想法</button>
+          </div>
+          <div id="reviewFilterBar" class="reminder-filter-bar hidden" aria-label="复盘状态筛选">
+            <button id="reviewFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+            <button id="reviewFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
+            <button id="reviewFilterPendingBtn" class="reminder-filter-btn" type="button">待复盘</button>
+            <button id="reviewFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
           </div>
           <section id="marketWorkbenchBar" class="search-page-controls hidden" aria-label="板块工作台筛选">
             <div class="search-page-form market-workbench-form">
@@ -206,6 +213,7 @@
           <div class="detail-actions detail-toolbar">
             <button id="detailTrendIdeaEditBtn" class="detail-retry-btn" type="button">编辑板块想法</button>
             <button id="detailTrendIdeaDeleteBtn" class="detail-retry-btn" type="button">删除板块想法</button>
+            <button id="detailTrendIdeaReviewBtn" class="detail-retry-btn" type="button">加入复盘</button>
           </div>
           <h3 id="detailTrendIdeaTitle" class="detail-title"></h3>
           <div id="detailTrendIdeaMeta" class="detail-meta"></div>
@@ -250,6 +258,7 @@
           <div class="detail-actions detail-toolbar">
             <button id="detailStandaloneIdeaEditBtn" class="detail-retry-btn" type="button">编辑</button>
             <button id="detailStandaloneIdeaDeleteBtn" class="detail-retry-btn" type="button">删除</button>
+            <button id="detailStandaloneIdeaReviewBtn" class="detail-retry-btn" type="button">加入复盘</button>
           </div>
           <h3 id="detailStandaloneIdeaTitle" class="detail-title">独立想法</h3>
           <div id="detailStandaloneIdeaMeta" class="detail-meta"></div>
@@ -274,6 +283,111 @@
             <div class="detail-note-actions">
               <button id="detailStandaloneIdeaNewSaveBtn" class="detail-retry-btn" type="button">保存</button>
               <button id="detailStandaloneIdeaNewCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+        </div>
+        <div id="detailReviewCreateBody" class="detail-trend-body hidden">
+          <h3 class="detail-title">加入复盘</h3>
+          <div id="reviewCreateSourceSnapshot" class="detail-note-card">
+            <h4>来源快照</h4>
+            <p id="reviewCreateSourceNote" class="detail-note-text"></p>
+            <div id="reviewCreateSourceMeta" class="detail-meta"></div>
+          </div>
+          <section class="detail-note-editor">
+            <div class="detail-note-editor-title">验证判断</div>
+            <textarea id="reviewCreateJudgment" class="detail-note-input" rows="3" maxlength="10000" placeholder="把想法写成可验证的判断命题，例如：政策实施后三个月内，新能源融资成本将下降。"></textarea>
+            <div class="detail-note-editor-title">成立标准</div>
+            <textarea id="reviewCreateCriteria" class="detail-note-input" rows="3" maxlength="10000" placeholder="什么数据或事件算判断成立？"></textarea>
+            <div class="detail-note-editor-title">计划验证日期</div>
+            <input id="reviewCreateDate" class="detail-tag-create-input" type="date" />
+            <div class="detail-note-actions">
+              <label class="review-reminder-toggle">
+                <input id="reviewCreateAddReminder" type="checkbox" /> 同时添加提醒
+              </label>
+              <input id="reviewCreateRemindAt" class="detail-tag-create-input hidden" type="datetime-local" />
+              <button id="reviewCreateSaveBtn" class="detail-retry-btn" type="button">创建复盘</button>
+              <button id="reviewCreateCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+        </div>
+        <div id="detailReviewBody" class="detail-trend-body hidden">
+          <div class="detail-actions detail-toolbar">
+            <button id="detailReviewProgressBtn" class="detail-retry-btn" type="button">记录进展</button>
+            <button id="detailReviewReviseBtn" class="detail-retry-btn" type="button">修正判断</button>
+            <button id="detailReviewCompleteBtn" class="detail-retry-btn" type="button">开始复盘</button>
+            <button id="detailReviewRetrackBtn" class="detail-retry-btn hidden" type="button">再次跟踪</button>
+          </div>
+          <h3 id="detailReviewTitle" class="detail-title">复盘</h3>
+          <div id="detailReviewMeta" class="detail-meta"></div>
+          <div id="detailReviewResultBadge" class="review-result-badge hidden"></div>
+          <section id="detailReviewTimeline" class="review-timeline"></section>
+          <section id="detailReviewProgressForm" class="detail-note-editor hidden">
+            <div class="detail-note-editor-title">记录进展</div>
+            <textarea id="reviewProgressText" class="detail-note-input" rows="4" maxlength="10000" placeholder="记录新事实、观察或关联新闻..."></textarea>
+            <input id="reviewProgressDate" class="detail-tag-create-input" type="date" />
+            <div class="detail-note-actions">
+              <button id="reviewProgressSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="reviewProgressCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+          <section id="detailReviewReviseForm" class="detail-note-editor hidden">
+            <div class="detail-note-editor-title">修正判断</div>
+            <textarea id="reviewReviseJudgment" class="detail-note-input" rows="3" maxlength="10000" placeholder="新的验证判断..."></textarea>
+            <textarea id="reviewReviseCriteria" class="detail-note-input" rows="3" maxlength="10000" placeholder="新的成立标准..."></textarea>
+            <textarea id="reviewReviseReason" class="detail-note-input" rows="3" maxlength="10000" placeholder="为什么修正？哪条事实或假设变了？"></textarea>
+            <input id="reviewReviseDate" class="detail-tag-create-input" type="date" />
+            <div class="detail-note-actions">
+              <button id="reviewReviseSaveBtn" class="detail-retry-btn" type="button">保存</button>
+              <button id="reviewReviseCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+          <section id="detailReviewCompleteForm" class="detail-note-editor hidden">
+            <div class="detail-note-editor-title">完成复盘</div>
+            <div class="review-complete-section">
+              <h4>当时判断</h4>
+              <div id="reviewCompleteVersions" class="review-versions-list"></div>
+            </div>
+            <div class="review-complete-section">
+              <h4>实际发生</h4>
+              <textarea id="reviewCompleteActual" class="detail-note-input" rows="3" maxlength="10000" placeholder="事实结果..."></textarea>
+            </div>
+            <div class="review-complete-section">
+              <h4>评价与偏差</h4>
+              <select id="reviewCompleteResult" class="pref-select">
+                <option value="">选择结果...</option>
+                <option value="confirmed">成立</option>
+                <option value="refuted">未成立</option>
+                <option value="inconclusive">暂不可判断</option>
+              </select>
+              <textarea id="reviewCompleteBias" class="detail-note-input" rows="3" maxlength="10000" placeholder="遗漏变量、错误假设、时间尺度问题..."></textarea>
+            </div>
+            <div class="review-complete-section">
+              <h4>经验</h4>
+              <textarea id="reviewCompleteExperience" class="detail-note-input" rows="3" maxlength="10000" placeholder="写下一条以后可复用的原则、条件或失效模式..."></textarea>
+            </div>
+            <div id="reviewContinueObserveSection" class="hidden">
+              <label class="detail-trend-compose-field">
+                <span class="detail-trend-compose-label">下次验证日期</span>
+                <input id="reviewContinueDate" class="detail-tag-create-input" type="date" />
+              </label>
+              <div class="detail-note-actions">
+                <button id="reviewContinueSaveBtn" class="detail-retry-btn" type="button">继续观察</button>
+                <button id="reviewContinueDoneBtn" class="detail-retry-btn" type="button">结束复盘</button>
+              </div>
+            </div>
+            <div id="reviewCompleteActions" class="detail-note-actions">
+              <button id="reviewCompleteSaveBtn" class="detail-retry-btn" type="button">完成</button>
+              <button id="reviewCompleteCancelBtn" class="detail-retry-btn" type="button">取消</button>
+            </div>
+          </section>
+          <section id="detailReviewRetrackForm" class="detail-note-editor hidden">
+            <div class="detail-note-editor-title">再次跟踪</div>
+            <textarea id="reviewRetrackJudgment" class="detail-note-input" rows="3" maxlength="10000" placeholder="新的验证判断..."></textarea>
+            <textarea id="reviewRetrackCriteria" class="detail-note-input" rows="3" maxlength="10000" placeholder="成立标准..."></textarea>
+            <input id="reviewRetrackDate" class="detail-tag-create-input" type="date" />
+            <div class="detail-note-actions">
+              <button id="reviewRetrackSaveBtn" class="detail-retry-btn" type="button">创建</button>
+              <button id="reviewRetrackCancelBtn" class="detail-retry-btn" type="button">取消</button>
             </div>
           </section>
         </div>
@@ -426,6 +540,7 @@
             <span class="detail-action-spacer" aria-hidden="true"></span>
             <button id="detailAskBtn" class="icon-btn hidden" type="button" title="提问" aria-label="提问"></button>
             <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
+            <button id="detailReviewAddBtn" class="icon-btn hidden" type="button" title="加入复盘" aria-label="加入复盘"></button>
             <button id="detailBullishBtn" class="icon-btn" type="button" title="看多板块标记" aria-label="看多板块标记"></button>
             <button id="detailBearishBtn" class="icon-btn" type="button" title="看空板块标记" aria-label="看空板块标记"></button>
             <button id="detailReminderToggleBtn" class="icon-btn" type="button" title="添加提醒" aria-label="添加提醒"></button>
@@ -634,6 +749,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.0.3.2"></script>
+    <script src="/static/app.js?v=2.1.0"></script>
   </body>
 </html>

@@ -3913,3 +3913,236 @@ html[data-detail-font="large"] {
 #ideaNewBtn {
   margin-left: auto;
 }
+
+/* ===== Review (复盘) styles ===== */
+
+.review-status-badge.in_progress {
+  border-color: color-mix(in srgb, #2563eb 35%, var(--border));
+  color: #1d4ed8;
+  background: color-mix(in srgb, #2563eb 10%, var(--panel));
+}
+
+.review-status-badge.pending_review {
+  border-color: #f59e0b;
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.review-status-badge.done {
+  border-color: color-mix(in srgb, #6b7280 35%, var(--border));
+  color: #4b5563;
+  background: color-mix(in srgb, #6b7280 8%, var(--panel));
+}
+
+.review-version-badge {
+  border-color: color-mix(in srgb, #7c3aed 35%, var(--border));
+  color: #6d28d9;
+  background: color-mix(in srgb, #8b5cf6 10%, var(--panel));
+}
+
+.review-result-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.review-result-badge.confirmed {
+  color: #15803d;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+}
+
+.review-result-badge.refuted {
+  color: #b91c1c;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+}
+
+.review-result-badge.inconclusive {
+  color: #4b5563;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+}
+
+#detailReviewResultBadge {
+  display: inline-block;
+  margin: 8px 0;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 2px 12px;
+  border-radius: 999px;
+}
+
+#detailReviewResultBadge.confirmed {
+  color: #15803d;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+}
+
+#detailReviewResultBadge.refuted {
+  color: #b91c1c;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+}
+
+#detailReviewResultBadge.inconclusive {
+  color: #4b5563;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+}
+
+/* Review timeline */
+.review-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.review-timeline-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-tertiary, #999);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 4px;
+}
+
+.review-timeline-card {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--panel, #fff);
+}
+
+.review-timeline-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.review-timeline-time {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+  margin-left: auto;
+}
+
+.review-timeline-judgment {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.review-timeline-criteria {
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+  margin-bottom: 4px;
+}
+
+.review-timeline-reason {
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+  font-style: italic;
+}
+
+.review-event-badge.progress {
+  border-color: color-mix(in srgb, #0891b2 35%, var(--border));
+  color: #0e7490;
+  background: color-mix(in srgb, #06b6d4 10%, var(--panel));
+}
+
+.review-event-badge.revision {
+  border-color: color-mix(in srgb, #7c3aed 35%, var(--border));
+  color: #6d28d9;
+  background: color-mix(in srgb, #8b5cf6 10%, var(--panel));
+}
+
+.review-event-badge.review_completed {
+  border-color: color-mix(in srgb, #16a34a 35%, var(--border));
+  color: #15803d;
+  background: color-mix(in srgb, #22c55e 10%, var(--panel));
+}
+
+.review-event-badge.continue_observing {
+  border-color: color-mix(in srgb, #ca8a04 35%, var(--border));
+  color: #a16207;
+  background: color-mix(in srgb, #eab308 10%, var(--panel));
+}
+
+.review-event-badge.retracked {
+  border-color: color-mix(in srgb, #db2777 35%, var(--border));
+  color: #be185d;
+  background: color-mix(in srgb, #ec4899 10%, var(--panel));
+}
+
+.review-timeline-event-text {
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.review-timeline-evidence-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.review-timeline-evidence-summary {
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+  margin-bottom: 4px;
+}
+
+.review-timeline-evidence-link {
+  font-size: 12px;
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+}
+
+.review-evidence-delete-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  margin-top: 6px;
+}
+
+.review-timeline-done-field {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+/* Review complete form: version list */
+.review-complete-version-card {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--panel, #fff);
+  margin-bottom: 6px;
+}
+
+.review-complete-version-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.review-complete-section {
+  margin-bottom: 12px;
+}
+
+.review-versions-list {
+  margin-bottom: 8px;
+}
+
+/* Review reminder toggle */
+.review-reminder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+/* Review item in list */
+.review-item .row-note-preview.full-text {
+  max-height: 3em;
+  overflow: hidden;
+}
