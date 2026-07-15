@@ -8031,6 +8031,56 @@ def test_review_list_and_filter(tmp_path: Path, monkeypatch):
     assert r.get_json()["total"] == 0
 
 
+def test_review_done_list_result_filter_is_paginated_server_side(tmp_path: Path, monkeypatch):
+    """Result filters must constrain the API query instead of only loaded rows."""
+    client, _ = _setup_review_env(tmp_path, monkeypatch)
+    confirmed_ids = []
+    for index in range(11):
+        idea_id = _create_standalone_idea(client, f"成立想法 {index}")
+        created = client.post("/api/reviews", json={
+            "source_type": "standalone_idea", "source_key": str(idea_id),
+            "judgment": f"成立判断 {index}", "plan_review_date": "2020-01-01",
+        })
+        chain_id = created.get_json()["review"]["id"]
+        completed = client.post(f"/api/reviews/{chain_id}/complete", json={
+            "result": "confirmed", "actual_text": "事实结果", "experience": "复盘经验",
+        })
+        assert completed.status_code == 200
+        confirmed_ids.append(chain_id)
+
+    refuted_idea_id = _create_standalone_idea(client, "未成立想法")
+    created = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(refuted_idea_id),
+        "judgment": "未成立判断", "plan_review_date": "2020-01-01",
+    })
+    refuted_id = created.get_json()["review"]["id"]
+    client.post(f"/api/reviews/{refuted_id}/complete", json={
+        "result": "refuted", "actual_text": "事实结果", "experience": "复盘经验",
+    })
+
+    first_page = client.get("/api/reviews?status=done&result=confirmed&per=10")
+    assert first_page.status_code == 200
+    assert first_page.get_json()["total"] == 11
+    assert first_page.get_json()["has_more"] is True
+    assert {item["result"] for item in first_page.get_json()["items"]} == {"confirmed"}
+
+    second_page = client.get("/api/reviews?status=done&result=confirmed&per=10&page=2")
+    assert second_page.status_code == 200
+    assert second_page.get_json()["total"] == 11
+    assert second_page.get_json()["has_more"] is False
+    assert len(second_page.get_json()["items"]) == 1
+    assert second_page.get_json()["items"][0]["id"] in confirmed_ids
+
+    refuted = client.get("/api/reviews?status=done&result=refuted")
+    assert refuted.status_code == 200
+    assert refuted.get_json()["total"] == 1
+    assert refuted.get_json()["items"][0]["id"] == refuted_id
+
+    invalid = client.get("/api/reviews?status=done&result=partial")
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"] == "invalid_result_filter"
+
+
 def test_review_progress(tmp_path: Path, monkeypatch):
     client, _ = _setup_review_env(tmp_path, monkeypatch)
     idea_id = _create_standalone_idea(client)

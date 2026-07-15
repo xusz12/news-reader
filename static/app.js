@@ -19,6 +19,7 @@ let state = {
   reminderFilter: "active", // active | done | all
   ideaFilter: "all", // all | article | trend | standalone
   reviewFilter: "all", // all | in_progress | pending_review | done
+  reviewOutcomeFilter: "all", // all | confirmed | refuted | inconclusive; only used for done reviews
   selectedReviewId: null,
   reviewListItems: [],
   currentReview: null,
@@ -140,6 +141,11 @@ const reviewFilterAllBtn = document.getElementById("reviewFilterAllBtn");
 const reviewFilterActiveBtn = document.getElementById("reviewFilterActiveBtn");
 const reviewFilterPendingBtn = document.getElementById("reviewFilterPendingBtn");
 const reviewFilterDoneBtn = document.getElementById("reviewFilterDoneBtn");
+const reviewOutcomeFilterBar = document.getElementById("reviewOutcomeFilterBar");
+const reviewOutcomeFilterAllBtn = document.getElementById("reviewOutcomeFilterAllBtn");
+const reviewOutcomeFilterConfirmedBtn = document.getElementById("reviewOutcomeFilterConfirmedBtn");
+const reviewOutcomeFilterRefutedBtn = document.getElementById("reviewOutcomeFilterRefutedBtn");
+const reviewOutcomeFilterInconclusiveBtn = document.getElementById("reviewOutcomeFilterInconclusiveBtn");
 const detailReviewBody = document.getElementById("detailReviewBody");
 const detailReviewCreateBody = document.getElementById("detailReviewCreateBody");
 const detailReviewAddBtn = document.getElementById("detailReviewAddBtn");
@@ -150,6 +156,7 @@ const detailReviewTitle = document.getElementById("detailReviewTitle");
 const detailReviewMeta = document.getElementById("detailReviewMeta");
 const detailReviewResultBadge = document.getElementById("detailReviewResultBadge");
 const detailReviewTimeline = document.getElementById("detailReviewTimeline");
+const detailReviewScrollArea = document.getElementById("detailReviewScrollArea");
 const detailReviewProgressBtn = document.getElementById("detailReviewProgressBtn");
 const detailReviewReviseBtn = document.getElementById("detailReviewReviseBtn");
 const detailReviewCompleteBtn = document.getElementById("detailReviewCompleteBtn");
@@ -1925,11 +1932,11 @@ function updateFilterButtons() {
 }
 
 function updateIdeaFilterBar() {
-  if (!ideaFilterBar) return;
   const visible = state.collection === "notes";
-  ideaFilterBar.classList.toggle("hidden", !visible);
+  if (ideaFilterBar) ideaFilterBar.classList.toggle("hidden", !visible);
+
+  const reviewVisible = state.collection === "reviews";
   if (reviewFilterBar) {
-    const reviewVisible = state.collection === "reviews";
     reviewFilterBar.classList.toggle("hidden", !reviewVisible);
     if (reviewVisible) {
       [
@@ -1943,6 +1950,23 @@ function updateIdeaFilterBar() {
       });
     }
   }
+
+  const showOutcomeFilter = reviewVisible && state.reviewFilter === "done";
+  if (reviewOutcomeFilterBar) {
+    reviewOutcomeFilterBar.classList.toggle("hidden", !showOutcomeFilter);
+    if (showOutcomeFilter) {
+      [
+        [reviewOutcomeFilterAllBtn, "all"],
+        [reviewOutcomeFilterConfirmedBtn, "confirmed"],
+        [reviewOutcomeFilterRefutedBtn, "refuted"],
+        [reviewOutcomeFilterInconclusiveBtn, "inconclusive"],
+      ].forEach(([button, value]) => {
+        if (!button) return;
+        button.classList.toggle("active", state.reviewOutcomeFilter === value);
+      });
+    }
+  }
+
   if (!visible) return;
   [
     [ideaFilterAllBtn, "all"],
@@ -2239,7 +2263,8 @@ function updateBatchActionButton() {
     state.collection === "reminders" ||
     state.collection === "important" ||
     state.collection === "notes" ||
-    state.collection === "market_tags"
+    state.collection === "market_tags" ||
+    state.collection === "reviews"
   ) {
     markAllReadBtn.classList.add("hidden");
     markAllReadBtn.disabled = false;
@@ -2257,6 +2282,13 @@ function updateBatchActionButton() {
   } else {
     applyIcon(markAllReadBtn, "check-circle", { label: "当前结果全部标为已读" });
   }
+}
+
+function updateRefreshButton() {
+  if (!refreshBtn) return;
+  const visible = state.collection !== "reviews";
+  refreshBtn.classList.toggle("hidden", !visible);
+  if (!visible) refreshBtn.disabled = false;
 }
 
 function updateTrackedCreateButton() {
@@ -2486,7 +2518,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.1";
+  version.textContent = "News Reader v2.1.0.2";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5885,6 +5917,7 @@ async function openReviewCard(item) {
     detailReviewResultBadge.className = "review-result-badge hidden";
   }
   detailReviewTimeline.innerHTML = "";
+  if (detailReviewScrollArea) detailReviewScrollArea.scrollTop = 0;
   hideAllReviewForms();
 
   try {
@@ -5903,6 +5936,19 @@ function hideAllReviewForms() {
   if (detailReviewReviseForm) detailReviewReviseForm.classList.add("hidden");
   if (detailReviewCompleteForm) detailReviewCompleteForm.classList.add("hidden");
   if (detailReviewRetrackForm) detailReviewRetrackForm.classList.add("hidden");
+}
+
+function showReviewForm(form, firstInput) {
+  hideAllReviewForms();
+  if (form) form.classList.remove("hidden");
+  window.requestAnimationFrame(() => {
+    if (!firstInput) return;
+    try {
+      firstInput.focus({ preventScroll: true });
+    } catch {
+      firstInput.focus();
+    }
+  });
 }
 
 function renderReviewDetail(review) {
@@ -5956,7 +6002,7 @@ function renderReviewDetail(review) {
 
 function renderReviewSourceInfo(review) {
   // Remove existing source-info section
-  const existing = detailReviewBody.querySelector(".review-source-info");
+  const existing = detailReviewScrollArea?.querySelector(".review-source-info");
   if (existing) existing.remove();
 
   const snap = review.source_snapshot || {};
@@ -6021,11 +6067,11 @@ function renderReviewSourceInfo(review) {
     section.appendChild(newsDiv);
   }
 
-  // Insert after result badge, before timeline
-  if (detailReviewTimeline && detailReviewTimeline.parentElement === detailReviewBody) {
-    detailReviewBody.insertBefore(section, detailReviewTimeline);
-  } else {
-    detailReviewBody.appendChild(section);
+  // Insert after the result badge, before the independently scrolling timeline.
+  if (detailReviewTimeline && detailReviewTimeline.parentElement === detailReviewScrollArea) {
+    detailReviewScrollArea.insertBefore(section, detailReviewTimeline);
+  } else if (detailReviewScrollArea) {
+    detailReviewScrollArea.appendChild(section);
   }
 }
 
@@ -6547,6 +6593,7 @@ async function fetchReviewsPage(page) {
     page: String(page),
     per: String(state.per),
     status: state.reviewFilter,
+    result: state.reviewFilter === "done" ? state.reviewOutcomeFilter : "all",
   });
   const res = await fetch(`/api/reviews?${params.toString()}`);
   if (!res.ok) throw new Error("reviews_fetch_failed");
@@ -7164,6 +7211,7 @@ async function loadFirstPage(page = 1) {
     syncSearchPageControls();
     updateFilterButtons();
     updateBatchActionButton();
+    updateRefreshButton();
     updateCollectionButtons();
     updateSortOrderButton();
     updateSourceFilterVisibility();
@@ -7539,6 +7587,19 @@ if (reviewFilterDoneBtn) {
     await loadFirstPage();
   });
 }
+
+[
+  [reviewOutcomeFilterAllBtn, "all"],
+  [reviewOutcomeFilterConfirmedBtn, "confirmed"],
+  [reviewOutcomeFilterRefutedBtn, "refuted"],
+  [reviewOutcomeFilterInconclusiveBtn, "inconclusive"],
+].forEach(([button, filter]) => {
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    state.reviewOutcomeFilter = filter;
+    await loadFirstPage();
+  });
+});
 if (navTrackedBtn) {
   navTrackedBtn.addEventListener("click", async () => {
     await switchCollection("tracked");
@@ -8697,6 +8758,7 @@ if (searchPageSubmitBtn) {
 syncSearchPageControls();
 updateFilterButtons();
 updateBatchActionButton();
+updateRefreshButton();
 updateSortOrderButton();
 fetchReadingCheckpoint()
   .then((cp) => {
@@ -8902,10 +8964,9 @@ if (reviewCreateSaveBtn) {
 
 if (detailReviewProgressBtn) {
   detailReviewProgressBtn.addEventListener("click", () => {
-    hideAllReviewForms();
     if (reviewProgressText) reviewProgressText.value = "";
     if (reviewProgressDate) reviewProgressDate.value = new Date().toISOString().slice(0, 10);
-    if (detailReviewProgressForm) detailReviewProgressForm.classList.remove("hidden");
+    showReviewForm(detailReviewProgressForm, reviewProgressText);
   });
 }
 
@@ -8937,7 +8998,6 @@ if (reviewProgressSaveBtn) {
 
 if (detailReviewReviseBtn) {
   detailReviewReviseBtn.addEventListener("click", () => {
-    hideAllReviewForms();
     const review = state.currentReview;
     if (review) {
       if (reviewReviseJudgment) reviewReviseJudgment.value = review.current_judgment || "";
@@ -8945,7 +9005,7 @@ if (detailReviewReviseBtn) {
     }
     if (reviewReviseReason) reviewReviseReason.value = "";
     if (reviewReviseDate) reviewReviseDate.value = new Date().toISOString().slice(0, 10);
-    if (detailReviewReviseForm) detailReviewReviseForm.classList.remove("hidden");
+    showReviewForm(detailReviewReviseForm, reviewReviseJudgment);
   });
 }
 
@@ -8980,7 +9040,6 @@ if (reviewReviseSaveBtn) {
 
 if (detailReviewCompleteBtn) {
   detailReviewCompleteBtn.addEventListener("click", () => {
-    hideAllReviewForms();
     const review = state.currentReview;
     if (review && reviewCompleteVersions) {
       reviewCompleteVersions.innerHTML = "";
@@ -9022,7 +9081,7 @@ if (detailReviewCompleteBtn) {
     if (reviewCompleteBias) reviewCompleteBias.value = review ? review.bias_text || "" : "";
     if (reviewCompleteExperience) reviewCompleteExperience.value = "";
     if (reviewContinueObserveSection) reviewContinueObserveSection.classList.add("hidden");
-    if (detailReviewCompleteForm) detailReviewCompleteForm.classList.remove("hidden");
+    showReviewForm(detailReviewCompleteForm, reviewCompleteActual);
   });
 }
 
@@ -9098,7 +9157,6 @@ if (reviewContinueDoneBtn) {
 
 if (detailReviewRetrackBtn) {
   detailReviewRetrackBtn.addEventListener("click", () => {
-    hideAllReviewForms();
     const review = state.currentReview;
     if (review) {
       if (reviewRetrackJudgment) reviewRetrackJudgment.value = review.current_judgment || "";
@@ -9108,7 +9166,7 @@ if (detailReviewRetrackBtn) {
     const defaultDate = new Date(today);
     defaultDate.setMonth(today.getMonth() + 1);
     if (reviewRetrackDate) reviewRetrackDate.value = defaultDate.toISOString().slice(0, 10);
-    if (detailReviewRetrackForm) detailReviewRetrackForm.classList.remove("hidden");
+    showReviewForm(detailReviewRetrackForm, reviewRetrackJudgment);
   });
 }
 

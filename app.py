@@ -8320,6 +8320,7 @@ def _serialize_review_chain_detail(row: sqlite3.Row, conn: sqlite3.Connection) -
 @app.get("/api/reviews")
 def api_reviews_list():
     status_filter = (request.args.get("status") or "all").strip().lower()
+    result_filter = (request.args.get("result") or "all").strip().lower()
     q = (request.args.get("q") or "").strip()
     page = max(1, int(request.args.get("page", "1")))
     per = min(100, max(10, int(request.args.get("per", "30"))))
@@ -8327,6 +8328,9 @@ def api_reviews_list():
     valid_filters = ("all", "in_progress", "pending_review", "done")
     if status_filter not in valid_filters:
         return jsonify({"ok": False, "error": "invalid_status_filter"}), 400
+    valid_result_filters = ("all",) + REVIEW_RESULTS
+    if result_filter not in valid_result_filters:
+        return jsonify({"ok": False, "error": "invalid_result_filter"}), 400
 
     conn = db_conn()
     try:
@@ -8344,6 +8348,13 @@ def api_reviews_list():
             conditions.append("c.status = 'active'")
             conditions.append("c.plan_review_date <= ?")
             params.append(_today_str())
+
+        if result_filter != "all":
+            # Result is a completed-review semantic. Keep the query authoritative so
+            # pagination never loses matching rows that are not loaded yet.
+            conditions.append("c.status = 'done'")
+            conditions.append("c.result = ?")
+            params.append(result_filter)
 
         if q:
             like = f"%{q}%"
