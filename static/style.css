@@ -4179,11 +4179,6 @@ html[data-detail-font="large"] {
 
 .detail-review-editor-slot .detail-note-editor {
   margin: 0 0 10px;
-  max-height: min(56dvh, 640px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 10px;
-  scrollbar-gutter: stable;
 }
 
 .detail-review-scroll-area {
@@ -4240,10 +4235,6 @@ html[data-detail-font="large"] {
     padding: 1px 0 calc(14px + var(--mobile-safe-bottom));
   }
 
-  .detail-review-editor-slot .detail-note-editor {
-    max-height: min(56dvh, 560px);
-    padding-right: 2px;
-  }
 
   .feed-controls .review-outcome-filter-bar {
     margin: 0 -8px -6px;

@@ -2518,7 +2518,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.2";
+  version.textContent = "News Reader v2.1.0.3";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5941,6 +5941,7 @@ function hideAllReviewForms() {
 function showReviewForm(form, firstInput) {
   hideAllReviewForms();
   if (form) form.classList.remove("hidden");
+  if (detailReviewScrollArea) detailReviewScrollArea.scrollTop = 0;
   window.requestAnimationFrame(() => {
     if (!firstInput) return;
     try {
