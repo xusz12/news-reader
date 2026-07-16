@@ -132,12 +132,12 @@ components:
     backgroundColor: "{colors.queue-row}"
     textColor: "{colors.text}"
     rounded: "{rounded.row}"
-    padding: "11px 12px 10px"
+    padding: "10px 12px"
   news-row-selected:
     backgroundColor: "{colors.queue-row-selected}"
     textColor: "{colors.row-title}"
     rounded: "{rounded.row}"
-    padding: "11px 12px 10px"
+    padding: "10px 12px"
   input:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.text}"
@@ -331,6 +331,14 @@ Components should feel familiar enough that an experienced user can act without 
 - Placeholders meet the same practical contrast threshold as other necessary text and never replace persistent labels in complex forms.
 - Native controls and standard browser behavior are preferred over invented affordances.
 
+### Feedback and Recovery
+
+- Pending, ready, and failed feedback stays inside the row, editor, evidence card, or detail surface that initiated the operation. Do not send right-panel form errors to the center-list footer.
+- A failed optimistic personal action restores the previous state and names the unsaved action beside the affected row or open detail, with a direct retry. Automatic read tracking does not create repetitive row alerts.
+- Editors preserve the user's current input on failure, keep the primary action available for another attempt, and use a local `role="alert"`; pending and confirmed messages use a local `role="status"`.
+- When the resulting content change is already visible, that change is the primary success feedback. Do not add permanent success chips or duplicate background-task labels.
+- User-facing feedback explains the failed task and next action. Raw internal error codes are replaced with a stable recovery message unless the server already returned useful human-readable detail.
+
 ### Navigation
 
 - Desktop navigation is grouped into **阅读**, **个人队列**, **研究**, and **市场**, followed by source filtering. Every collection remains directly visible; semantic grouping and spacing reduce competition rather than hiding destinations.
@@ -341,10 +349,13 @@ Components should feel familiar enough that an experienced user can act without 
 
 ### News Row
 
-- A row carries source, time, unread state, title, summary, personal flags, note preview, reminder, market tags, and background-work status in a stable order.
-- The title and summary are the primary scan targets. Inline actions remain secondary; on pointer devices they may strengthen on hover, focus-within, or selection, while touch devices keep them discoverable.
-- Read/unread uses more than one cue: unread dot plus title weight/contrast. Selection uses tonal background plus outline/ring.
-- Optimistic state changes require rollback and clear failure feedback.
+- A row carries source, time, unread state, title, summary, personal flags, note preview, reminder, and market tags in a stable order. Source and time retain separate text roles but read as one adjacent `来源 · 时间` provenance cluster; the cluster compresses before it competes with actions.
+- The article row header uses a `minmax(0, 1fr)` provenance column and a compact trailing actions column. Important, read later, and favorite remain directly visible, while personal context no longer competes with provenance for the same horizontal space.
+- The title and summary are the primary scan targets. Inline actions remain secondary; on pointer devices they strengthen on hover, focus-within, or selection, while touch devices keep them discoverable. Do not add a “More” menu or stricter content truncation to create space.
+- User-note state and preview appear after the summary as one lightweight annotation group. Reminder and market tags follow in one wrapping context strip; do not create nested cards for each state.
+- The read-later button is the sole row-level expression of its background detail task: neutral before queuing, amber while fetching, green when detail is ready, and red when fetching fails. Its accessible label and tooltip name the exact state; do not repeat that state as a per-row text chip.
+- Read/unread uses more than one cue: unread dot plus title weight/contrast. The transparent read dot keeps provenance aligned. Selection uses tonal background plus outline/ring, including when the item is already read.
+- Optimistic personal-state changes require rollback plus a local “未保存，已恢复原状态” message and retry action.
 
 ### Toolbars and Filters
 
@@ -366,6 +377,7 @@ Components should feel familiar enough that an experienced user can act without 
 - Daily briefings retain section hierarchy and source traceability without magazine-style presentation.
 - Tracked topics keep their important weights, scoring, exclusions, and matching parameters visible, but divide them into clear sections with stable alignment and stronger labels.
 - Tracking editors use flat semantic sections rather than nested cards. Keyword rules keep persistent labels and nearby help; numeric parameters use a label-to-value comparison grid with two columns when space permits and one column below 640px. Save actions remain visible at the bottom of the editor scroll context, without hiding any parameter.
+- Tracking and review editors keep validation, pending, and failure feedback inside the active right-panel form. Inputs survive failed saves, duplicate submission is blocked while pending, and review-detail load failures expose retry in the detail timeline.
 - Market workbench content keeps user-authored ideas, generated summaries, direction labels, and source news visually distinct.
 - Versioned reviews show current judgment, outcome, evidence, revision history, reminder state, and retracking actions in one scrollable context. Timeline color never replaces event labels.
 

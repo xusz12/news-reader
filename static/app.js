@@ -481,6 +481,93 @@ function setHint(text) {
   listHint.textContent = text || "";
 }
 
+function inlineFeedbackNode(container, className = "") {
+  if (!container) return null;
+  const extraClass = className.trim();
+  let feedback = Array.from(container.children).find((child) => (
+    child.classList?.contains("inline-feedback") &&
+    (!extraClass || child.classList.contains(extraClass))
+  ));
+  if (feedback) return feedback;
+
+  feedback = document.createElement("div");
+  feedback.className = `inline-feedback hidden${extraClass ? ` ${extraClass}` : ""}`;
+  feedback.setAttribute("aria-live", "polite");
+  const actionRow = Array.from(container.children).reverse().find((child) => (
+    child.classList?.contains("detail-note-actions")
+  ));
+  container.insertBefore(feedback, actionRow || null);
+  return feedback;
+}
+
+function setInlineFeedback(container, message, options = {}) {
+  const {
+    tone = "muted",
+    actionLabel = "",
+    onAction = null,
+    className = "",
+    before = null,
+  } = options;
+  const feedback = inlineFeedbackNode(container, className);
+  if (!feedback) return;
+  if (before && before.parentElement === container && feedback.nextElementSibling !== before) {
+    container.insertBefore(feedback, before);
+  }
+  feedback.classList.remove("hidden", "muted", "pending", "ready", "failed");
+  feedback.classList.add(tone);
+  feedback.setAttribute("role", tone === "failed" ? "alert" : "status");
+  feedback.replaceChildren();
+
+  const text = document.createElement("span");
+  text.className = "inline-feedback-text";
+  text.textContent = message || "";
+  feedback.appendChild(text);
+
+  if (actionLabel && typeof onAction === "function") {
+    const action = document.createElement("button");
+    action.className = "inline-feedback-action";
+    action.type = "button";
+    action.textContent = actionLabel;
+    action.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onAction(event);
+    });
+    feedback.appendChild(action);
+  }
+}
+
+function clearInlineFeedback(container, className = "") {
+  if (!container) return;
+  const extraClass = className.trim();
+  Array.from(container.children).forEach((child) => {
+    if (!child.classList?.contains("inline-feedback")) return;
+    if (extraClass && !child.classList.contains(extraClass)) return;
+    child.classList.add("hidden");
+    child.replaceChildren();
+  });
+}
+
+function friendlyActionError(error, fallback) {
+  const raw = String(error?.message || error || "").trim();
+  if (!raw || /^[a-z0-9_:-]+$/i.test(raw)) return fallback;
+  return raw;
+}
+
+function setButtonBusy(button, busy, busyLabel = "处理中…") {
+  if (!button) return;
+  if (busy) {
+    if (!button.dataset.idleLabel) button.dataset.idleLabel = button.textContent || "";
+    button.textContent = busyLabel;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    return;
+  }
+  if (button.dataset.idleLabel) button.textContent = button.dataset.idleLabel;
+  delete button.dataset.idleLabel;
+  button.disabled = false;
+  button.removeAttribute("aria-busy");
+}
+
 function formatReindexHint(payload) {
   const scanned = Number(payload?.scanned_files || 0);
   const changed = Number(payload?.changed_files || 0);
@@ -1832,41 +1919,58 @@ function syncRowUI(li, item) {
   li.dataset.readLaterCompleted = Number(item.detail_ready || 0) === 1 && !item.read_later_at ? "1" : "0";
   li.dataset.readLaterDone = item.read_later_done_at ? "1" : "0";
   li.dataset.hasReminder = Number(item.active_reminder_count || 0) > 0 ? "1" : "0";
+  li.dataset.detailStatus = item.detail_status || "none";
 
   const unreadDot = li.querySelector(".unread-dot");
-  if (unreadDot) unreadDot.classList.toggle("hidden", !!item.read_at);
-  const noteBadge = li.querySelector(".note-badge");
+  if (unreadDot) unreadDot.classList.toggle("is-read", !!item.read_at);
+  const noteBadge = li.querySelector(".row-note-badge");
+  const noteState = li.querySelector(".row-note-state");
+  let hasNote = false;
   if (noteBadge) {
-    const hasNote = Number(item.has_note || 0) === 1;
+    hasNote = Number(item.has_note || 0) === 1;
     noteBadge.classList.toggle("hidden", !hasNote);
   }
   const reminderBadge = li.querySelector(".reminder-badge");
+  let hasReminder = false;
   if (reminderBadge) {
     const activeCount = Number(item.active_reminder_count || 0);
     const dueCount = Number(item.due_reminder_count || 0);
+    hasReminder = activeCount > 0;
     reminderBadge.textContent = dueCount > 0 ? `到期 ${dueCount}` : `提醒 ${activeCount}`;
-    reminderBadge.classList.toggle("hidden", activeCount <= 0);
+    reminderBadge.classList.toggle("hidden", !hasReminder);
     reminderBadge.classList.toggle("due", dueCount > 0);
   }
   const notePreview = li.querySelector(".row-note-preview");
+  let hasNotePreview = false;
   if (notePreview) {
     const previewText = typeof item.note_preview === "string" ? item.note_preview.trim() : "";
+    hasNotePreview = !!previewText;
     notePreview.textContent = previewText;
-    notePreview.classList.toggle("hidden", !previewText);
+    notePreview.classList.toggle("hidden", !hasNotePreview);
   }
+  if (noteState) noteState.classList.toggle("hidden", !hasNote && !hasNotePreview);
+
   const marketTagsWrap = li.querySelector(".market-tags");
   const titleEl = li.querySelector(".title");
+  let hasMarketTags = false;
   if (marketTagsWrap) {
     marketTagsWrap.innerHTML = "";
     const tags = marketTagsFromItem(item);
+    hasMarketTags = tags.length > 0;
     tags.forEach((mt) => {
       const badge = document.createElement("span");
       badge.className = `market-tag-badge ${mt.direction}`;
       badge.textContent = mt.tag;
       marketTagsWrap.appendChild(badge);
     });
-    marketTagsWrap.classList.toggle("hidden", tags.length === 0);
+    marketTagsWrap.classList.toggle("hidden", !hasMarketTags);
   }
+
+  const contextStrip = li.querySelector(".row-context-strip");
+  const hasContextStrip = hasReminder || hasMarketTags;
+  if (contextStrip) contextStrip.classList.toggle("hidden", !hasContextStrip);
+  const context = li.querySelector(".news-row-context");
+  if (context) context.classList.toggle("hidden", !hasNote && !hasNotePreview && !hasContextStrip);
 
   if (titleEl) {
     titleEl.classList.remove("tone-important", "tone-bullish", "tone-bearish", "tone-mixed");
@@ -1908,13 +2012,13 @@ function syncRowUI(li, item) {
     const detailFailed = item.detail_status === "failed";
     const completed = detailReady && !item.read_later_at;
     const tone = item.read_later_at
-      ? (detailReady ? "success" : "warning")
+      ? (detailFailed ? "danger" : (detailReady ? "success" : "warning"))
       : (completed ? "success" : (detailReady ? "success" : "default"));
     applyIcon(readLaterBtn, "bookmark", {
       filled: !!item.read_later_at,
       tone,
       label: item.read_later_at
-        ? (detailReady ? "取消稍后再看（详情已就绪）" : (detailFailed ? "取消稍后再看（详情失败）" : "取消稍后再看（详情抓取中）"))
+        ? (detailFailed ? "取消稍后再看（详情抓取失败）" : (detailReady ? "取消稍后再看（详情已就绪）" : "取消稍后再看（详情抓取中）"))
         : (completed ? "重新加入稍后再看" : (detailReady ? "详情已缓存，加入稍后再看" : "稍后再看")),
     });
   }
@@ -2574,7 +2678,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.7";
+  version.textContent = "News Reader v2.1.0.9";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3125,6 +3229,14 @@ function resetTrackedEditorScroll(container) {
   if (panel) panel.scrollTop = 0;
 }
 
+function trackedEditorPanel(container) {
+  return container?.querySelector(".detail-tracked-form-panel") || null;
+}
+
+function trackedFeedbackHost(container) {
+  return container?.querySelector(".tracked-form-actions") || trackedEditorPanel(container);
+}
+
 function openTrackedDefaultsPanel() {
   closeTagAdminView();
   clearTrendIdeaDetailState();
@@ -3138,6 +3250,7 @@ function openTrackedDefaultsPanel() {
   if (detailChatBody) detailChatBody.classList.add("hidden");
   detailTrackedDefaultsBody.classList.remove("hidden");
   resetTrackedEditorScroll(detailTrackedDefaultsBody);
+  clearInlineFeedback(trackedFeedbackHost(detailTrackedDefaultsBody));
   fillTrackedDefaultsForm(getTrackedDefaultRuleParams());
   updateWorkspaceLayout();
   openDetailOnMobile();
@@ -3157,6 +3270,7 @@ function openTrackedTopicForm(mode, topic = null) {
   if (detailChatBody) detailChatBody.classList.add("hidden");
   detailTrackedFormBody.classList.remove("hidden");
   resetTrackedEditorScroll(detailTrackedFormBody);
+  clearInlineFeedback(trackedFeedbackHost(detailTrackedFormBody));
   detailTrackedFormTitle.textContent = mode === "edit" ? "编辑跟踪主题" : "新建跟踪主题";
   detailTrackedFormMeta.textContent = mode === "edit"
     ? "修改规则、增量范围和启用状态；字段说明和打分说明都放在当前编辑页内。"
@@ -3169,6 +3283,12 @@ function openTrackedTopicForm(mode, topic = null) {
   }
   if (detailTrackedSaveDefaultsBtn) {
     detailTrackedSaveDefaultsBtn.classList.toggle("hidden", mode !== "edit");
+  }
+  if (detailTrackedFormSaveBtn) {
+    detailTrackedFormSaveBtn.disabled = false;
+    detailTrackedFormSaveBtn.textContent = "保存";
+    detailTrackedFormSaveBtn.removeAttribute("aria-busy");
+    delete detailTrackedFormSaveBtn.dataset.idleLabel;
   }
   fillTrackedTopicForm(topic);
   updateWorkspaceLayout();
@@ -3497,8 +3617,14 @@ function openTrendComposeView(prefill = null) {
   detailBody.classList.add("hidden");
   detailEmpty.classList.add("hidden");
   detailTrendComposerBody.classList.remove("hidden");
+  clearInlineFeedback(trendNoteComposeSaveBtn?.closest(".detail-note-editor"));
   state.trendComposeOpen = true;
   renderTrendComposeOptions();
+  if (trendNoteComposeSaveBtn) {
+    trendNoteComposeSaveBtn.textContent = "保存";
+    trendNoteComposeSaveBtn.removeAttribute("aria-busy");
+    delete trendNoteComposeSaveBtn.dataset.idleLabel;
+  }
   if (trendNoteDateSelect.options.length) {
     trendNoteDateSelect.value = trendNoteDateSelect.options[0].value;
   }
@@ -3824,9 +3950,57 @@ function rerenderOne(itemId) {
   if (item && state.selectedId === itemId) renderDetail(item);
 }
 
+function statePatchActionLabel(payload) {
+  if ("favorite" in payload) return payload.favorite ? "加入收藏" : "取消收藏";
+  if ("important" in payload) return payload.important ? "标为重要" : "取消重要";
+  if ("read_later" in payload) return payload.read_later ? "加入稍后再看" : "取消稍后再看";
+  return "";
+}
+
+function clearDetailActionFeedback() {
+  clearInlineFeedback(detailBody, "detail-action-feedback");
+}
+
+function showDetailActionFeedback(message, options = {}) {
+  setInlineFeedback(detailBody, message, {
+    tone: options.tone || "failed",
+    actionLabel: options.actionLabel || "",
+    onAction: options.onAction || null,
+    className: "detail-action-feedback",
+    before: detailBody?.querySelector(".detail-scroll-area") || null,
+  });
+}
+
+function clearStatePatchFeedback(itemId) {
+  const row = newsList.querySelector(`.news-item[data-id=\"${itemId}\"]`);
+  clearInlineFeedback(row, "row-inline-feedback");
+  if (state.selectedId === itemId) clearDetailActionFeedback();
+}
+
+function showStatePatchError(itemId, payload) {
+  const actionLabel = statePatchActionLabel(payload);
+  if (!actionLabel) return;
+  const message = `${actionLabel}未保存，已恢复原状态。`;
+  const retry = () => patchStateWithRollback(itemId, { ...payload });
+  const row = newsList.querySelector(`.news-item[data-id=\"${itemId}\"]`);
+  setInlineFeedback(row, message, {
+    tone: "failed",
+    actionLabel: "重试",
+    onAction: retry,
+    className: "row-inline-feedback",
+  });
+  if (state.selectedId === itemId && detailBody && !detailBody.classList.contains("hidden")) {
+    showDetailActionFeedback(message, {
+      actionLabel: "重试",
+      onAction: retry,
+    });
+  }
+}
+
 async function patchStateWithRollback(itemId, payload) {
   if (writeInFlight.has(itemId)) return;
   writeInFlight.add(itemId);
+  clearStatePatchFeedback(itemId);
   const item = state.itemsById.get(itemId);
   if (!item) {
     writeInFlight.delete(itemId);
@@ -3892,6 +4066,7 @@ async function patchStateWithRollback(itemId, payload) {
     item.read_later_at = backup.read_later_at;
     item.read_later_done_at = backup.read_later_done_at;
     rerenderOne(itemId);
+    showStatePatchError(itemId, payload);
   } finally {
     writeInFlight.delete(itemId);
   }
@@ -4557,8 +4732,18 @@ function refreshDetailMarketTagsUI(item) {
     removeBtn.setAttribute("aria-label", `删除标签：${mt.tag}`);
     removeBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      await deleteMarketTag(item, mt.key || mt.tag);
-      refreshDetailMarketTagsUI(item);
+      clearDetailActionFeedback();
+      removeBtn.disabled = true;
+      try {
+        await deleteMarketTag(item, mt.key || mt.tag);
+        refreshDetailMarketTagsUI(item);
+      } catch (error) {
+        showDetailActionFeedback(
+          `删除板块标记失败：${friendlyActionError(error, "原标记仍然保留，请稍后重试。")}`,
+        );
+      } finally {
+        removeBtn.disabled = false;
+      }
     });
 
     chip.appendChild(removeBtn);
@@ -4575,6 +4760,7 @@ function openMarketPicker(item, direction) {
     return;
   }
   marketPickerDirection = direction;
+  clearInlineFeedback(detailMarketPicker);
   detailMarketPickerOptions.innerHTML = "";
   detailMarketPickerTitle.textContent = direction === "bullish" ? "选择看多板块" : "选择看空板块";
   activeMarketTagChoices().forEach((tagDef) => {
@@ -4583,9 +4769,22 @@ function openMarketPicker(item, direction) {
     btn.className = "detail-market-option";
     btn.textContent = tagDef.display_name;
     btn.addEventListener("click", async () => {
-      await upsertMarketTag(item, tagDef.key, direction);
-      closeMarketPicker();
-      refreshDetailMarketTagsUI(item);
+      clearInlineFeedback(detailMarketPicker);
+      btn.disabled = true;
+      setInlineFeedback(detailMarketPicker, "正在保存板块方向…", { tone: "pending" });
+      try {
+        await upsertMarketTag(item, tagDef.key, direction);
+        closeMarketPicker();
+        refreshDetailMarketTagsUI(item);
+      } catch (error) {
+        setInlineFeedback(
+          detailMarketPicker,
+          `保存板块方向失败：${friendlyActionError(error, "请保留当前选择并稍后重试。")}`,
+          { tone: "failed" },
+        );
+      } finally {
+        btn.disabled = false;
+      }
     });
     detailMarketPickerOptions.appendChild(btn);
   });
@@ -4678,6 +4877,7 @@ function openReminderEditor(item, reminder = null) {
   detailReminderEventDateInput.value = reminder?.event_date || item.date_key || "";
   detailReminderNoteInput.value = reminder?.note || "";
   detailReminderDeleteBtn.classList.toggle("hidden", !reminder);
+  clearInlineFeedback(detailReminderEditor);
   detailReminderEditor.classList.remove("hidden");
 }
 
@@ -4757,6 +4957,22 @@ function refreshDetailReminderUI(item) {
 
     const actions = document.createElement("div");
     actions.className = "detail-note-actions";
+    const runReminderAction = async (button, pendingMessage, failureLabel, task) => {
+      clearInlineFeedback(card);
+      setButtonBusy(button, true, "处理中…");
+      setInlineFeedback(card, pendingMessage, { tone: "pending" });
+      try {
+        await task();
+      } catch (error) {
+        setInlineFeedback(
+          card,
+          `${failureLabel}：${friendlyActionError(error, "提醒未改变，请稍后重试。")}`,
+          { tone: "failed" },
+        );
+      } finally {
+        setButtonBusy(button, false);
+      }
+    };
 
     if (reminder.status !== "done") {
       const doneBtn = document.createElement("button");
@@ -4767,7 +4983,12 @@ function refreshDetailReminderUI(item) {
         event.stopPropagation();
         const current = state.itemsById.get(state.selectedId);
         if (!current) return;
-        await saveReminderDraft(current, reminder.id, { status: "done" });
+        await runReminderAction(
+          doneBtn,
+          "正在标记提醒为已完成…",
+          "标记提醒失败",
+          () => saveReminderDraft(current, reminder.id, { status: "done" }),
+        );
       });
       actions.appendChild(doneBtn);
     }
@@ -4781,7 +5002,12 @@ function refreshDetailReminderUI(item) {
         event.stopPropagation();
         const current = state.itemsById.get(state.selectedId);
         if (!current) return;
-        await saveReminderDraft(current, reminder.id, { status: "active" });
+        await runReminderAction(
+          reopenBtn,
+          "正在重新激活提醒…",
+          "重新激活提醒失败",
+          () => saveReminderDraft(current, reminder.id, { status: "active" }),
+        );
       });
       actions.appendChild(reopenBtn);
     }
@@ -4805,7 +5031,12 @@ function refreshDetailReminderUI(item) {
       const current = state.itemsById.get(state.selectedId);
       if (!current) return;
       if (!window.confirm("确认删除这个提醒？")) return;
-      await removeReminderDraft(current, reminder.id);
+      await runReminderAction(
+        deleteBtn,
+        "正在删除提醒…",
+        "删除提醒失败",
+        () => removeReminderDraft(current, reminder.id),
+      );
     });
     actions.appendChild(deleteBtn);
 
@@ -4875,6 +5106,7 @@ async function openDetailTrackEditor(item) {
     }
   }
   detailTrackEditor.classList.remove("hidden");
+  clearInlineFeedback(detailTrackEditor);
 }
 
 async function saveReminderDraft(item, reminderId = null, overridePayload = null) {
@@ -5463,8 +5695,11 @@ function setupLoadObserver() {
 
 function buildItemRow(item) {
   const li = document.createElement("li");
-  li.className = "news-item";
+  li.className = "news-item feed-news-item";
   li.dataset.id = item.id;
+
+  const header = document.createElement("div");
+  header.className = "news-row-header";
 
   const line1 = document.createElement("div");
   line1.className = "line1";
@@ -5476,7 +5711,21 @@ function buildItemRow(item) {
 
   const text = document.createElement("span");
   text.className = "line1-text";
-  text.textContent = `${item.source || "未知来源"} · ${item.published_at || ""}`;
+  const source = document.createElement("span");
+  source.className = "line1-source";
+  source.textContent = item.source || "未知来源";
+  text.appendChild(source);
+  if (item.published_at) {
+    const separator = document.createElement("span");
+    separator.className = "line1-separator";
+    separator.textContent = "·";
+    separator.setAttribute("aria-hidden", "true");
+    const publishedAt = document.createElement("span");
+    publishedAt.className = "line1-time";
+    publishedAt.textContent = item.published_at;
+    text.appendChild(separator);
+    text.appendChild(publishedAt);
+  }
 
   line1.appendChild(unreadDot);
   line1.appendChild(icon);
@@ -5487,14 +5736,6 @@ function buildItemRow(item) {
     videoBadge.textContent = "VIDEO";
     line1.appendChild(videoBadge);
   }
-  const noteBadge = document.createElement("span");
-  noteBadge.className = "note-badge hidden";
-  noteBadge.textContent = "想法";
-  line1.appendChild(noteBadge);
-  const reminderBadge = document.createElement("span");
-  reminderBadge.className = "note-badge reminder-badge hidden";
-  line1.appendChild(reminderBadge);
-
   const title = document.createElement("div");
   title.className = "title";
   title.textContent = rowTitleText(item);
@@ -5506,8 +5747,28 @@ function buildItemRow(item) {
   const notePreview = document.createElement("p");
   notePreview.className = "row-note-preview hidden";
 
+  const noteState = document.createElement("div");
+  noteState.className = "row-note-state hidden";
+  const noteBadge = document.createElement("span");
+  noteBadge.className = "note-badge row-note-badge hidden";
+  noteBadge.textContent = "想法";
+  noteState.appendChild(noteBadge);
+  noteState.appendChild(notePreview);
+
+  const contextStrip = document.createElement("div");
+  contextStrip.className = "row-context-strip hidden";
+  const reminderBadge = document.createElement("span");
+  reminderBadge.className = "note-badge reminder-badge hidden";
+  contextStrip.appendChild(reminderBadge);
+
   const marketTagsWrap = document.createElement("div");
   marketTagsWrap.className = "market-tags hidden";
+  contextStrip.appendChild(marketTagsWrap);
+
+  const context = document.createElement("div");
+  context.className = "news-row-context hidden";
+  context.appendChild(noteState);
+  context.appendChild(contextStrip);
 
   const actions = document.createElement("div");
   actions.className = "row-actions";
@@ -5543,13 +5804,13 @@ function buildItemRow(item) {
     actions.appendChild(btnReadLater);
   }
   actions.appendChild(btnFavorite);
-  line1.appendChild(actions);
+  header.appendChild(line1);
+  header.appendChild(actions);
 
-  li.appendChild(line1);
+  li.appendChild(header);
   li.appendChild(title);
   if (item.summary) li.appendChild(summary);
-  li.appendChild(notePreview);
-  li.appendChild(marketTagsWrap);
+  li.appendChild(context);
 
   li.addEventListener("click", () => {
     if (state.selectedId === item.id) {
@@ -6086,8 +6347,18 @@ async function openReviewCard(item) {
     const review = await fetchReviewDetail(item.id);
     renderReviewDetail(review);
   } catch (err) {
-    detailReviewTitle.textContent = "加载失败";
-    detailReviewMeta.textContent = String(err.message || err);
+    detailReviewTitle.textContent = "复盘暂不可用";
+    detailReviewMeta.textContent = "列表位置和当前选择已保留。";
+    setInlineFeedback(
+      detailReviewTimeline,
+      `复盘详情读取失败：${friendlyActionError(err, "网络或服务暂时不可用。")}`,
+      {
+        tone: "failed",
+        actionLabel: "重试",
+        onAction: () => openReviewCard(item),
+        className: "review-load-feedback",
+      },
+    );
   }
   openDetailOnMobile();
   updateWorkspaceLayout();
@@ -6102,6 +6373,7 @@ function hideAllReviewForms() {
 
 function showReviewForm(form, firstInput) {
   hideAllReviewForms();
+  clearInlineFeedback(form);
   if (form) form.classList.remove("hidden");
   if (detailReviewScrollArea) detailReviewScrollArea.scrollTop = 0;
   window.requestAnimationFrame(() => {
@@ -6362,11 +6634,23 @@ function renderReviewTimeline(review) {
         delBtn.textContent = "删除";
         delBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
+          clearInlineFeedback(card);
+          setButtonBusy(delBtn, true, "删除中…");
           try {
             const updated = await reviewDeleteEvidence(review.id, ev.id);
             renderReviewDetail(updated);
           } catch (err) {
-            setHint(`删除证据失败：${err.message || err}`);
+            setInlineFeedback(
+              card,
+              `删除证据失败：${friendlyActionError(err, "服务暂时不可用。")}`,
+              {
+                tone: "failed",
+                actionLabel: "重试",
+                onAction: () => delBtn.click(),
+              },
+            );
+          } finally {
+            setButtonBusy(delBtn, false);
           }
         });
         card.appendChild(delBtn);
@@ -6424,6 +6708,13 @@ function openStandaloneIdeaNewView() {
   syncIdeaRowSelection();
   detailEmpty.classList.add("hidden");
   detailStandaloneIdeaNewBody.classList.remove("hidden");
+  clearInlineFeedback(detailStandaloneIdeaNewSaveBtn?.closest(".detail-note-editor"));
+  if (detailStandaloneIdeaNewSaveBtn) {
+    detailStandaloneIdeaNewSaveBtn.disabled = false;
+    detailStandaloneIdeaNewSaveBtn.textContent = "保存";
+    detailStandaloneIdeaNewSaveBtn.removeAttribute("aria-busy");
+    delete detailStandaloneIdeaNewSaveBtn.dataset.idleLabel;
+  }
   if (detailStandaloneIdeaNewInput) detailStandaloneIdeaNewInput.value = "";
   updateWorkspaceLayout();
   if (detailStandaloneIdeaNewInput) detailStandaloneIdeaNewInput.focus();
@@ -8200,7 +8491,17 @@ if (detailTrackBtn) {
       closeDetailTrackEditor();
       return;
     }
-    await openDetailTrackEditor(item);
+    clearDetailActionFeedback();
+    detailTrackBtn.disabled = true;
+    try {
+      await openDetailTrackEditor(item);
+    } catch (error) {
+      showDetailActionFeedback(
+        `读取跟踪主题失败：${friendlyActionError(error, "请稍后重试。")}`,
+      );
+    } finally {
+      detailTrackBtn.disabled = false;
+    }
   });
 }
 
@@ -8209,7 +8510,20 @@ if (detailReminderSaveBtn) {
     if (!state.selectedId) return;
     const item = state.itemsById.get(state.selectedId);
     if (!item) return;
-    await saveReminderDraft(item, state.selectedReminderDraftId || null);
+    clearInlineFeedback(detailReminderEditor);
+    setButtonBusy(detailReminderSaveBtn, true, "保存中…");
+    setInlineFeedback(detailReminderEditor, "正在保存提醒…", { tone: "pending" });
+    try {
+      await saveReminderDraft(item, state.selectedReminderDraftId || null);
+    } catch (error) {
+      setInlineFeedback(
+        detailReminderEditor,
+        `保存提醒失败：${friendlyActionError(error, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(detailReminderSaveBtn, false);
+    }
   });
 }
 
@@ -8219,7 +8533,20 @@ if (detailReminderDeleteBtn) {
     const item = state.itemsById.get(state.selectedId);
     if (!item) return;
     if (!window.confirm("确认删除这个提醒？")) return;
-    await removeReminderDraft(item, state.selectedReminderDraftId);
+    clearInlineFeedback(detailReminderEditor);
+    setButtonBusy(detailReminderDeleteBtn, true, "删除中…");
+    setInlineFeedback(detailReminderEditor, "正在删除提醒…", { tone: "pending" });
+    try {
+      await removeReminderDraft(item, state.selectedReminderDraftId);
+    } catch (error) {
+      setInlineFeedback(
+        detailReminderEditor,
+        `删除提醒失败：${friendlyActionError(error, "提醒仍然保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(detailReminderDeleteBtn, false);
+    }
   });
 }
 
@@ -8233,17 +8560,30 @@ if (detailTrackSaveBtn) {
     const item = state.itemsById.get(state.selectedId);
     if (!item || !detailTrackTopicSelect?.value) return;
     const topicId = Number(detailTrackTopicSelect.value);
-    await addItemToTrackedTopic(topicId, item.id);
-    closeDetailTrackEditor();
-    state.trackedTopics = await fetchTrackedTopics();
-    if (state.collection === "tracked" && String(state.selectedTrackedTopicId) === String(topicId)) {
-      await loadTrackedTopicTimeline(topicId);
-    } else if (state.collection === "tracked") {
-      renderTrackedTopicsList();
-      renderMeta();
+    clearInlineFeedback(detailTrackEditor);
+    setButtonBusy(detailTrackSaveBtn, true, "加入中…");
+    setInlineFeedback(detailTrackEditor, "正在加入跟踪主题…", { tone: "pending" });
+    try {
+      await addItemToTrackedTopic(topicId, item.id);
+      closeDetailTrackEditor();
+      state.trackedTopics = await fetchTrackedTopics();
+      if (state.collection === "tracked" && String(state.selectedTrackedTopicId) === String(topicId)) {
+        await loadTrackedTopicTimeline(topicId);
+      } else if (state.collection === "tracked") {
+        renderTrackedTopicsList();
+        renderMeta();
+      }
+      const topic = state.trackedTopics.find((row) => String(row.id) === String(topicId));
+      setHint(`已加入跟踪主题：${topic?.title || topicId}`);
+    } catch (error) {
+      setInlineFeedback(
+        detailTrackEditor,
+        `加入跟踪主题失败：${friendlyActionError(error, "当前选择已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(detailTrackSaveBtn, false);
     }
-    const topic = state.trackedTopics.find((row) => String(row.id) === String(topicId));
-    setHint(`已加入跟踪主题：${topic?.title || topicId}`);
   });
 }
 
@@ -8275,6 +8615,7 @@ if (detailTrackedFormCancelBtn) {
 
 if (detailTrackedSaveDefaultsBtn) {
   detailTrackedSaveDefaultsBtn.addEventListener("click", async () => {
+    const form = trackedFeedbackHost(detailTrackedFormBody);
     const payload = trackedDefaultParamsPayloadFromInputs({
       threshold: detailTrackedThresholdInput,
       title_weight: detailTrackedTitleWeightInput,
@@ -8287,11 +8628,16 @@ if (detailTrackedSaveDefaultsBtn) {
       exclude_penalty: detailTrackedExcludePenaltyInput,
     });
     detailTrackedSaveDefaultsBtn.disabled = true;
+    setInlineFeedback(form, "正在保存默认参数…", { tone: "pending" });
     try {
       state.runtimeSettings = await saveTrackedDefaultRuleParams(payload);
-      setHint("已把当前数字参数保存为默认值；只影响后续新建主题");
+      setInlineFeedback(form, "当前数字参数已保存为默认值，只影响后续新建主题。", { tone: "ready" });
     } catch (error) {
-      setHint(`保存默认参数失败：${error?.message || error}`);
+      setInlineFeedback(
+        form,
+        `保存默认参数失败：${friendlyActionError(error, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
       detailTrackedSaveDefaultsBtn.disabled = false;
     }
@@ -8300,9 +8646,11 @@ if (detailTrackedSaveDefaultsBtn) {
 
 if (detailTrackedDraftBtn) {
   detailTrackedDraftBtn.addEventListener("click", async () => {
+    const form = trackedFeedbackHost(detailTrackedFormBody);
+    clearInlineFeedback(form);
     const title = detailTrackedTitleInput?.value.trim() || "";
     if (!title) {
-      setHint("请先输入主题名称");
+      setInlineFeedback(form, "请先输入主题名称，再生成规则草稿。", { tone: "failed" });
       detailTrackedTitleInput?.focus();
       return;
     }
@@ -8312,12 +8660,17 @@ if (detailTrackedDraftBtn) {
     }
     detailTrackedDraftBtn.disabled = true;
     detailTrackedDraftBtn.textContent = "生成中...";
+    setInlineFeedback(form, `正在为“${title}”生成规则草稿…`, { tone: "pending" });
     try {
       const data = await generateTrackedTopicRuleDraft({ title });
       applyTrackedRuleDraft(data.draft || {});
-      setHint(`已生成“${title}”的规则草稿，请检查后再保存`);
+      setInlineFeedback(form, `已生成“${title}”的规则草稿，请检查后再保存。`, { tone: "ready" });
     } catch (error) {
-      setHint(`规则草稿生成失败：${error?.message || error}；可手动填写或稍后重试`);
+      setInlineFeedback(
+        form,
+        `规则草稿生成失败：${friendlyActionError(error, "可手动填写，或稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
       detailTrackedDraftBtn.disabled = false;
       detailTrackedDraftBtn.textContent = "一键填写";
@@ -8327,6 +8680,7 @@ if (detailTrackedDraftBtn) {
 
 if (trackedDefaultsSaveBtn) {
   trackedDefaultsSaveBtn.addEventListener("click", async () => {
+    const form = trackedFeedbackHost(detailTrackedDefaultsBody);
     const payload = trackedDefaultParamsPayloadFromInputs({
       threshold: trackedDefaultsThresholdInput,
       title_weight: trackedDefaultsTitleWeightInput,
@@ -8339,12 +8693,17 @@ if (trackedDefaultsSaveBtn) {
       exclude_penalty: trackedDefaultsExcludePenaltyInput,
     });
     trackedDefaultsSaveBtn.disabled = true;
+    setInlineFeedback(form, "正在保存默认匹配参数…", { tone: "pending" });
     try {
       state.runtimeSettings = await saveTrackedDefaultRuleParams(payload);
       fillTrackedDefaultsForm(getTrackedDefaultRuleParams());
-      setHint("默认匹配参数已保存，新建主题会自动带入");
+      setInlineFeedback(form, "默认匹配参数已保存，新建主题会自动带入。", { tone: "ready" });
     } catch (error) {
-      setHint(`保存默认参数失败：${error?.message || error}`);
+      setInlineFeedback(
+        form,
+        `保存默认参数失败：${friendlyActionError(error, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
       trackedDefaultsSaveBtn.disabled = false;
     }
@@ -8353,13 +8712,19 @@ if (trackedDefaultsSaveBtn) {
 
 if (trackedDefaultsRestoreBtn) {
   trackedDefaultsRestoreBtn.addEventListener("click", async () => {
+    const form = trackedFeedbackHost(detailTrackedDefaultsBody);
     trackedDefaultsRestoreBtn.disabled = true;
+    setInlineFeedback(form, "正在恢复系统默认参数…", { tone: "pending" });
     try {
       state.runtimeSettings = await saveTrackedDefaultRuleParams(TRACKED_SYSTEM_DEFAULT_RULE_PARAMS);
       fillTrackedDefaultsForm(getTrackedDefaultRuleParams());
-      setHint("已恢复系统默认参数");
+      setInlineFeedback(form, "已恢复系统默认参数。", { tone: "ready" });
     } catch (error) {
-      setHint(`恢复系统默认失败：${error?.message || error}`);
+      setInlineFeedback(
+        form,
+        `恢复系统默认失败：${friendlyActionError(error, "请稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
       trackedDefaultsRestoreBtn.disabled = false;
     }
@@ -8368,13 +8733,17 @@ if (trackedDefaultsRestoreBtn) {
 
 if (detailTrackedFormSaveBtn) {
   detailTrackedFormSaveBtn.addEventListener("click", async () => {
+    const form = trackedFeedbackHost(detailTrackedFormBody);
+    clearInlineFeedback(form);
     const payload = trackedFormPayload();
     if (!payload.title) {
-      setHint("请先填写跟踪主题名称");
+      setInlineFeedback(form, "请先填写跟踪主题名称。", { tone: "failed" });
       detailTrackedTitleInput?.focus();
       return;
     }
-    detailTrackedFormSaveBtn.disabled = true;
+    setButtonBusy(detailTrackedFormSaveBtn, true, "保存中…");
+    setInlineFeedback(form, "正在保存跟踪主题，当前输入会保留到操作完成。", { tone: "pending" });
+    let writeConfirmed = false;
     try {
       let topicId = state.selectedTrackedTopicId;
       if (state.trackedFormMode === "edit" && topicId) {
@@ -8383,6 +8752,7 @@ if (detailTrackedFormSaveBtn) {
         const result = await createTrackedTopic(payload);
         topicId = result.topic?.id || topicId;
       }
+      writeConfirmed = true;
       state.trackedTopics = await fetchTrackedTopics();
       state.selectedTrackedTopicId = topicId || null;
       renderTrackedTopicsList();
@@ -8392,8 +8762,20 @@ if (detailTrackedFormSaveBtn) {
         renderTrackedTopicEmpty();
       }
       setHint(state.trackedFormMode === "edit" ? "跟踪主题已更新" : "跟踪主题已创建");
+    } catch (error) {
+      setInlineFeedback(
+        form,
+        writeConfirmed
+          ? `跟踪主题已保存，但刷新详情失败：${friendlyActionError(error, "请返回跟踪列表后重新打开，不要重复提交。")}`
+          : `${state.trackedFormMode === "edit" ? "更新" : "创建"}跟踪主题失败：${friendlyActionError(error, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
-      detailTrackedFormSaveBtn.disabled = false;
+      setButtonBusy(detailTrackedFormSaveBtn, false);
+      if (writeConfirmed) {
+        detailTrackedFormSaveBtn.textContent = "已保存";
+        detailTrackedFormSaveBtn.disabled = true;
+      }
     }
   });
 }
@@ -8426,19 +8808,24 @@ if (trendNoteComposeCancelBtn) {
 
 if (trendNoteComposeSaveBtn) {
   trendNoteComposeSaveBtn.addEventListener("click", async () => {
+    const form = trendNoteComposeSaveBtn.closest(".detail-note-editor");
+    clearInlineFeedback(form);
     const date = trendNoteDateSelect.value;
     const tag = trendNoteTagSelect.value;
     const direction = trendNoteDirectionSelect.value;
     const note = (trendNoteComposeInput.value || "").trim();
     if (!date || !tag || !direction) {
-      setHint("请先选择日期、板块和方向，再保存板块想法");
+      setInlineFeedback(form, "请先选择日期、板块和方向。", { tone: "failed" });
       return;
     }
     if (!note) {
-      setHint("请先输入板块想法内容，再保存");
+      setInlineFeedback(form, "请先输入板块想法内容。", { tone: "failed" });
+      trendNoteComposeInput?.focus();
       return;
     }
-    trendNoteComposeSaveBtn.disabled = true;
+    setButtonBusy(trendNoteComposeSaveBtn, true, "保存中…");
+    setInlineFeedback(form, "正在保存板块想法…", { tone: "pending" });
+    let writeConfirmed = false;
     try {
       await saveTrendNote({
         date,
@@ -8446,6 +8833,7 @@ if (trendNoteComposeSaveBtn) {
         direction,
         note,
       });
+      writeConfirmed = true;
       if (state.collection === "market_tags") {
         await refreshMarketWorkbenchAfterTrendCompose();
         closeTrendComposerView();
@@ -8456,8 +8844,20 @@ if (trendNoteComposeSaveBtn) {
       closeTrendComposerView();
       renderDetailEmpty();
       setHint("板块想法已保存");
+    } catch (error) {
+      setInlineFeedback(
+        form,
+        writeConfirmed
+          ? `板块想法已保存，但刷新工作台失败：${friendlyActionError(error, "请重新进入板块查看，不要重复提交。")}`
+          : `保存板块想法失败：${friendlyActionError(error, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
-      trendNoteComposeSaveBtn.disabled = false;
+      setButtonBusy(trendNoteComposeSaveBtn, false);
+      if (writeConfirmed) {
+        trendNoteComposeSaveBtn.textContent = "已保存";
+        trendNoteComposeSaveBtn.disabled = true;
+      }
     }
   });
 }
@@ -8512,7 +8912,9 @@ function isTwitterItem(item) {
 
 detailRetryBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;
-  detailRetryBtn.disabled = true;
+  clearDetailActionFeedback();
+  setButtonBusy(detailRetryBtn, true, "重试中…");
+  showDetailActionFeedback("正在重新提交详情抓取…", { tone: "pending" });
   try {
     const item = state.itemsById.get(state.selectedId);
     const mode = isTwitterItem(item) && Number(item?.detail_ready || 0) === 1 ? "detail" : "";
@@ -8521,7 +8923,7 @@ detailRetryBtn.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(mode ? { mode } : {}),
     });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error("detail_retry_failed");
     if (item) {
       if (isTwitterItem(item) && Number(item.detail_ready || 0) === 1) {
         item.detail_status = "pending";
@@ -8535,8 +8937,13 @@ detailRetryBtn.addEventListener("click", async () => {
     }
     await loadDetail(state.selectedId);
     startDetailPolling(state.selectedId);
+    clearDetailActionFeedback();
+  } catch (error) {
+    showDetailActionFeedback(
+      `重试详情抓取失败：${friendlyActionError(error, "请稍后再次重试。")}`,
+    );
   } finally {
-    detailRetryBtn.disabled = false;
+    setButtonBusy(detailRetryBtn, false);
   }
 });
 
@@ -8544,21 +8951,28 @@ detailRetranslateBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;
   const item = state.itemsById.get(state.selectedId);
   if (!item || Number(item.detail_ready || 0) !== 1) return;
-  detailRetranslateBtn.disabled = true;
+  clearDetailActionFeedback();
+  setButtonBusy(detailRetranslateBtn, true, "提交中…");
+  showDetailActionFeedback("正在重新提交中文生成…", { tone: "pending" });
   try {
     const res = await fetch(`/api/news/${encodeURIComponent(state.selectedId)}/detail/retry`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: "ai" }),
     });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error("detail_retranslate_failed");
     item.ai_status = "pending";
     state.itemsById.set(item.id, item);
     rerenderOne(item.id);
     await loadDetail(state.selectedId);
     startDetailPolling(state.selectedId);
+    clearDetailActionFeedback();
+  } catch (error) {
+    showDetailActionFeedback(
+      `重新翻译提交失败：${friendlyActionError(error, "现有内容未改变，请稍后重试。")}`,
+    );
   } finally {
-    detailRetranslateBtn.disabled = false;
+    setButtonBusy(detailRetranslateBtn, false);
   }
 });
 
@@ -8567,21 +8981,28 @@ if (detailRefreshTweetBtn) {
     if (!state.selectedId) return;
     const item = state.itemsById.get(state.selectedId);
     if (!item || !isTwitterItem(item)) return;
-    detailRefreshTweetBtn.disabled = true;
+    clearDetailActionFeedback();
+    setButtonBusy(detailRefreshTweetBtn, true, "提交中…");
+    showDetailActionFeedback("正在重新提交推文抓取…", { tone: "pending" });
     try {
       const res = await fetch(`/api/news/${encodeURIComponent(state.selectedId)}/detail/retry`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "detail" }),
       });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error("tweet_detail_retry_failed");
       item.detail_status = "pending";
       state.itemsById.set(item.id, item);
       rerenderOne(item.id);
       await loadDetail(state.selectedId);
       startDetailPolling(state.selectedId);
+      clearDetailActionFeedback();
+    } catch (error) {
+      showDetailActionFeedback(
+        `重新抓取推文提交失败：${friendlyActionError(error, "现有正文和图片未改变，请稍后重试。")}`,
+      );
     } finally {
-      detailRefreshTweetBtn.disabled = false;
+      setButtonBusy(detailRefreshTweetBtn, false);
     }
   });
 }
@@ -8593,6 +9014,7 @@ detailNoteToggleBtn.addEventListener("click", () => {
   const cached = item.url ? state.detailCacheByUrl.get(item.url) : null;
   closeReminderEditor();
   detailNoteInput.value = normalizedDetailNote(cached);
+  clearInlineFeedback(detailNoteEditor);
   setDetailNoteEditorOpen(true);
   detailNoteInput.focus();
 });
@@ -8610,14 +9032,22 @@ detailNoteSaveBtn.addEventListener("click", async () => {
   if (!state.selectedId) return;
   const item = state.itemsById.get(state.selectedId);
   if (!item) return;
+  clearInlineFeedback(detailNoteEditor);
   const noteText = detailNoteInput.value.slice(0, NOTE_MAX_LEN);
-  detailNoteSaveBtn.disabled = true;
+  setButtonBusy(detailNoteSaveBtn, true, "保存中…");
   detailNoteCancelBtn.disabled = true;
+  setInlineFeedback(detailNoteEditor, "正在保存想法…", { tone: "pending" });
   try {
     await saveDetailNote(item, noteText);
     setDetailNoteEditorOpen(false);
+  } catch (error) {
+    setInlineFeedback(
+      detailNoteEditor,
+      `保存想法失败：${friendlyActionError(error, "当前输入已保留，请稍后重试。")}`,
+      { tone: "failed" },
+    );
   } finally {
-    detailNoteSaveBtn.disabled = false;
+    setButtonBusy(detailNoteSaveBtn, false);
     detailNoteCancelBtn.disabled = false;
   }
 });
@@ -8668,6 +9098,7 @@ if (detailTrendIdeaEditBtn) {
     }
 
     setTrendIdeaEditorOpen(true);
+    clearInlineFeedback(detailTrendIdeaSaveBtn?.closest(".detail-note-editor"));
     detailTrendIdeaInput.focus();
   });
 }
@@ -8682,10 +9113,18 @@ if (detailTrendIdeaCancelBtn) {
 
 if (detailTrendIdeaSaveBtn) {
   detailTrendIdeaSaveBtn.addEventListener("click", async () => {
+    const form = detailTrendIdeaSaveBtn.closest(".detail-note-editor");
+    clearInlineFeedback(form);
     const item = state.selectedTrendIdea;
     if (!item) return;
-    detailTrendIdeaSaveBtn.disabled = true;
+    if (!(detailTrendIdeaInput?.value || "").trim()) {
+      setInlineFeedback(form, "板块想法内容不能为空。", { tone: "failed" });
+      detailTrendIdeaInput?.focus();
+      return;
+    }
+    setButtonBusy(detailTrendIdeaSaveBtn, true, "保存中…");
     if (detailTrendIdeaCancelBtn) detailTrendIdeaCancelBtn.disabled = true;
+    setInlineFeedback(form, "正在更新板块想法…", { tone: "pending" });
     try {
       const date_key = detailTrendIdeaDateSelect ? detailTrendIdeaDateSelect.value : item.trend_date_key;
       const tag_key = detailTrendIdeaTagSelect ? detailTrendIdeaTagSelect.value : item.tag_key;
@@ -8714,8 +9153,14 @@ if (detailTrendIdeaSaveBtn) {
         updateIdeaRow(updated);
         renderTrendIdeaDetail(updated);
       }
+    } catch (error) {
+      setInlineFeedback(
+        form,
+        `更新板块想法失败：${friendlyActionError(error, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
-      detailTrendIdeaSaveBtn.disabled = false;
+      setButtonBusy(detailTrendIdeaSaveBtn, false);
       if (detailTrendIdeaCancelBtn) detailTrendIdeaCancelBtn.disabled = false;
     }
   });
@@ -8754,24 +9199,40 @@ if (ideaNewBtn) {
 
 if (detailStandaloneIdeaNewSaveBtn) {
   detailStandaloneIdeaNewSaveBtn.addEventListener("click", async () => {
+    const form = detailStandaloneIdeaNewSaveBtn.closest(".detail-note-editor");
+    clearInlineFeedback(form);
     const note = (detailStandaloneIdeaNewInput?.value || "").trim();
     if (!note) {
-      setHint("请输入想法内容再保存");
+      setInlineFeedback(form, "请输入想法内容再保存。", { tone: "failed" });
+      detailStandaloneIdeaNewInput?.focus();
       return;
     }
-    detailStandaloneIdeaNewSaveBtn.disabled = true;
+    setButtonBusy(detailStandaloneIdeaNewSaveBtn, true, "保存中…");
     if (detailStandaloneIdeaNewCancelBtn) detailStandaloneIdeaNewCancelBtn.disabled = true;
+    setInlineFeedback(form, "正在保存独立想法…", { tone: "pending" });
+    let writeConfirmed = false;
     try {
       const idea = await createStandaloneIdea(note);
+      writeConfirmed = true;
       await loadFirstPage();
       state.selectedIdeaId = idea.idea_id;
       syncIdeaRowSelection();
       renderStandaloneIdeaDetail(idea);
       setHint("独立想法已保存");
     } catch (err) {
-      setHint("保存失败：" + (err.message || "未知错误"));
+      setInlineFeedback(
+        form,
+        writeConfirmed
+          ? `独立想法已保存，但刷新列表失败：${friendlyActionError(err, "请返回想法列表重新打开，不要重复提交。")}`
+          : `保存独立想法失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
-      detailStandaloneIdeaNewSaveBtn.disabled = false;
+      setButtonBusy(detailStandaloneIdeaNewSaveBtn, false);
+      if (writeConfirmed) {
+        detailStandaloneIdeaNewSaveBtn.textContent = "已保存";
+        detailStandaloneIdeaNewSaveBtn.disabled = true;
+      }
       if (detailStandaloneIdeaNewCancelBtn) detailStandaloneIdeaNewCancelBtn.disabled = false;
     }
   });
@@ -8790,6 +9251,7 @@ if (detailStandaloneIdeaEditBtn) {
     if (!state.selectedStandaloneIdea) return;
     detailStandaloneIdeaInput.value = state.selectedStandaloneIdea.note || "";
     setStandaloneIdeaEditorOpen(true);
+    clearInlineFeedback(detailStandaloneIdeaEditor);
     detailStandaloneIdeaInput.focus();
   });
 }
@@ -8804,15 +9266,18 @@ if (detailStandaloneIdeaCancelBtn) {
 
 if (detailStandaloneIdeaSaveBtn) {
   detailStandaloneIdeaSaveBtn.addEventListener("click", async () => {
+    clearInlineFeedback(detailStandaloneIdeaEditor);
     const item = state.selectedStandaloneIdea;
     if (!item) return;
     const note = (detailStandaloneIdeaInput?.value || "").trim();
     if (!note) {
-      setHint("想法内容不能为空");
+      setInlineFeedback(detailStandaloneIdeaEditor, "想法内容不能为空。", { tone: "failed" });
+      detailStandaloneIdeaInput?.focus();
       return;
     }
-    detailStandaloneIdeaSaveBtn.disabled = true;
+    setButtonBusy(detailStandaloneIdeaSaveBtn, true, "保存中…");
     if (detailStandaloneIdeaCancelBtn) detailStandaloneIdeaCancelBtn.disabled = true;
+    setInlineFeedback(detailStandaloneIdeaEditor, "正在更新独立想法…", { tone: "pending" });
     try {
       const updated = await updateStandaloneIdea(item.standalone_id, note);
       state.selectedStandaloneIdea = updated;
@@ -8820,9 +9285,13 @@ if (detailStandaloneIdeaSaveBtn) {
       renderStandaloneIdeaDetail(updated);
       setHint("独立想法已更新");
     } catch (err) {
-      setHint("更新失败：" + (err.message || "未知错误"));
+      setInlineFeedback(
+        detailStandaloneIdeaEditor,
+        `更新独立想法失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
     } finally {
-      detailStandaloneIdeaSaveBtn.disabled = false;
+      setButtonBusy(detailStandaloneIdeaSaveBtn, false);
       if (detailStandaloneIdeaCancelBtn) detailStandaloneIdeaCancelBtn.disabled = false;
     }
   });
@@ -9004,6 +9473,13 @@ function openReviewCreateForm(ctx) {
   hideAllDetailPanelsForReview();
   closeAllReviewPanels();
   detailReviewCreateBody.classList.remove("hidden");
+  clearInlineFeedback(reviewCreateSaveBtn?.closest(".detail-note-editor"));
+  if (reviewCreateSaveBtn) {
+    reviewCreateSaveBtn.disabled = false;
+    reviewCreateSaveBtn.textContent = "创建复盘";
+    reviewCreateSaveBtn.removeAttribute("aria-busy");
+    delete reviewCreateSaveBtn.dataset.idleLabel;
+  }
   reviewCreateSourceNote.textContent = ctx.source_note || "";
   reviewCreateSourceMeta.textContent = ctx.source_meta || "";
   if (reviewCreateJudgment) reviewCreateJudgment.value = "";
@@ -9090,6 +9566,8 @@ if (reviewCreateCancelBtn) {
 
 if (reviewCreateSaveBtn) {
   reviewCreateSaveBtn.addEventListener("click", async () => {
+    const form = reviewCreateSaveBtn.closest(".detail-note-editor");
+    clearInlineFeedback(form);
     const ctx = state.pendingReviewSource;
     if (!ctx) return;
     const judgment = reviewCreateJudgment ? reviewCreateJudgment.value.trim() : "";
@@ -9103,8 +9581,19 @@ if (reviewCreateSaveBtn) {
         remindAt = `${planDate}T09:00`;
       }
     }
-    if (!judgment) { setHint("请填写验证判断"); return; }
-    if (!planDate) { setHint("请选择计划验证日期"); return; }
+    if (!judgment) {
+      setInlineFeedback(form, "请填写验证判断。", { tone: "failed" });
+      reviewCreateJudgment?.focus();
+      return;
+    }
+    if (!planDate) {
+      setInlineFeedback(form, "请选择计划验证日期。", { tone: "failed" });
+      reviewCreateDate?.focus();
+      return;
+    }
+    setButtonBusy(reviewCreateSaveBtn, true, "创建中…");
+    setInlineFeedback(form, "正在创建复盘，当前输入会保留到操作完成。", { tone: "pending" });
+    let writeConfirmed = false;
     try {
       const review = await createReview({
         source_type: ctx.source_type,
@@ -9115,6 +9604,7 @@ if (reviewCreateSaveBtn) {
         add_reminder: addReminder,
         remind_at: remindAt,
       });
+      writeConfirmed = true;
       state.pendingReviewSource = null;
       setHint("复盘已创建");
       state.collection = "reviews";
@@ -9124,7 +9614,19 @@ if (reviewCreateSaveBtn) {
       syncReviewRowSelection();
       await openReviewCard(review);
     } catch (err) {
-      setHint(`创建复盘失败：${err.message || err}`);
+      setInlineFeedback(
+        form,
+        writeConfirmed
+          ? `复盘已创建，但刷新详情失败：${friendlyActionError(err, "请进入复盘列表重新打开，不要重复提交。")}`
+          : `创建复盘失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(reviewCreateSaveBtn, false);
+      if (writeConfirmed) {
+        reviewCreateSaveBtn.textContent = "已创建";
+        reviewCreateSaveBtn.disabled = true;
+      }
     }
   });
 }
@@ -9147,18 +9649,35 @@ if (reviewProgressCancelBtn) {
 
 if (reviewProgressSaveBtn) {
   reviewProgressSaveBtn.addEventListener("click", async () => {
+    clearInlineFeedback(detailReviewProgressForm);
     const review = state.currentReview;
     if (!review) return;
     const text = reviewProgressText ? reviewProgressText.value.trim() : "";
     const date = reviewProgressDate ? reviewProgressDate.value.trim() : "";
-    if (!text) { setHint("请填写进展内容"); return; }
-    if (!date) { setHint("请选择日期"); return; }
+    if (!text) {
+      setInlineFeedback(detailReviewProgressForm, "请填写进展内容。", { tone: "failed" });
+      reviewProgressText?.focus();
+      return;
+    }
+    if (!date) {
+      setInlineFeedback(detailReviewProgressForm, "请选择进展发生日期。", { tone: "failed" });
+      reviewProgressDate?.focus();
+      return;
+    }
+    setButtonBusy(reviewProgressSaveBtn, true, "保存中…");
+    setInlineFeedback(detailReviewProgressForm, "正在保存进展…", { tone: "pending" });
     try {
       const updated = await reviewProgress(review.id, { event_text: text, event_date: date });
       renderReviewDetail(updated);
       setHint("进展已记录");
     } catch (err) {
-      setHint(`记录进展失败：${err.message || err}`);
+      setInlineFeedback(
+        detailReviewProgressForm,
+        `记录进展失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(reviewProgressSaveBtn, false);
     }
   });
 }
@@ -9186,21 +9705,42 @@ if (reviewReviseCancelBtn) {
 
 if (reviewReviseSaveBtn) {
   reviewReviseSaveBtn.addEventListener("click", async () => {
+    clearInlineFeedback(detailReviewReviseForm);
     const review = state.currentReview;
     if (!review) return;
     const judgment = reviewReviseJudgment ? reviewReviseJudgment.value.trim() : "";
     const criteria = reviewReviseCriteria ? reviewReviseCriteria.value.trim() : "";
     const reason = reviewReviseReason ? reviewReviseReason.value.trim() : "";
     const date = reviewReviseDate ? reviewReviseDate.value.trim() : "";
-    if (!judgment) { setHint("请填写新判断"); return; }
-    if (!reason) { setHint("请填写修正原因"); return; }
-    if (!date) { setHint("请选择日期"); return; }
+    if (!judgment) {
+      setInlineFeedback(detailReviewReviseForm, "请填写新判断。", { tone: "failed" });
+      reviewReviseJudgment?.focus();
+      return;
+    }
+    if (!reason) {
+      setInlineFeedback(detailReviewReviseForm, "请填写修正原因。", { tone: "failed" });
+      reviewReviseReason?.focus();
+      return;
+    }
+    if (!date) {
+      setInlineFeedback(detailReviewReviseForm, "请选择判断修正日期。", { tone: "failed" });
+      reviewReviseDate?.focus();
+      return;
+    }
+    setButtonBusy(reviewReviseSaveBtn, true, "保存中…");
+    setInlineFeedback(detailReviewReviseForm, "正在保存修正后的判断…", { tone: "pending" });
     try {
       const updated = await reviewRevise(review.id, { judgment, criteria, revision_reason: reason, event_date: date });
       renderReviewDetail(updated);
       setHint("判断已修正");
     } catch (err) {
-      setHint(`修正判断失败：${err.message || err}`);
+      setInlineFeedback(
+        detailReviewReviseForm,
+        `修正判断失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(reviewReviseSaveBtn, false);
     }
   });
 }
@@ -9270,54 +9810,97 @@ if (reviewCompleteCancelBtn) {
 
 if (reviewCompleteSaveBtn) {
   reviewCompleteSaveBtn.addEventListener("click", async () => {
+    clearInlineFeedback(detailReviewCompleteForm);
     const review = state.currentReview;
     if (!review) return;
     const result = reviewCompleteResult ? reviewCompleteResult.value.trim() : "";
     const actual = reviewCompleteActual ? reviewCompleteActual.value.trim() : "";
     const bias = reviewCompleteBias ? reviewCompleteBias.value.trim() : "";
     const experience = reviewCompleteExperience ? reviewCompleteExperience.value.trim() : "";
-    if (!result) { setHint("请选择复盘结果"); return; }
-    if (!experience) { setHint("请填写经验"); return; }
+    if (!result) {
+      setInlineFeedback(detailReviewCompleteForm, "请选择复盘结果。", { tone: "failed" });
+      reviewCompleteResult?.focus();
+      return;
+    }
+    if (!experience) {
+      setInlineFeedback(detailReviewCompleteForm, "请填写一条可复用的经验。", { tone: "failed" });
+      reviewCompleteExperience?.focus();
+      return;
+    }
+    setButtonBusy(reviewCompleteSaveBtn, true, "完成中…");
+    setInlineFeedback(detailReviewCompleteForm, "正在完成复盘…", { tone: "pending" });
     try {
       const updated = await reviewComplete(review.id, { result, actual_text: actual, bias_text: bias, experience });
       renderReviewDetail(updated);
       setHint("复盘已完成");
     } catch (err) {
-      setHint(`完成复盘失败：${err.message || err}`);
+      setInlineFeedback(
+        detailReviewCompleteForm,
+        `完成复盘失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(reviewCompleteSaveBtn, false);
     }
   });
 }
 
 if (reviewContinueSaveBtn) {
   reviewContinueSaveBtn.addEventListener("click", async () => {
+    clearInlineFeedback(detailReviewCompleteForm);
     const review = state.currentReview;
     if (!review) return;
     const newDate = reviewContinueDate ? reviewContinueDate.value.trim() : "";
-    if (!newDate) { setHint("请选择新的验证日期"); return; }
+    if (!newDate) {
+      setInlineFeedback(detailReviewCompleteForm, "请选择新的验证日期。", { tone: "failed" });
+      reviewContinueDate?.focus();
+      return;
+    }
+    setButtonBusy(reviewContinueSaveBtn, true, "保存中…");
+    setInlineFeedback(detailReviewCompleteForm, "正在延长观察周期…", { tone: "pending" });
     try {
       const updated = await reviewContinueObserving(review.id, { new_review_date: newDate });
       renderReviewDetail(updated);
       setHint("已继续观察");
     } catch (err) {
-      setHint(`继续观察失败：${err.message || err}`);
+      setInlineFeedback(
+        detailReviewCompleteForm,
+        `继续观察失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(reviewContinueSaveBtn, false);
     }
   });
 }
 
 if (reviewContinueDoneBtn) {
   reviewContinueDoneBtn.addEventListener("click", async () => {
+    clearInlineFeedback(detailReviewCompleteForm);
     const review = state.currentReview;
     if (!review) return;
     const actual = reviewCompleteActual ? reviewCompleteActual.value.trim() : "";
     const bias = reviewCompleteBias ? reviewCompleteBias.value.trim() : "";
     const experience = reviewCompleteExperience ? reviewCompleteExperience.value.trim() : "";
-    if (!experience) { setHint("请填写经验"); return; }
+    if (!experience) {
+      setInlineFeedback(detailReviewCompleteForm, "请填写一条可复用的经验。", { tone: "failed" });
+      reviewCompleteExperience?.focus();
+      return;
+    }
+    setButtonBusy(reviewContinueDoneBtn, true, "结束中…");
+    setInlineFeedback(detailReviewCompleteForm, "正在以“暂不可判断”结束复盘…", { tone: "pending" });
     try {
       const updated = await reviewComplete(review.id, { result: "inconclusive", actual_text: actual, bias_text: bias, experience });
       renderReviewDetail(updated);
       setHint("复盘已结束（暂不可判断）");
     } catch (err) {
-      setHint(`结束复盘失败：${err.message || err}`);
+      setInlineFeedback(
+        detailReviewCompleteForm,
+        `结束复盘失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(reviewContinueDoneBtn, false);
     }
   });
 }
@@ -9347,13 +9930,24 @@ if (reviewRetrackCancelBtn) {
 
 if (reviewRetrackSaveBtn) {
   reviewRetrackSaveBtn.addEventListener("click", async () => {
+    clearInlineFeedback(detailReviewRetrackForm);
     const review = state.currentReview;
     if (!review) return;
     const judgment = reviewRetrackJudgment ? reviewRetrackJudgment.value.trim() : "";
     const criteria = reviewRetrackCriteria ? reviewRetrackCriteria.value.trim() : "";
     const date = reviewRetrackDate ? reviewRetrackDate.value.trim() : "";
-    if (!judgment) { setHint("请填写新判断"); return; }
-    if (!date) { setHint("请选择计划验证日期"); return; }
+    if (!judgment) {
+      setInlineFeedback(detailReviewRetrackForm, "请填写新判断。", { tone: "failed" });
+      reviewRetrackJudgment?.focus();
+      return;
+    }
+    if (!date) {
+      setInlineFeedback(detailReviewRetrackForm, "请选择计划验证日期。", { tone: "failed" });
+      reviewRetrackDate?.focus();
+      return;
+    }
+    setButtonBusy(reviewRetrackSaveBtn, true, "创建中…");
+    setInlineFeedback(detailReviewRetrackForm, "正在创建新的复盘链…", { tone: "pending" });
     try {
       const updated = await reviewRetrack(review.id, { judgment, criteria, plan_review_date: date });
       state.selectedReviewId = updated.id;
@@ -9361,7 +9955,13 @@ if (reviewRetrackSaveBtn) {
       await openReviewCard(updated);
       setHint("已派生新复盘链");
     } catch (err) {
-      setHint(`再次跟踪失败：${err.message || err}`);
+      setInlineFeedback(
+        detailReviewRetrackForm,
+        `再次跟踪失败：${friendlyActionError(err, "当前输入已保留，请稍后重试。")}`,
+        { tone: "failed" },
+      );
+    } finally {
+      setButtonBusy(reviewRetrackSaveBtn, false);
     }
   });
 }

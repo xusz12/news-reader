@@ -4838,6 +4838,40 @@ def test_frontend_uses_stable_source_identity_for_icons_and_detail_layout():
     assert "function setDetailReminderCardExpanded(expanded)" in source
 
 
+def test_frontend_keeps_failures_near_the_affected_workflow():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+
+    assert "function setInlineFeedback(container, message, options = {})" in app_source
+    assert "function showStatePatchError(itemId, payload)" in app_source
+    assert 'actionLabel: "重试"' in app_source
+    assert 'tone === "failed" ? "alert" : "status"' in app_source
+    assert "当前输入已保留，请稍后重试。" in app_source
+    assert ".inline-feedback.failed" in style_source
+    assert ".row-inline-feedback" in style_source
+    assert ".detail-action-feedback" in style_source
+
+
+def test_frontend_is_v219_without_later_visual_experiments():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+    review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
+
+    assert "News Reader v2.1.0.9" in app_source
+    assert "News Reader v2.1.0.9" in index_source
+    assert "v2.1.0.10" not in app_source
+    assert "v2.1.0.10" not in index_source
+    assert "--navigation-surface" not in style_source
+    assert "--toolbar-surface" not in style_source
+    assert "--liquid-glass-" not in style_source
+    assert "--desktop-liquid-" not in style_source
+    assert "Desktop light preview" not in style_source
+    assert "--review-tone" not in review_styles
+    assert "--review-result-tone" not in review_styles
+    assert "text-transform: uppercase" in review_styles
+
+
 def test_scrollbars_are_hidden_but_scrollable():
     path = Path("/Users/x/news-reader/news-reader/static/style.css")
     source = path.read_text(encoding="utf-8")
