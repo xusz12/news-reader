@@ -9196,3 +9196,134 @@ assert(context.state.pendingReviewSource.source_type === "standalone_idea", "sta
 assert(context.state.pendingReviewSource.source_key === "42", "standalone source_key should be numeric id");
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_read_later_rollback_restores_detail_ai_status_and_polling():
+    """Failed read-later toggles must restore detail/AI status fields and polling."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) {
+  throw new Error("front-end bootstrap marker missing");
+}
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by read-later rollback regression test");
+source = source.replace("let state = {", "var state = {");
+
+const noop = () => {};
+const element = new Proxy(noop, {
+  get(target, prop) {
+    if (["addEventListener", "removeEventListener", "appendChild", "removeChild", "setAttribute", "removeAttribute", "focus", "blur", "click"].includes(prop)) return noop;
+    if (["querySelectorAll", "getElementsByTagName"].includes(prop)) return () => [];
+    if (prop === "querySelector") return () => null;
+    if (prop === "classList") return { add: noop, remove: noop, toggle: noop, contains: () => false };
+    if (prop === "style" || prop === "dataset") return element;
+    if (prop === "children" || prop === "options") return [];
+    if (prop === "length" || prop === "childElementCount") return 0;
+    if (["value", "textContent", "innerHTML", "className"].includes(prop)) return "";
+    if (prop === "checked" || prop === "disabled") return false;
+    if (prop === Symbol.iterator) return function* () {};
+    return element;
+  },
+  set() { return true; },
+  apply() { return undefined; },
+});
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const document = {
+  getElementById: () => element,
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  createElement: () => element,
+  addEventListener: noop,
+  body: element,
+  documentElement: element,
+};
+const localStorage = { getItem: () => null, setItem: noop };
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  localStorage,
+};
+const context = {
+  console, document, window, localStorage, IntersectionObserver,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+const calls = { rendered: [], errors: [], rowPolling: 0, detailPolling: [], stopDetail: 0 };
+context.patchState = async () => { throw new Error("network failed"); };
+context.adjustDateCountForScopeTransition = () => {};
+context.rerenderOne = (id) => calls.rendered.push({ id, item: { ...context.state.itemsById.get(id) } });
+context.showStatePatchError = (id, payload) => calls.errors.push({ id, payload });
+context.ensureRowStatusPolling = () => { calls.rowPolling += 1; };
+context.startDetailPolling = (id) => calls.detailPolling.push(id);
+context.stopDetailPolling = () => { calls.stopDetail += 1; };
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+
+(async () => {
+  context.state.itemsById = new Map();
+  context.state.selectedId = "";
+  context.state.itemsById.set("add", {
+    id: "add",
+    date_key: "2026-07-16",
+    read_at: null,
+    favorite_at: null,
+    important_at: null,
+    read_later_at: null,
+    read_later_done_at: null,
+    detail_status: "success",
+    detail_ready: 1,
+    ai_status: "success",
+    ai_ready: 1,
+    has_note: 0,
+    has_market_tags: 0,
+  });
+  await context.patchStateWithRollback("add", { read_later: true });
+  const add = context.state.itemsById.get("add");
+  assert(add.read_later_at === null, "add failure should restore read_later_at");
+  assert(add.read_later_done_at === null, "add failure should restore read_later_done_at");
+  assert(add.detail_status === "success", `add failure detail_status=${add.detail_status}`);
+  assert(add.detail_ready === 1, `add failure detail_ready=${add.detail_ready}`);
+  assert(add.ai_status === "success", `add failure ai_status=${add.ai_status}`);
+  assert(add.ai_ready === 1, `add failure ai_ready=${add.ai_ready}`);
+
+  context.state.selectedId = "remove";
+  context.state.itemsById.set("remove", {
+    id: "remove",
+    date_key: "2026-07-16",
+    read_at: null,
+    favorite_at: null,
+    important_at: null,
+    read_later_at: "2026-07-16 10:00:00",
+    read_later_done_at: null,
+    detail_status: "running",
+    detail_ready: 0,
+    ai_status: "none",
+    ai_ready: 0,
+    has_note: 0,
+    has_market_tags: 0,
+  });
+  await context.patchStateWithRollback("remove", { read_later: false });
+  const remove = context.state.itemsById.get("remove");
+  assert(remove.read_later_at === "2026-07-16 10:00:00", "remove failure should restore read_later_at");
+  assert(remove.read_later_done_at === null, "remove failure should restore read_later_done_at");
+  assert(remove.detail_status === "running", `remove failure detail_status=${remove.detail_status}`);
+  assert(remove.detail_ready === 0, `remove failure detail_ready=${remove.detail_ready}`);
+  assert(remove.ai_status === "none", `remove failure ai_status=${remove.ai_status}`);
+  assert(remove.ai_ready === 0, `remove failure ai_ready=${remove.ai_ready}`);
+  assert(calls.stopDetail === 1, `optimistic remove should stop detail polling once, got ${calls.stopDetail}`);
+  assert(calls.rowPolling >= 1, "remove failure should restore row status polling");
+  assert(calls.detailPolling.includes("remove"), "remove failure should restore detail polling for selected item");
+  assert(calls.errors.length === 2, `expected two rollback feedback calls, got ${calls.errors.length}`);
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)

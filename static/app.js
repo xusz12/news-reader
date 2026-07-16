@@ -4013,6 +4013,10 @@ async function patchStateWithRollback(itemId, payload) {
     important_at: item.important_at,
     read_later_at: item.read_later_at,
     read_later_done_at: item.read_later_done_at,
+    detail_status: item.detail_status,
+    detail_ready: item.detail_ready,
+    ai_status: item.ai_status,
+    ai_ready: item.ai_ready,
     has_note: item.has_note,
     has_market_tags: item.has_market_tags,
   };
@@ -4065,7 +4069,15 @@ async function patchStateWithRollback(itemId, payload) {
     item.important_at = backup.important_at;
     item.read_later_at = backup.read_later_at;
     item.read_later_done_at = backup.read_later_done_at;
+    item.detail_status = backup.detail_status;
+    item.detail_ready = backup.detail_ready;
+    item.ai_status = backup.ai_status;
+    item.ai_ready = backup.ai_ready;
     rerenderOne(itemId);
+    if ("read_later" in payload) {
+      if (rowNeedsStatusPolling(item)) ensureRowStatusPolling();
+      if (state.selectedId === itemId) startDetailPolling(itemId);
+    }
     showStatePatchError(itemId, payload);
   } finally {
     writeInFlight.delete(itemId);
