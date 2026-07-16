@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.0.3</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.0.3" />
+    <title>News Reader v2.1.0.7</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.1.0.7" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.0.3</span>
+          <span class="topbar-version">v2.1.0.7</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -53,31 +53,37 @@
     </section>
 
     <main id="workspace" class="workspace">
-      <aside class="left-nav">
-        <div class="nav-group">
-          <h2>阅读</h2>
-          <button id="navSearchBtn" class="nav-btn">搜索</button>
-          <button id="navFeedBtn" class="nav-btn active">新闻流</button>
-          <button id="navDailyBtn" class="nav-btn">日报</button>
-          <button id="navReadLaterBtn" class="nav-btn">稍后再看</button>
-          <button id="navImportantBtn" class="nav-btn">重要新闻</button>
-          <button id="navRemindersBtn" class="nav-btn">提醒</button>
-          <button id="navFavoritesBtn" class="nav-btn">收藏</button>
-        </div>
-        <div class="nav-group">
-          <h2>研究</h2>
-          <button id="navNotesBtn" class="nav-btn">想法</button>
-          <button id="navReviewsBtn" class="nav-btn">复盘</button>
-          <button id="navTrackedBtn" class="nav-btn">跟踪</button>
-        </div>
-        <div class="nav-group">
-          <h2>市场</h2>
-          <button id="navMarketTagsBtn" class="nav-btn">板块</button>
-        </div>
+      <aside class="left-nav" aria-label="新闻工作区导航">
+        <section class="nav-group nav-group--reading" aria-labelledby="navReadingHeading">
+          <h2 id="navReadingHeading">阅读</h2>
+          <button id="navSearchBtn" class="nav-btn" type="button"><span class="nav-btn-label">搜索</span></button>
+          <button id="navFeedBtn" class="nav-btn active" type="button" aria-current="page"><span class="nav-btn-label">新闻流</span></button>
+          <button id="navDailyBtn" class="nav-btn" type="button"><span class="nav-btn-label">日报</span></button>
+        </section>
+        <section class="nav-group nav-group--personal" aria-labelledby="navPersonalHeading">
+          <h2 id="navPersonalHeading">个人队列</h2>
+          <button id="navReadLaterBtn" class="nav-btn" type="button"><span class="nav-btn-label">稍后再看</span></button>
+          <button id="navImportantBtn" class="nav-btn" type="button"><span class="nav-btn-label">重要新闻</span></button>
+          <button id="navRemindersBtn" class="nav-btn" type="button">
+            <span class="nav-btn-label">提醒</span>
+            <span id="navReminderBadge" class="nav-btn-badge hidden" aria-hidden="true"></span>
+          </button>
+          <button id="navFavoritesBtn" class="nav-btn" type="button"><span class="nav-btn-label">收藏</span></button>
+        </section>
+        <section class="nav-group nav-group--research" aria-labelledby="navResearchHeading">
+          <h2 id="navResearchHeading">研究</h2>
+          <button id="navNotesBtn" class="nav-btn" type="button"><span class="nav-btn-label">想法</span></button>
+          <button id="navReviewsBtn" class="nav-btn" type="button"><span class="nav-btn-label">复盘</span></button>
+          <button id="navTrackedBtn" class="nav-btn" type="button"><span class="nav-btn-label">跟踪</span></button>
+        </section>
+        <section class="nav-group nav-group--market" aria-labelledby="navMarketHeading">
+          <h2 id="navMarketHeading">市场</h2>
+          <button id="navMarketTagsBtn" class="nav-btn" type="button"><span class="nav-btn-label">板块</span></button>
+        </section>
 
-        <section id="sourceFilterPanel" class="source-filter-panel" aria-label="来源筛选">
+        <section id="sourceFilterPanel" class="source-filter-panel" aria-labelledby="sourcesTitle">
           <div class="source-filter-header">
-            <h2 class="sources-title">来源筛选</h2>
+            <h2 id="sourcesTitle" class="sources-title">来源筛选</h2>
             <span id="sourceFilterCount" class="source-filter-count"></span>
           </div>
           <div id="sourceFilters" class="source-filters"></div>
@@ -91,60 +97,68 @@
             <h2 id="feedTitle" class="feed-title">新闻流</h2>
           </div>
         </div>
-        <div class="controls feed-controls panel-toolbar">
-          <button id="mobileSourceEntryBtn" class="mobile-source-entry-btn hidden" type="button">来源</button>
-          <button id="trackedCreateInlineBtn" class="detail-retry-btn hidden" type="button">新建跟踪</button>
-          <button id="trackedDefaultsInlineBtn" class="detail-retry-btn hidden" type="button">默认参数</button>
-          <div id="reminderFilterBar" class="reminder-filter-bar hidden" aria-label="提醒状态筛选">
-            <button id="reminderFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
-            <button id="reminderFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
-            <button id="reminderFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
-          </div>
-          <div id="ideaFilterBar" class="reminder-filter-bar hidden" aria-label="想法类型筛选">
-            <button id="ideaFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
-            <button id="ideaFilterArticleBtn" class="reminder-filter-btn" type="button">新闻想法</button>
-            <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">板块想法</button>
-            <button id="ideaFilterStandaloneBtn" class="reminder-filter-btn" type="button">独立想法</button>
-            <button id="ideaNewBtn" class="detail-retry-btn" type="button">新独立想法</button>
-          </div>
-          <div id="reviewFilterBar" class="reminder-filter-bar hidden" aria-label="复盘状态筛选">
-            <button id="reviewFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
-            <button id="reviewFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
-            <button id="reviewFilterPendingBtn" class="reminder-filter-btn" type="button">待复盘</button>
-            <button id="reviewFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
-          </div>
-          <div id="reviewOutcomeFilterBar" class="review-outcome-filter-bar hidden" aria-label="已完成复盘结果筛选">
-            <span class="review-outcome-filter-label">结果</span>
-            <button id="reviewOutcomeFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
-            <button id="reviewOutcomeFilterConfirmedBtn" class="reminder-filter-btn" type="button">成立</button>
-            <button id="reviewOutcomeFilterRefutedBtn" class="reminder-filter-btn" type="button">未成立</button>
-            <button id="reviewOutcomeFilterInconclusiveBtn" class="reminder-filter-btn" type="button">不可判断</button>
-          </div>
-          <section id="marketWorkbenchBar" class="search-page-controls hidden" aria-label="板块工作台筛选">
-            <div class="search-page-form market-workbench-form">
-              <select id="marketWorkbenchTagSelect" class="pref-select search-page-select" aria-label="板块选择"></select>
-              <select id="marketWorkbenchFilterSelect" class="pref-select search-page-select" aria-label="内容筛选">
-                <option value="all">全部</option>
-                <option value="ideas">仅想法</option>
-                <option value="bullish">看多</option>
-                <option value="bearish">看空</option>
-              </select>
-              <button id="marketWorkbenchSummaryBtn" class="detail-retry-btn hidden" type="button">总结近期趋势</button>
-              <button id="marketWorkbenchComposeBtn" class="detail-retry-btn" type="button">新板块想法</button>
+        <div id="feedControlsFrame" class="feed-controls-frame">
+          <div id="feedControlsScroll" class="controls feed-controls panel-toolbar">
+            <div class="feed-toolbar-context" role="group" aria-label="当前视图筛选与创建">
+              <button id="mobileSourceEntryBtn" class="mobile-source-entry-btn hidden" type="button">来源</button>
+              <button id="trackedCreateInlineBtn" class="detail-retry-btn hidden" type="button">新建跟踪</button>
+              <button id="trackedDefaultsInlineBtn" class="detail-retry-btn hidden" type="button">默认参数</button>
+              <div id="reminderFilterBar" class="reminder-filter-bar hidden" aria-label="提醒状态筛选">
+                <button id="reminderFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
+                <button id="reminderFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
+                <button id="reminderFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+              </div>
+              <div id="ideaFilterBar" class="reminder-filter-bar hidden" aria-label="想法类型筛选">
+                <button id="ideaFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+                <button id="ideaFilterArticleBtn" class="reminder-filter-btn" type="button">新闻想法</button>
+                <button id="ideaFilterTrendBtn" class="reminder-filter-btn" type="button">板块想法</button>
+                <button id="ideaFilterStandaloneBtn" class="reminder-filter-btn" type="button">独立想法</button>
+                <button id="ideaNewBtn" class="detail-retry-btn" type="button">新独立想法</button>
+              </div>
+              <div id="reviewFilterBar" class="reminder-filter-bar hidden" aria-label="复盘状态筛选">
+                <button id="reviewFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+                <button id="reviewFilterActiveBtn" class="reminder-filter-btn" type="button">进行中</button>
+                <button id="reviewFilterPendingBtn" class="reminder-filter-btn" type="button">待复盘</button>
+                <button id="reviewFilterDoneBtn" class="reminder-filter-btn" type="button">已完成</button>
+              </div>
+              <div id="reviewOutcomeFilterBar" class="review-outcome-filter-bar hidden" aria-label="已完成复盘结果筛选">
+                <span class="review-outcome-filter-label">结果</span>
+                <button id="reviewOutcomeFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+                <button id="reviewOutcomeFilterConfirmedBtn" class="reminder-filter-btn" type="button">成立</button>
+                <button id="reviewOutcomeFilterRefutedBtn" class="reminder-filter-btn" type="button">未成立</button>
+                <button id="reviewOutcomeFilterInconclusiveBtn" class="reminder-filter-btn" type="button">不可判断</button>
+              </div>
+              <section id="marketWorkbenchBar" class="search-page-controls hidden" aria-label="板块工作台筛选">
+                <div class="search-page-form market-workbench-form">
+                  <select id="marketWorkbenchTagSelect" class="pref-select search-page-select" aria-label="板块选择"></select>
+                  <select id="marketWorkbenchFilterSelect" class="pref-select search-page-select" aria-label="内容筛选">
+                    <option value="all">全部</option>
+                    <option value="ideas">仅想法</option>
+                    <option value="bullish">看多</option>
+                    <option value="bearish">看空</option>
+                  </select>
+                  <button id="marketWorkbenchSummaryBtn" class="detail-retry-btn hidden" type="button">总结近期趋势</button>
+                  <button id="marketWorkbenchComposeBtn" class="detail-retry-btn" type="button">新板块想法</button>
+                </div>
+              </section>
+              <div id="readLaterFilterBar" class="reminder-filter-bar hidden" aria-label="稍后阅读已读状态筛选">
+                <button id="readLaterFilterUnreadBtn" class="reminder-filter-btn" type="button">未读</button>
+                <button id="readLaterFilterReadBtn" class="reminder-filter-btn" type="button">已读</button>
+                <button id="readLaterFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
+              </div>
             </div>
-          </section>
-          <div id="readLaterFilterBar" class="reminder-filter-bar hidden" aria-label="稍后阅读已读状态筛选">
-            <button id="readLaterFilterUnreadBtn" class="reminder-filter-btn" type="button">未读</button>
-            <button id="readLaterFilterReadBtn" class="reminder-filter-btn" type="button">已读</button>
-            <button id="readLaterFilterAllBtn" class="reminder-filter-btn" type="button">全部</button>
-          </div>
-          <div class="feed-toolbar-actions">
-            <button id="resumeAnchorBtn" class="icon-btn hidden" type="button"></button>
-            <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
-            <button id="sortOrderBtn" class="icon-btn hidden" type="button"></button>
-            <button id="markAllReadBtn" class="icon-btn" type="button"></button>
-            <button id="refreshBtn" class="icon-btn" type="button"></button>
-            <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
+            <div class="feed-toolbar-actions" role="group" aria-label="阅读工具">
+              <div class="feed-toolbar-action-group" role="group" aria-label="阅读与排序">
+                <button id="resumeAnchorBtn" class="icon-btn hidden" type="button"></button>
+                <button id="readFilterToggleBtn" class="icon-btn" type="button"></button>
+                <button id="sortOrderBtn" class="icon-btn hidden" type="button"></button>
+              </div>
+              <div class="feed-toolbar-action-group" role="group" aria-label="批量与维护">
+                <button id="markAllReadBtn" class="icon-btn" type="button"></button>
+                <button id="refreshBtn" class="icon-btn" type="button"></button>
+                <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
+              </div>
+            </div>
           </div>
         </div>
         <section id="marketWorkbenchPinCard" class="detail-note-card market-pin-card hidden" aria-label="板块置顶信息"></section>
@@ -454,49 +468,116 @@
               <div id="detailTrackedFormMeta" class="detail-meta">右栏内直接创建或编辑跟踪主题。</div>
             </div>
           </div>
-          <section class="detail-note-editor detail-tracked-form-panel">
-            <div class="detail-inline-actions">
-              <input id="detailTrackedTitleInput" class="detail-tag-create-input" type="text" maxlength="80" placeholder="主题名称，例如：俄乌战争" />
-              <button id="detailTrackedDraftBtn" class="detail-retry-btn" type="button">一键填写</button>
-            </div>
-            <textarea id="detailTrackedStrongInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="强匹配短语，逗号或换行分隔"></textarea>
-            <div class="detail-meta">强匹配短语：完整表达该主题的短语，命中后通常可高分收录，例如 `俄乌战争 / Russia-Ukraine war`。</div>
-            <textarea id="detailTrackedCoreInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="核心对象词，逗号或换行分隔"></textarea>
-            <div class="detail-meta">核心对象词：主题核心人、国家、组织、地点；单独命中通常不收录，需要和相关场景词组合。</div>
-            <textarea id="detailTrackedContextInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="相关场景词，逗号或换行分隔"></textarea>
-            <div class="detail-meta">相关场景词：动作、事件、子场景、政策动作，用来和核心对象词共同判断主题相关性。</div>
-            <textarea id="detailTrackedExcludeInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="排除词，可留空"></textarea>
-            <div class="detail-meta">排除词：常见误伤场景，命中后会优先排除，例如旅游、体育、俄罗斯方块。</div>
-            <textarea id="detailTrackedRequiredInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="必要关键词，可留空"></textarea>
-            <div class="detail-meta">必要关键词：若填写，新闻必须命中其中至少一个词/短语，才会进入后续评分。</div>
-            <div class="detail-note-editor-title">最低收录分数</div>
-            <input id="detailTrackedThresholdInput" class="detail-tag-create-input" type="number" min="1" max="50" step="1" placeholder="例如 6" />
-            <div class="detail-meta">最低收录分数：标题权重最高，用户想法第二，摘要 / AI 摘要第三，正文最低；强匹配短语或“核心对象词 + 相关场景词”达到该分数才进入时间线。</div>
-            <div class="detail-note-editor-title">字段倍率</div>
-            <div class="detail-reminder-grid">
-              <label class="detail-inline-checkbox"><span>标题倍率</span><input id="detailTrackedTitleWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
-              <label class="detail-inline-checkbox"><span>想法倍率</span><input id="detailTrackedNoteWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
-              <label class="detail-inline-checkbox"><span>摘要 / AI 倍率</span><input id="detailTrackedSummaryWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
-              <label class="detail-inline-checkbox"><span>正文倍率</span><input id="detailTrackedContentWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
-            </div>
-            <div class="detail-meta">字段倍率会在默认口径上放大或压低该字段贡献。默认仍是：标题最高，用户想法第二，摘要 / AI 摘要第三，正文最低。</div>
-            <div class="detail-note-editor-title">规则得分</div>
-            <div class="detail-reminder-grid">
-              <label class="detail-inline-checkbox"><span>强匹配短语得分</span><input id="detailTrackedStrongScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
-              <label class="detail-inline-checkbox"><span>核心对象词得分</span><input id="detailTrackedCoreScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
-              <label class="detail-inline-checkbox"><span>相关场景词得分</span><input id="detailTrackedContextScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
-              <label class="detail-inline-checkbox"><span>排除词惩罚</span><input id="detailTrackedExcludePenaltyInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="例如 1.0" /></label>
-            </div>
-            <div class="detail-meta">规则得分会在默认规则强度上继续放大；`排除强度` 越高，排除词越接近一票否决。</div>
-            <select id="detailTrackedScopeSelect" class="pref-select">
-              <option value="important">仅重要新闻增量</option>
-              <option value="all">全部新闻增量</option>
-            </select>
-            <label class="detail-inline-checkbox">
-              <input id="detailTrackedActiveInput" type="checkbox" checked />
-              <span>启用后续增量跟踪</span>
-            </label>
-            <div class="detail-note-actions">
+          <section class="detail-note-editor detail-tracked-form-panel" aria-label="跟踪主题规则编辑">
+            <section class="tracked-form-section tracked-form-section--first" aria-labelledby="trackedIdentityHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedIdentityHeading" class="tracked-form-section-title">主题定义</h4>
+                <p class="tracked-form-section-copy">先命名主题；新建时可让 AI 生成一份完整规则草稿，再逐项校准。</p>
+              </div>
+              <div class="tracked-form-field">
+                <label class="tracked-form-label" for="detailTrackedTitleInput">主题名称</label>
+                <div class="detail-inline-actions tracked-title-actions">
+                  <input id="detailTrackedTitleInput" class="detail-tag-create-input" type="text" maxlength="80" placeholder="例如：俄乌战争" />
+                  <button id="detailTrackedDraftBtn" class="detail-retry-btn" type="button">一键填写</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="tracked-form-section" aria-labelledby="trackedKeywordsHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedKeywordsHeading" class="tracked-form-section-title">关键词规则</h4>
+                <p class="tracked-form-section-copy">短语、对象和场景共同决定相关性；必要词与排除词负责收紧边界。</p>
+              </div>
+              <div class="tracked-keyword-stack">
+                <div class="tracked-form-field tracked-keyword-field">
+                  <label class="tracked-form-label" for="detailTrackedStrongInput">强匹配短语</label>
+                  <textarea id="detailTrackedStrongInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="逗号或换行分隔"></textarea>
+                  <p class="tracked-form-help">完整表达主题的短语，命中后通常可高分收录，例如 `俄乌战争 / Russia-Ukraine war`。</p>
+                </div>
+                <div class="tracked-form-field tracked-keyword-field">
+                  <label class="tracked-form-label" for="detailTrackedCoreInput">核心对象词</label>
+                  <textarea id="detailTrackedCoreInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="逗号或换行分隔"></textarea>
+                  <p class="tracked-form-help">主题核心人、国家、组织、地点；通常需要和相关场景词组合后收录。</p>
+                </div>
+                <div class="tracked-form-field tracked-keyword-field">
+                  <label class="tracked-form-label" for="detailTrackedContextInput">相关场景词</label>
+                  <textarea id="detailTrackedContextInput" class="detail-note-input" rows="3" maxlength="1000" placeholder="逗号或换行分隔"></textarea>
+                  <p class="tracked-form-help">动作、事件、子场景和政策动作，用来与核心对象词共同判断相关性。</p>
+                </div>
+                <div class="tracked-form-field tracked-keyword-field">
+                  <label class="tracked-form-label" for="detailTrackedExcludeInput">排除词</label>
+                  <textarea id="detailTrackedExcludeInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="可留空，逗号或换行分隔"></textarea>
+                  <p class="tracked-form-help">常见误伤场景；命中后会优先排除，例如旅游、体育、俄罗斯方块。</p>
+                </div>
+                <div class="tracked-form-field tracked-keyword-field">
+                  <label class="tracked-form-label" for="detailTrackedRequiredInput">必要关键词</label>
+                  <textarea id="detailTrackedRequiredInput" class="detail-note-input" rows="2" maxlength="1000" placeholder="可留空，逗号或换行分隔"></textarea>
+                  <p class="tracked-form-help">若填写，新闻必须命中至少一个必要词或短语，才会进入后续评分。</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="tracked-form-section" aria-labelledby="trackedThresholdHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedThresholdHeading" class="tracked-form-section-title">收录门槛</h4>
+                <p class="tracked-form-section-copy">累计得分达到门槛后，新闻才会进入主题时间线。</p>
+              </div>
+              <div class="tracked-threshold-row">
+                <label class="tracked-form-label" for="detailTrackedThresholdInput">最低收录分数</label>
+                <input id="detailTrackedThresholdInput" class="detail-tag-create-input tracked-compact-number" type="number" min="1" max="50" step="1" placeholder="例如 6" />
+              </div>
+              <p class="tracked-form-help">标题权重最高，用户想法第二，摘要 / AI 摘要第三，正文最低；强匹配短语或“核心对象词 + 相关场景词”达到该分数才进入时间线。</p>
+            </section>
+
+            <section class="tracked-form-section" aria-labelledby="trackedWeightsHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedWeightsHeading" class="tracked-form-section-title">字段倍率</h4>
+                <p class="tracked-form-section-copy">在默认口径上放大或压低不同内容字段的贡献。</p>
+              </div>
+              <div class="tracked-number-grid">
+                <label class="tracked-number-field"><span>标题倍率</span><input id="detailTrackedTitleWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="1.0" /></label>
+                <label class="tracked-number-field"><span>想法倍率</span><input id="detailTrackedNoteWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="1.0" /></label>
+                <label class="tracked-number-field"><span>摘要 / AI 倍率</span><input id="detailTrackedSummaryWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="1.0" /></label>
+                <label class="tracked-number-field"><span>正文倍率</span><input id="detailTrackedContentWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="1.0" /></label>
+              </div>
+              <p class="tracked-form-help">默认仍是：标题最高，用户想法第二，摘要 / AI 摘要第三，正文最低。</p>
+            </section>
+
+            <section class="tracked-form-section" aria-labelledby="trackedScoresHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedScoresHeading" class="tracked-form-section-title">规则得分</h4>
+                <p class="tracked-form-section-copy">调整每类关键词命中后的基础得分或惩罚强度。</p>
+              </div>
+              <div class="tracked-number-grid">
+                <label class="tracked-number-field"><span>强匹配短语得分</span><input id="detailTrackedStrongScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="1.0" /></label>
+                <label class="tracked-number-field"><span>核心对象词得分</span><input id="detailTrackedCoreScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="1.0" /></label>
+                <label class="tracked-number-field"><span>相关场景词得分</span><input id="detailTrackedContextScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="1.0" /></label>
+                <label class="tracked-number-field"><span>排除词惩罚</span><input id="detailTrackedExcludePenaltyInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" placeholder="1.0" /></label>
+              </div>
+              <p class="tracked-form-help">规则得分会继续放大默认规则强度；排除词惩罚越高，排除词越接近一票否决。</p>
+            </section>
+
+            <section class="tracked-form-section" aria-labelledby="trackedScopeHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedScopeHeading" class="tracked-form-section-title">增量范围与状态</h4>
+                <p class="tracked-form-section-copy">决定哪些新新闻进入规则判断，以及是否继续自动跟踪。</p>
+              </div>
+              <div class="tracked-scope-grid">
+                <label class="tracked-select-field" for="detailTrackedScopeSelect">
+                  <span class="tracked-form-label">增量收录范围</span>
+                  <select id="detailTrackedScopeSelect" class="pref-select">
+                    <option value="important">仅重要新闻增量</option>
+                    <option value="all">全部新闻增量</option>
+                  </select>
+                </label>
+                <label class="detail-inline-checkbox tracked-active-field">
+                  <input id="detailTrackedActiveInput" type="checkbox" checked />
+                  <span>启用后续增量跟踪</span>
+                </label>
+              </div>
+            </section>
+
+            <div class="detail-note-actions tracked-form-actions">
               <button id="detailTrackedSaveDefaultsBtn" class="detail-retry-btn hidden" type="button">保存当前参数为默认</button>
               <button id="detailTrackedFormSaveBtn" class="detail-retry-btn" type="button">保存</button>
               <button id="detailTrackedFormCancelBtn" class="detail-retry-btn" type="button">取消</button>
@@ -510,25 +591,45 @@
               <div class="detail-meta">只影响新建跟踪主题的数字默认值；不会回写已有主题。</div>
             </div>
           </div>
-          <section class="detail-note-editor detail-tracked-form-panel">
-            <div class="detail-note-editor-title">最低收录分数</div>
-            <input id="trackedDefaultsThresholdInput" class="detail-tag-create-input" type="number" min="1" max="50" step="1" placeholder="例如 6" />
-            <div class="detail-meta">这里维护新建主题的默认数字口径；关键词与必要关键词不会保存为全局默认。</div>
-            <div class="detail-note-editor-title">字段倍率</div>
-            <div class="detail-reminder-grid">
-              <label class="detail-inline-checkbox"><span>标题倍率</span><input id="trackedDefaultsTitleWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
-              <label class="detail-inline-checkbox"><span>想法倍率</span><input id="trackedDefaultsNoteWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
-              <label class="detail-inline-checkbox"><span>摘要 / AI 倍率</span><input id="trackedDefaultsSummaryWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
-              <label class="detail-inline-checkbox"><span>正文倍率</span><input id="trackedDefaultsContentWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
-            </div>
-            <div class="detail-note-editor-title">规则得分</div>
-            <div class="detail-reminder-grid">
-              <label class="detail-inline-checkbox"><span>强匹配短语得分</span><input id="trackedDefaultsStrongScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
-              <label class="detail-inline-checkbox"><span>核心对象词得分</span><input id="trackedDefaultsCoreScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
-              <label class="detail-inline-checkbox"><span>相关场景词得分</span><input id="trackedDefaultsContextScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
-              <label class="detail-inline-checkbox"><span>排除词惩罚</span><input id="trackedDefaultsExcludePenaltyInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
-            </div>
-            <div class="detail-note-actions">
+          <section class="detail-note-editor detail-tracked-form-panel" aria-label="默认匹配参数编辑">
+            <section class="tracked-form-section tracked-form-section--first" aria-labelledby="trackedDefaultsThresholdHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedDefaultsThresholdHeading" class="tracked-form-section-title">收录门槛</h4>
+                <p class="tracked-form-section-copy">这里维护新建主题的默认数字口径；关键词不会保存为全局默认。</p>
+              </div>
+              <div class="tracked-threshold-row">
+                <label class="tracked-form-label" for="trackedDefaultsThresholdInput">最低收录分数</label>
+                <input id="trackedDefaultsThresholdInput" class="detail-tag-create-input tracked-compact-number" type="number" min="1" max="50" step="1" placeholder="例如 6" />
+              </div>
+            </section>
+
+            <section class="tracked-form-section" aria-labelledby="trackedDefaultsWeightsHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedDefaultsWeightsHeading" class="tracked-form-section-title">字段倍率</h4>
+                <p class="tracked-form-section-copy">控制新建主题中不同内容字段的默认贡献。</p>
+              </div>
+              <div class="tracked-number-grid">
+                <label class="tracked-number-field"><span>标题倍率</span><input id="trackedDefaultsTitleWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+                <label class="tracked-number-field"><span>想法倍率</span><input id="trackedDefaultsNoteWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+                <label class="tracked-number-field"><span>摘要 / AI 倍率</span><input id="trackedDefaultsSummaryWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+                <label class="tracked-number-field"><span>正文倍率</span><input id="trackedDefaultsContentWeightInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+              </div>
+            </section>
+
+            <section class="tracked-form-section" aria-labelledby="trackedDefaultsScoresHeading">
+              <div class="tracked-form-section-header">
+                <h4 id="trackedDefaultsScoresHeading" class="tracked-form-section-title">规则得分</h4>
+                <p class="tracked-form-section-copy">控制新建主题中关键词命中后的默认得分和惩罚。</p>
+              </div>
+              <div class="tracked-number-grid">
+                <label class="tracked-number-field"><span>强匹配短语得分</span><input id="trackedDefaultsStrongScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+                <label class="tracked-number-field"><span>核心对象词得分</span><input id="trackedDefaultsCoreScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+                <label class="tracked-number-field"><span>相关场景词得分</span><input id="trackedDefaultsContextScoreInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+                <label class="tracked-number-field"><span>排除词惩罚</span><input id="trackedDefaultsExcludePenaltyInput" class="detail-tag-create-input" type="number" min="0" max="20" step="0.1" /></label>
+              </div>
+            </section>
+
+            <div class="detail-note-actions tracked-form-actions">
               <button id="trackedDefaultsSaveBtn" class="detail-retry-btn" type="button">保存默认参数</button>
               <button id="trackedDefaultsRestoreBtn" class="detail-retry-btn" type="button">恢复系统默认</button>
             </div>
@@ -545,21 +646,30 @@
         </div>
         <div id="detailBody" class="detail-body hidden">
           <button id="detailReturnToTrackedBtn" class="detail-return-btn hidden" type="button">返回跟踪主题</button>
-          <div class="detail-actions detail-toolbar">
-            <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
-            <button id="detailRetryBtn" class="detail-retry-btn hidden" type="button">重试详情抓取</button>
-            <button id="detailRetranslateBtn" class="detail-retry-btn hidden" type="button">重新翻译</button>
-            <button id="detailRefreshTweetBtn" class="detail-retry-btn hidden" type="button">重新抓取推文</button>
-            <span class="detail-action-spacer" aria-hidden="true"></span>
-            <button id="detailAskBtn" class="icon-btn hidden" type="button" title="提问" aria-label="提问"></button>
-            <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
-            <button id="detailReviewAddBtn" class="icon-btn hidden" type="button" title="加入复盘" aria-label="加入复盘"></button>
-            <button id="detailBullishBtn" class="icon-btn" type="button" title="看多板块标记" aria-label="看多板块标记"></button>
-            <button id="detailBearishBtn" class="icon-btn" type="button" title="看空板块标记" aria-label="看空板块标记"></button>
-            <button id="detailReminderToggleBtn" class="icon-btn" type="button" title="添加提醒" aria-label="添加提醒"></button>
-            <button id="detailTrackBtn" class="icon-btn" type="button" title="加入跟踪主题" aria-label="加入跟踪主题"></button>
-            <button id="detailFavoriteBtn" class="icon-btn" type="button"></button>
-            <button id="detailImportantBtn" class="icon-btn" type="button"></button>
+          <div id="detailToolbarFrame" class="detail-toolbar-frame">
+            <div id="detailToolbarScroll" class="detail-actions detail-toolbar">
+              <div class="detail-toolbar-group detail-toolbar-group--source" role="group" aria-label="来源与恢复">
+                <a id="detailLink" class="detail-link" href="#" target="_blank" rel="noopener noreferrer">打开原文</a>
+                <button id="detailRetryBtn" class="detail-retry-btn hidden" type="button">重试详情抓取</button>
+                <button id="detailRetranslateBtn" class="detail-retry-btn hidden" type="button">重新翻译</button>
+                <button id="detailRefreshTweetBtn" class="detail-retry-btn hidden" type="button">重新抓取推文</button>
+              </div>
+              <div class="detail-toolbar-group detail-toolbar-group--research" role="group" aria-label="研究与想法">
+                <button id="detailAskBtn" class="icon-btn hidden" type="button" title="提问" aria-label="提问"></button>
+                <button id="detailNoteToggleBtn" class="icon-btn" type="button" title="写想法" aria-label="写想法"></button>
+                <button id="detailReviewAddBtn" class="icon-btn hidden" type="button" title="加入复盘" aria-label="加入复盘"></button>
+              </div>
+              <div class="detail-toolbar-group detail-toolbar-group--organize" role="group" aria-label="提醒与个人状态">
+                <button id="detailReminderToggleBtn" class="icon-btn" type="button" title="添加提醒" aria-label="添加提醒"></button>
+                <button id="detailTrackBtn" class="icon-btn" type="button" title="加入跟踪主题" aria-label="加入跟踪主题"></button>
+                <button id="detailFavoriteBtn" class="icon-btn" type="button"></button>
+                <button id="detailImportantBtn" class="icon-btn" type="button"></button>
+              </div>
+              <div class="detail-toolbar-group detail-toolbar-group--market" role="group" aria-label="板块方向">
+                <button id="detailBullishBtn" class="icon-btn" type="button" title="看多板块标记" aria-label="看多板块标记"></button>
+                <button id="detailBearishBtn" class="icon-btn" type="button" title="看空板块标记" aria-label="看空板块标记"></button>
+              </div>
+            </div>
           </div>
           <h3 id="detailTitle" class="detail-title"></h3>
           <div id="detailInlineMarketTags" class="detail-inline-market-tags hidden"></div>
@@ -762,6 +872,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.0.3"></script>
+    <script src="/static/app.js?v=2.1.0.7"></script>
   </body>
 </html>

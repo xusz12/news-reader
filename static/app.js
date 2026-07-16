@@ -111,6 +111,8 @@ const TRACKED_SYSTEM_DEFAULT_RULE_PARAMS = {
   threshold: 6,
 };
 
+const feedControlsFrame = document.getElementById("feedControlsFrame");
+const feedControlsScroll = document.getElementById("feedControlsScroll");
 const refreshBtn = document.getElementById("refreshBtn");
 const resumeAnchorBtn = document.getElementById("resumeAnchorBtn");
 const readFilterToggleBtn = document.getElementById("readFilterToggleBtn");
@@ -129,6 +131,7 @@ const navFeedBtn = document.getElementById("navFeedBtn");
 const navDailyBtn = document.getElementById("navDailyBtn");
 const navFavoritesBtn = document.getElementById("navFavoritesBtn");
 const navRemindersBtn = document.getElementById("navRemindersBtn");
+const navReminderBadge = document.getElementById("navReminderBadge");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
 const navNotesBtn = document.getElementById("navNotesBtn");
@@ -353,6 +356,8 @@ const trackedDefaultsExcludePenaltyInput = document.getElementById("trackedDefau
 const trackedDefaultsSaveBtn = document.getElementById("trackedDefaultsSaveBtn");
 const trackedDefaultsRestoreBtn = document.getElementById("trackedDefaultsRestoreBtn");
 const detailBody = document.getElementById("detailBody");
+const detailToolbarFrame = document.getElementById("detailToolbarFrame");
+const detailToolbarScroll = document.getElementById("detailToolbarScroll");
 const detailDailyBody = document.getElementById("detailDailyBody");
 const detailDailyTitle = document.getElementById("detailDailyTitle");
 const detailDailyMeta = document.getElementById("detailDailyMeta");
@@ -532,6 +537,17 @@ function reminderNavLabel() {
   return due > 0 ? `提醒 (${due})` : "提醒";
 }
 
+function updateReminderNavButton() {
+  const due = reminderDueCount();
+  if (navReminderBadge) {
+    navReminderBadge.textContent = due > 0 ? String(due) : "";
+    navReminderBadge.classList.toggle("hidden", due <= 0);
+  }
+  if (navRemindersBtn) {
+    navRemindersBtn.setAttribute("aria-label", due > 0 ? `提醒，${due} 项已到期` : "提醒");
+  }
+}
+
 function reminderStatusLabel(status) {
   const mapping = { active: "进行中", done: "已完成", dismissed: "已关闭" };
   return mapping[status] || "提醒";
@@ -597,7 +613,7 @@ function applyReminderSummary(summary) {
     done_total: Number(summary?.done_total || 0),
     dismissed_total: Number(summary?.dismissed_total || 0),
   };
-  if (navRemindersBtn) navRemindersBtn.textContent = reminderNavLabel();
+  updateReminderNavButton();
   updateCollectionButtons();
 }
 
@@ -683,7 +699,7 @@ function showTrackedView(show) {
 function updateWorkspaceLayout() {}
 
 function updateSourceFilterVisibility() {
-  const visible = state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes" && state.collection !== "market_tags" && state.collection !== "daily";
+  const visible = state.collection !== "tracked" && state.collection !== "search" && state.collection !== "reminders" && state.collection !== "notes" && state.collection !== "market_tags" && state.collection !== "daily" && state.collection !== "reviews";
   document.querySelectorAll("#sourceFilterPanel").forEach((node) => {
     node.classList.toggle("hidden", !visible);
   });
@@ -2312,26 +2328,55 @@ function updateMobileSourceEntryButton() {
 }
 
 function updateCollectionButtons() {
-  if (navSearchBtn) navSearchBtn.classList.toggle("active", state.collection === "search");
-  navFeedBtn.classList.toggle("active", state.collection === "feed");
-  if (navDailyBtn) navDailyBtn.classList.toggle("active", state.collection === "daily");
-  if (navFavoritesBtn) navFavoritesBtn.classList.toggle("active", state.collection === "favorites");
-  if (navRemindersBtn) navRemindersBtn.classList.toggle("active", state.collection === "reminders");
-  navImportantBtn.classList.toggle("active", state.collection === "important");
-  navReadLaterBtn.classList.toggle("active", state.collection === "read_later");
-  if (navNotesBtn) navNotesBtn.classList.toggle("active", state.collection === "notes");
-  if (navTrackedBtn) navTrackedBtn.classList.toggle("active", state.collection === "tracked");
-  if (navMarketTagsBtn) navMarketTagsBtn.classList.toggle("active", state.collection === "market_tags");
-  if (navReviewsBtn) navReviewsBtn.classList.toggle("active", state.collection === "reviews");
+  [
+    [navSearchBtn, "search"],
+    [navFeedBtn, "feed"],
+    [navDailyBtn, "daily"],
+    [navReadLaterBtn, "read_later"],
+    [navImportantBtn, "important"],
+    [navRemindersBtn, "reminders"],
+    [navFavoritesBtn, "favorites"],
+    [navNotesBtn, "notes"],
+    [navReviewsBtn, "reviews"],
+    [navTrackedBtn, "tracked"],
+    [navMarketTagsBtn, "market_tags"],
+  ].forEach(([button, collection]) => {
+    if (!button) return;
+    const active = state.collection === collection;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
   if (mobileCollectionTriggerBtn) {
-    mobileCollectionTriggerBtn.classList.toggle("active", state.collection === "feed");
+    const active = state.collection === "feed";
+    mobileCollectionTriggerBtn.classList.toggle("active", active);
     mobileCollectionTriggerBtn.textContent = "新闻";
+    if (active) mobileCollectionTriggerBtn.setAttribute("aria-current", "page");
+    else mobileCollectionTriggerBtn.removeAttribute("aria-current");
   }
   if (mobileReadLaterTabBtn) {
-    mobileReadLaterTabBtn.classList.toggle("active", state.collection === "read_later");
+    const active = state.collection === "read_later";
+    mobileReadLaterTabBtn.classList.toggle("active", active);
+    if (active) mobileReadLaterTabBtn.setAttribute("aria-current", "page");
+    else mobileReadLaterTabBtn.removeAttribute("aria-current");
   }
   if (mobileMoreTabBtn) {
-    mobileMoreTabBtn.classList.toggle("active", state.collection !== "feed" && state.collection !== "read_later");
+    const moreCollectionLabels = {
+      search: "搜索",
+      daily: "日报",
+      important: "重要",
+      favorites: "收藏",
+      reminders: "提醒",
+      notes: "想法",
+      reviews: "复盘",
+      tracked: "跟踪",
+      market_tags: "板块",
+    };
+    const active = state.collection !== "feed" && state.collection !== "read_later";
+    mobileMoreTabBtn.classList.toggle("active", active);
+    mobileMoreTabBtn.textContent = active ? (moreCollectionLabels[state.collection] || "更多") : "更多";
+    if (active) mobileMoreTabBtn.setAttribute("aria-current", "page");
+    else mobileMoreTabBtn.removeAttribute("aria-current");
   }
   updateMobileSourceEntryButton();
   if (manageMarketTagsBtn) {
@@ -2385,6 +2430,7 @@ function appendMobileMoreAction(container, item) {
   btn.type = "button";
   btn.className = "mobile-more-row";
   btn.classList.toggle("active", !!item.active);
+  if (item.active) btn.setAttribute("aria-current", "page");
   const label = document.createElement("span");
   label.className = "mobile-more-label";
   label.textContent = item.label;
@@ -2426,22 +2472,32 @@ function renderMobileMoreOptions() {
   mobileCollectionOptions.innerHTML = "";
   const groups = [
     {
-      title: "阅读集合",
+      title: "阅读",
       items: [
         { key: "search", label: "搜索", desc: "标题、正文、AI、想法与板块" },
         { key: "daily", label: "日报", desc: "查看日报集合与结构化简报" },
-        { key: "important", label: "重要", desc: "已标记的重要新闻" },
-        { key: "favorites", label: "收藏", desc: "长期保留的新闻" },
-        { key: "reminders", label: reminderNavLabel(), desc: "待处理与已完成提醒" },
-        { key: "notes", label: "想法", desc: "新闻想法与板块想法" },
       ],
     },
     {
-      title: "研究工作",
+      title: "个人队列",
       items: [
-        { key: "tracked", label: "跟踪", desc: "长期主题与时间线" },
-        { key: "market_tags", label: "板块", desc: "板块工作台与置顶信息" },
+        { key: "important", label: "重要", desc: "已标记的重要新闻" },
+        { key: "reminders", label: reminderNavLabel(), desc: "待处理与已完成提醒" },
+        { key: "favorites", label: "收藏", desc: "长期保留的新闻" },
+      ],
+    },
+    {
+      title: "研究",
+      items: [
+        { key: "notes", label: "想法", desc: "新闻想法与板块想法" },
         { key: "reviews", label: "复盘", desc: "版本化判断复盘" },
+        { key: "tracked", label: "跟踪", desc: "长期主题与时间线" },
+      ],
+    },
+    {
+      title: "市场",
+      items: [
+        { key: "market_tags", label: "板块", desc: "板块工作台与置顶信息" },
       ],
     },
   ];
@@ -2518,7 +2574,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.3";
+  version.textContent = "News Reader v2.1.0.7";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -2587,9 +2643,10 @@ function renderSourceFilters(options) {
     allBtn.type = "button";
     allBtn.className = className;
     allBtn.dataset.sourceKey = "all";
-    setButtonContent(allBtn, "全部来源", null, desktop);
+    setButtonContent(allBtn, "全部来源", totalCount || null, desktop);
     allBtn.setAttribute("aria-label", totalCount ? `全部来源，${totalCount} 条` : "全部来源");
     allBtn.classList.toggle("active", state.sourceFilter === "all");
+    allBtn.setAttribute("aria-pressed", String(state.sourceFilter === "all"));
     allBtn.addEventListener("click", async () => {
       if (state.sourceFilter === "all") return;
       state.sourceFilter = "all";
@@ -2606,6 +2663,7 @@ function renderSourceFilters(options) {
       setButtonContent(btn, sourceLabel(src.key) || src.label, src.count, desktop);
       btn.setAttribute("aria-label", `${sourceLabel(src.key) || src.label}，${src.count} 条`);
       btn.classList.toggle("active", state.sourceFilter === src.key);
+      btn.setAttribute("aria-pressed", String(state.sourceFilter === src.key));
       btn.addEventListener("click", async () => {
         if (state.sourceFilter === src.key) return;
         state.sourceFilter = src.key;
@@ -3062,6 +3120,11 @@ function fillTrackedDefaultsForm(params = getTrackedDefaultRuleParams()) {
   trackedDefaultsExcludePenaltyInput.value = String(trackedRuleNumber(params.exclude_penalty, TRACKED_SYSTEM_DEFAULT_RULE_PARAMS.exclude_penalty));
 }
 
+function resetTrackedEditorScroll(container) {
+  const panel = container?.querySelector(".detail-tracked-form-panel");
+  if (panel) panel.scrollTop = 0;
+}
+
 function openTrackedDefaultsPanel() {
   closeTagAdminView();
   clearTrendIdeaDetailState();
@@ -3074,6 +3137,7 @@ function openTrackedDefaultsPanel() {
   if (detailBody) detailBody.classList.add("hidden");
   if (detailChatBody) detailChatBody.classList.add("hidden");
   detailTrackedDefaultsBody.classList.remove("hidden");
+  resetTrackedEditorScroll(detailTrackedDefaultsBody);
   fillTrackedDefaultsForm(getTrackedDefaultRuleParams());
   updateWorkspaceLayout();
   openDetailOnMobile();
@@ -3092,6 +3156,7 @@ function openTrackedTopicForm(mode, topic = null) {
   if (detailBody) detailBody.classList.add("hidden");
   if (detailChatBody) detailChatBody.classList.add("hidden");
   detailTrackedFormBody.classList.remove("hidden");
+  resetTrackedEditorScroll(detailTrackedFormBody);
   detailTrackedFormTitle.textContent = mode === "edit" ? "编辑跟踪主题" : "新建跟踪主题";
   detailTrackedFormMeta.textContent = mode === "edit"
     ? "修改规则、增量范围和启用状态；字段说明和打分说明都放在当前编辑页内。"
@@ -3833,11 +3898,108 @@ async function patchStateWithRollback(itemId, payload) {
 }
 
 function openDetailOnMobile() {
-  if (window.matchMedia("(max-width: 980px)").matches) {
+  if (window.matchMedia("(max-width: 1180px)").matches) {
     detailPanel.style.transition = "";
     detailPanel.style.transform = "";
     detailPanel.classList.add("open");
+    scheduleDetailToolbarOverflowSync();
   }
+}
+
+let detailToolbarOverflowFrame = 0;
+
+function syncDetailToolbarOverflow() {
+  detailToolbarOverflowFrame = 0;
+  if (!detailToolbarFrame || !detailToolbarScroll) return;
+  const threshold = 2;
+  const maxScrollLeft = Math.max(0, detailToolbarScroll.scrollWidth - detailToolbarScroll.clientWidth);
+  const isOverflowing = detailToolbarScroll.clientWidth > 0 && maxScrollLeft > threshold;
+  detailToolbarFrame.classList.toggle("is-overflowing", isOverflowing);
+  detailToolbarFrame.classList.toggle(
+    "is-at-start",
+    !isOverflowing || detailToolbarScroll.scrollLeft <= threshold,
+  );
+  detailToolbarFrame.classList.toggle(
+    "is-at-end",
+    !isOverflowing || detailToolbarScroll.scrollLeft >= maxScrollLeft - threshold,
+  );
+}
+
+function scheduleDetailToolbarOverflowSync() {
+  if (!detailToolbarFrame || !detailToolbarScroll || detailToolbarOverflowFrame) return;
+  if (typeof window.requestAnimationFrame !== "function") {
+    syncDetailToolbarOverflow();
+    return;
+  }
+  detailToolbarOverflowFrame = window.requestAnimationFrame(syncDetailToolbarOverflow);
+}
+
+function setupDetailToolbarOverflowCue() {
+  if (!detailBody || !detailToolbarFrame || !detailToolbarScroll) return;
+  detailToolbarScroll.addEventListener("scroll", scheduleDetailToolbarOverflowSync, { passive: true });
+  if ("ResizeObserver" in window) {
+    const resizeObserver = new ResizeObserver(scheduleDetailToolbarOverflowSync);
+    resizeObserver.observe(detailToolbarFrame);
+    resizeObserver.observe(detailToolbarScroll);
+  }
+  if ("MutationObserver" in window) {
+    const mutationObserver = new MutationObserver(scheduleDetailToolbarOverflowSync);
+    mutationObserver.observe(detailBody, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      attributeFilter: ["class"],
+    });
+  }
+  scheduleDetailToolbarOverflowSync();
+}
+
+let feedControlsOverflowFrame = 0;
+
+function syncFeedControlsOverflow() {
+  feedControlsOverflowFrame = 0;
+  if (!feedControlsFrame || !feedControlsScroll) return;
+  const threshold = 2;
+  const maxScrollLeft = Math.max(0, feedControlsScroll.scrollWidth - feedControlsScroll.clientWidth);
+  const isOverflowing = feedControlsScroll.clientWidth > 0 && maxScrollLeft > threshold;
+  feedControlsFrame.classList.toggle("is-overflowing", isOverflowing);
+  feedControlsFrame.classList.toggle(
+    "is-at-start",
+    !isOverflowing || feedControlsScroll.scrollLeft <= threshold,
+  );
+  feedControlsFrame.classList.toggle(
+    "is-at-end",
+    !isOverflowing || feedControlsScroll.scrollLeft >= maxScrollLeft - threshold,
+  );
+}
+
+function scheduleFeedControlsOverflowSync() {
+  if (!feedControlsFrame || !feedControlsScroll || feedControlsOverflowFrame) return;
+  if (typeof window.requestAnimationFrame !== "function") {
+    syncFeedControlsOverflow();
+    return;
+  }
+  feedControlsOverflowFrame = window.requestAnimationFrame(syncFeedControlsOverflow);
+}
+
+function setupFeedControlsOverflowCue() {
+  if (!feedControlsFrame || !feedControlsScroll) return;
+  feedControlsScroll.addEventListener("scroll", scheduleFeedControlsOverflowSync, { passive: true });
+  if ("ResizeObserver" in window) {
+    const resizeObserver = new ResizeObserver(scheduleFeedControlsOverflowSync);
+    resizeObserver.observe(feedControlsFrame);
+    resizeObserver.observe(feedControlsScroll);
+  }
+  if ("MutationObserver" in window) {
+    const mutationObserver = new MutationObserver(scheduleFeedControlsOverflowSync);
+    mutationObserver.observe(feedControlsScroll, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      attributeFilter: ["class"],
+    });
+  }
+  scheduleFeedControlsOverflowSync();
 }
 
 function closeDetailOnMobile() {
@@ -7512,6 +7674,8 @@ async function switchCollection(collection) {
   closeAllReviewPanels();
   state.selectedReviewId = null;
   state.collection = collection;
+  if (feedControlsScroll) feedControlsScroll.scrollLeft = 0;
+  scheduleFeedControlsOverflowSync();
   closeMobileFilterSheet();
   closeMobileCollectionSheet();
   closeErrorStatsPanel();
@@ -8724,6 +8888,8 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("resize", () => {
   syncSearchPageControls();
+  scheduleFeedControlsOverflowSync();
+  scheduleDetailToolbarOverflowSync();
 });
 
 window.addEventListener("keydown", (event) => {
@@ -8733,6 +8899,8 @@ window.addEventListener("keydown", (event) => {
 });
 
 setupLoadObserver();
+setupFeedControlsOverflowCue();
+setupDetailToolbarOverflowCue();
 renderDetail(null);
 try {
   applyThemeMode(localStorage.getItem(THEME_KEY) || "system");
