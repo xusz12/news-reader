@@ -196,7 +196,11 @@
 
       <aside id="detailPanel" class="detail-panel" aria-live="polite">
         <button id="detailCloseBtn" class="detail-close" type="button">关闭</button>
-        <div id="detailEmpty" class="detail-empty">选择一条新闻查看摘要与正文</div>
+        <div id="detailEmpty" class="detail-empty">
+          <span id="detailEmptyIcon" class="detail-empty-icon" aria-hidden="true"></span>
+          <span id="detailEmptyTitle" class="detail-empty-title">选择一条新闻查看摘要与正文</span>
+          <span class="detail-empty-copy">详情与相关操作会显示在这里</span>
+        </div>
         <div id="detailTrendComposerBody" class="detail-tag-admin-body hidden">
           <div class="detail-tag-admin-header">
             <div>
@@ -752,11 +756,10 @@
 
     <div id="settingsOverlay" class="settings-overlay hidden" aria-hidden="true">
       <button id="settingsBackdrop" class="settings-backdrop" type="button" aria-label="关闭设置"></button>
-      <section id="settingsPanel" class="settings-panel" aria-label="设置页">
+      <section id="settingsPanel" class="settings-panel" aria-label="设置">
         <div class="settings-header">
           <div>
-            <div class="settings-eyebrow">Settings</div>
-            <h2 class="settings-title">设置页</h2>
+            <h2 class="settings-title">设置</h2>
           </div>
           <button id="settingsCloseBtn" class="detail-retry-btn" type="button">关闭</button>
         </div>
@@ -764,13 +767,13 @@
         <div class="settings-shell">
           <nav class="settings-nav" aria-label="设置板块">
             <button id="settingsNavServices" class="settings-nav-btn" type="button" data-section="services" aria-label="服务管理" title="服务管理">
-              <span class="settings-nav-icon" aria-hidden="true">S</span>
+              <span class="settings-nav-label">服务</span>
             </button>
             <button id="settingsNavModels" class="settings-nav-btn" type="button" data-section="models" aria-label="模型管理" title="模型管理">
-              <span class="settings-nav-icon" aria-hidden="true">M</span>
+              <span class="settings-nav-label">模型</span>
             </button>
-            <button id="settingsNavRelease" class="settings-nav-btn" type="button" data-section="release" aria-label="Release Notes" title="Release Notes">
-              <span class="settings-nav-icon" aria-hidden="true">R</span>
+            <button id="settingsNavRelease" class="settings-nav-btn" type="button" data-section="release" aria-label="更新记录" title="更新记录">
+              <span class="settings-nav-label">更新</span>
             </button>
           </nav>
           <div class="settings-content">
@@ -781,45 +784,56 @@
           <section id="settingsSectionModels" class="settings-card settings-section-panel hidden">
             <h3 class="settings-card-title">模型管理</h3>
             <div class="settings-form">
-              <div class="settings-field">
-                <label for="settingsTranslationProvider">翻译 / 总结 provider</label>
-                <select id="settingsTranslationProvider" class="pref-select">
-                  <option value="deepseek">DeepSeek</option>
-                </select>
-              </div>
-              <div class="settings-field">
-                <label for="settingsTranslationModelSelect">翻译 / 总结默认模型</label>
-                <select id="settingsTranslationModelSelect" class="pref-select"></select>
-                <input id="settingsTranslationModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 DeepSeek 模型名" />
-                <div id="settingsTranslationModelCurrent" class="settings-field-current"></div>
-              </div>
-              <div class="settings-field">
-                <label for="settingsChatProviderSelect">Chat provider</label>
-                <select id="settingsChatProviderSelect" class="pref-select">
-                  <option value="codex">Codex</option>
-                  <option value="pi">Pi</option>
-                </select>
-                <div id="settingsChatProviderCurrent" class="settings-field-current"></div>
-              </div>
-              <div class="settings-field">
-                <label for="settingsCodexChatModelSelect">Codex chat 默认模型</label>
-                <select id="settingsCodexChatModelSelect" class="pref-select"></select>
-                <input id="settingsCodexChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Codex 模型名" />
-                <div id="settingsCodexChatModelCurrent" class="settings-field-current"></div>
-              </div>
-              <div class="settings-field" id="settingsPiChatProviderField">
-                <label for="settingsPiChatProviderSelect">Pi chat provider（默认 ollama，可自定义 provider，如 deepseek）</label>
-                <select id="settingsPiChatProviderSelect" class="pref-select">
-                  <option value="ollama">ollama</option>
-                </select>
-                <input id="settingsPiChatProviderCustom" class="settings-input hidden" type="text" maxlength="40" placeholder="输入自定义 pi provider" />
-              </div>
-              <div class="settings-field" id="settingsPiChatModelField">
-                <label for="settingsPiChatModelSelect">Pi chat 默认模型</label>
-                <select id="settingsPiChatModelSelect" class="pref-select"></select>
-                <input id="settingsPiChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Pi 模型名" />
-                <div id="settingsPiChatModelCurrent" class="settings-field-current"></div>
-              </div>
+              <section class="settings-form-group" aria-labelledby="settingsTranslationGroupTitle">
+                <h4 id="settingsTranslationGroupTitle" class="settings-form-group-title">翻译与总结</h4>
+                <div class="settings-form-grid">
+                  <div class="settings-field">
+                    <label for="settingsTranslationProvider">翻译 / 总结 provider</label>
+                    <select id="settingsTranslationProvider" class="pref-select">
+                      <option value="deepseek">DeepSeek</option>
+                    </select>
+                  </div>
+                  <div class="settings-field">
+                    <label for="settingsTranslationModelSelect">翻译 / 总结默认模型</label>
+                    <select id="settingsTranslationModelSelect" class="pref-select"></select>
+                    <input id="settingsTranslationModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 DeepSeek 模型名" />
+                    <div id="settingsTranslationModelCurrent" class="settings-field-current"></div>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-form-group" aria-labelledby="settingsChatGroupTitle">
+                <h4 id="settingsChatGroupTitle" class="settings-form-group-title">Chat</h4>
+                <div class="settings-form-grid">
+                  <div class="settings-field">
+                    <label for="settingsChatProviderSelect">Chat provider</label>
+                    <select id="settingsChatProviderSelect" class="pref-select">
+                      <option value="codex">Codex</option>
+                      <option value="pi">Pi</option>
+                    </select>
+                    <div id="settingsChatProviderCurrent" class="settings-field-current"></div>
+                  </div>
+                  <div class="settings-field">
+                    <label for="settingsCodexChatModelSelect">Codex chat 默认模型</label>
+                    <select id="settingsCodexChatModelSelect" class="pref-select"></select>
+                    <input id="settingsCodexChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Codex 模型名" />
+                    <div id="settingsCodexChatModelCurrent" class="settings-field-current"></div>
+                  </div>
+                  <div class="settings-field" id="settingsPiChatProviderField">
+                    <label for="settingsPiChatProviderSelect">Pi chat provider</label>
+                    <select id="settingsPiChatProviderSelect" class="pref-select">
+                      <option value="ollama">ollama</option>
+                    </select>
+                    <input id="settingsPiChatProviderCustom" class="settings-input hidden" type="text" maxlength="40" placeholder="输入自定义 pi provider" />
+                    <div class="settings-field-help">默认 ollama，可自定义 provider，如 deepseek</div>
+                  </div>
+                  <div class="settings-field" id="settingsPiChatModelField">
+                    <label for="settingsPiChatModelSelect">Pi chat 默认模型</label>
+                    <select id="settingsPiChatModelSelect" class="pref-select"></select>
+                    <input id="settingsPiChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Pi 模型名" />
+                    <div id="settingsPiChatModelCurrent" class="settings-field-current"></div>
+                  </div>
+                </div>
+              </section>
               <div class="settings-field-note" id="settingsChatArchiveNote">归档摘要跟随当前 Chat provider（Codex 或 Pi）。</div>
               <div class="settings-actions">
                 <button id="settingsSaveBtn" class="detail-retry-btn" type="button">保存设置</button>
@@ -828,7 +842,7 @@
           </section>
           <section id="settingsSectionRelease" class="settings-card settings-release-card settings-section-panel hidden">
           <div class="settings-release-header">
-            <h3 class="settings-card-title">Release Notes</h3>
+            <h3 class="settings-card-title">更新记录</h3>
             <span class="settings-release-note">数据源：README / What's Changed</span>
           </div>
           <div id="settingsReleaseNotes" class="settings-release-list"></div>

@@ -406,9 +406,9 @@ Components should feel familiar enough that an experienced user can act without 
 - **Do** preserve user context: selection, scroll anchor, collection, source filter, detail mode, and draft state.
 - **Do** expose loading, empty, pending, failed, stale, retry, and recovery states in plain Chinese.
 - **Do** identify AI provider, model, context scope, source boundary, external-search use, and failure mode.
-- **Do** design for keyboard, pointer, touch, screen readers, light/dark themes, reduced motion, and WCAG AA contrast from the start.
+- **Do** preserve existing keyboard, pointer, touch, semantic, and contrast behavior when editing a related component. Broader accessibility expansion is a separate scope and must not incidentally enlarge controls, change navigation, or create collisions.
 - **Do** use semantic grouping and stable layout for tracking rules, review workflows, market controls, filters, and settings without hiding important controls.
-- **Do** verify desktop, compact desktop/tablet, and mobile whenever navigation, layout, typography, or a persistent control changes.
+- **Do** verify the breakpoint and theme currently in scope. Desktop light changes require visual approval before they propagate to dark mode, compact desktop/tablet, or mobile.
 
 ### Don't:
 
@@ -426,3 +426,42 @@ Components should feel familiar enough that an experienced user can act without 
 - **Don't** flatten errors into vague failures or hide retry and recovery actions.
 - **Don't** make AI features opaque, imply knowledge beyond the available context, hide search usage, or blur news facts, user notes, generated summaries, and external research.
 - **Don't** copy legacy literal colors, undefined fallback variables, broad panel gradients, or content-layer blur into new components; migrate them into the documented token and state system.
+
+## 7. Aesthetic Calibration and Change Protocol
+
+v2.1.0.9 is the approved visual baseline. It is the comparison point for all later UI work, not a temporary state waiting for a global reskin. Existing surfaces remain unchanged unless a later task names them explicitly.
+
+### Approved Character
+
+- **Quiet and dense:** the interface supports prolonged scanning and research. Compact targets, short labels, and high information density are intentional.
+- **Softly layered, not flat:** the current cool blue-gray workspace, restrained gradients, subtle panel shadows, and selected-state tint may remain. Do not replace them with a universal flat-surface system.
+- **Direct and complete:** important navigation, toolbar actions, and advanced parameters stay visible. Hierarchy comes from grouping, order, spacing, weight, and alignment rather than an overflow menu.
+- **Content-led:** source and time remain adjacent; titles and summaries dominate the feed; the detail reader may use its available width; user-authored, generated, and source content remain distinct.
+- **Personal:** the topbar motto is intentional product identity, not generic market guidance, and remains unchanged.
+
+### Frozen Product Choices
+
+- Keep the existing three-zone desktop mental map, list position, selected state, and return-to-context behavior.
+- Keep source and time together as one provenance cluster, separate from the trailing personal actions.
+- Keep all important actions and tracking parameters directly visible; do not introduce “More” as a layout solution.
+- Keep the read-later button as the only row-level expression of detail fetching: neutral, pending amber, ready green, and failed red. Do not repeat this with a background-task text label.
+- Keep wide detail reading, hidden scrollbars, the current mobile detail behavior, and compact touch targets where enlargement would cause overlap.
+- Do not add persistent mobile back/history chrome, gesture teaching, universal `44px` targets, desktop scrollbars, or a fixed `65–75ch` article measure.
+- Preserve existing semantic and keyboard behavior, but defer broad accessibility expansion and DOM focus return until they are explicitly scoped.
+
+### Visual Guardrails
+
+- Do not perform another global material, surface, radius, shadow, or color-token replacement as a single UI phase.
+- Liquid Glass and glass control islands are not default components. Any future material experiment must begin as one isolated, reversible sample and receive explicit visual approval before entering production styles or shared tokens.
+- Do not create glossy edge highlights, floating toolbar capsules, nested cards, heavy shadows, or decorative blur to make a surface feel “Apple-like.”
+- Do not remove every gradient, shadow, border, or translucent layer merely to create simplicity. Simplify only when the affected hierarchy becomes clearer.
+- Prefer optical alignment, spacing-token corrections, weight and contrast tuning, and consistent component geometry over new effects.
+
+### Change Protocol
+
+1. Work on one named surface, one theme, and one breakpoint at a time.
+2. Record the selectors and token families that may change before editing; unrelated surfaces remain frozen.
+3. Compare before and after at the same viewport, content state, theme, and scroll position.
+4. A candidate must improve scan speed, hierarchy, alignment, or state clarity without hiding actions or reducing useful density.
+5. Do not propagate an approved desktop-light adjustment to dark mode, compact desktop/tablet, or mobile automatically; tune and approve each separately.
+6. If the visual direction is rejected, remove the complete candidate rather than layering corrective overrides on top of it.

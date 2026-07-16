@@ -272,6 +272,8 @@ const trackedTimelineList = document.getElementById("trackedTimelineList");
 
 const detailPanel = document.getElementById("detailPanel");
 const detailEmpty = document.getElementById("detailEmpty");
+const detailEmptyIcon = document.getElementById("detailEmptyIcon");
+const detailEmptyTitle = document.getElementById("detailEmptyTitle");
 const detailTrendComposerBody = document.getElementById("detailTrendComposerBody");
 const trendNoteDateSelect = document.getElementById("trendNoteDateSelect");
 const trendNoteTagSelect = document.getElementById("trendNoteTagSelect");
@@ -1801,6 +1803,9 @@ function iconSvg(name, filled = false) {
   }
   if (name === "target") {
     return `<svg ${common}><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="M2 12h3"/><path d="M19 12h3"/></svg>`;
+  }
+  if (name === "newspaper") {
+    return `<svg ${common}><path d="M6.5 5.5h10.8a1.2 1.2 0 0 1 1.2 1.2v11.8H7.7a2.2 2.2 0 0 1-2.2-2.2V6.5a1 1 0 0 0-2 0v9.8a2.2 2.2 0 0 0 2.2 2.2"/><path d="M9 9h6"/><path d="M9 12.5h6"/><path d="M9 16h4"/></svg>`;
   }
   return `<svg ${common}><circle cx="12" cy="12" r="7.5"/></svg>`;
 }
@@ -3542,7 +3547,7 @@ function emptyDetailMessage() {
 
 function renderDetailEmpty(message = emptyDetailMessage()) {
   if (!detailEmpty) return;
-  detailEmpty.textContent = message;
+  if (detailEmptyTitle) detailEmptyTitle.textContent = message;
   detailEmpty.classList.remove("hidden");
 }
 
@@ -9400,6 +9405,9 @@ if (settingsBtn) {
 }
 if (errorStatsBtn) {
   applyIcon(errorStatsBtn, "bell", { label: "查看当日错误统计" });
+}
+if (detailEmptyIcon) {
+  detailEmptyIcon.innerHTML = iconSvg("newspaper");
 }
 if (searchPageSubmitBtn) {
   searchPageSubmitBtn.textContent = "搜索";

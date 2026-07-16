@@ -4872,6 +4872,98 @@ def test_frontend_is_v219_without_later_visual_experiments():
     assert "text-transform: uppercase" in review_styles
 
 
+def test_frontend_syncs_feed_rhythm_tuning_across_themes_and_devices():
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+
+    assert "margin: 0 var(--space-5) var(--space-3)" in style_source
+    assert "margin: var(--space-2) 0 var(--space-1)" in style_source
+    assert "font-weight: 600" in style_source
+    assert "Phase 2: desktop-light feed rhythm only" not in style_source
+    assert "margin: 6px 10px 8px" not in style_source
+
+
+def test_frontend_separates_visible_feed_action_groups_without_changing_targets():
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+
+    assert ".feed-toolbar-action-group:has(> :not(.hidden)) + .feed-toolbar-action-group:has(> :not(.hidden))" in style_source
+    assert "left: calc(-1 * var(--space-2))" in style_source
+    assert "width: 1px" in style_source
+    assert "background: var(--hairline)" in style_source
+    assert 'aria-label="阅读与排序"' in index_source
+    assert 'aria-label="批量与维护"' in index_source
+    assert "width: 32px" in style_source
+
+
+def test_detail_empty_state_is_compact_and_keeps_collection_context():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+    empty_style = style_source.split(".detail-empty {", 1)[1].split("}", 1)[0]
+
+    assert 'id="detailEmptyIcon"' in index_source
+    assert 'id="detailEmptyTitle"' in index_source
+    assert "详情与相关操作会显示在这里" in index_source
+    assert 'if (name === "newspaper")' in app_source
+    assert "if (detailEmptyTitle) detailEmptyTitle.textContent = message" in app_source
+    assert "detailEmpty.textContent = message" not in app_source
+    assert "min-height: 0" in empty_style
+    assert "border: 0" in empty_style
+    assert "background: transparent" in empty_style
+    assert "1px dashed" not in empty_style
+    assert "min-height: 178px" not in style_source
+    assert ".detail-empty-icon svg" in style_source
+    assert ".detail-empty-copy" in style_source
+
+
+def test_settings_shell_uses_visible_labels_and_content_fitted_desktop_height():
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+
+    assert '<h2 class="settings-title">设置</h2>' in index_source
+    assert '<div class="settings-eyebrow">Settings</div>' not in index_source
+    assert '<span class="settings-nav-label">服务</span>' in index_source
+    assert '<span class="settings-nav-label">模型</span>' in index_source
+    assert '<span class="settings-nav-label">更新</span>' in index_source
+    assert 'aria-label="更新记录"' in index_source
+    assert '<h3 class="settings-card-title">更新记录</h3>' in index_source
+    assert ".settings-overlay {" in style_source
+    assert "place-items: center" in style_source
+    assert "width: min(1220px, calc(100vw - 48px))" in style_source
+    assert "height: auto" in style_source
+    assert "max-height: calc(100vh - 48px)" in style_source
+    assert "grid-template-columns: 132px minmax(0, 1fr)" in style_source
+    assert ".settings-nav-label {" in style_source
+    assert ".settings-nav-icon" not in style_source
+    assert "height: calc(100vh - 16px)" in style_source
+
+
+def test_settings_model_form_groups_fields_without_hiding_parameters():
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+
+    assert 'aria-labelledby="settingsTranslationGroupTitle"' in index_source
+    assert 'class="settings-form-group-title">翻译与总结</h4>' in index_source
+    assert 'aria-labelledby="settingsChatGroupTitle"' in index_source
+    assert 'class="settings-form-group-title">Chat</h4>' in index_source
+    assert '<label for="settingsPiChatProviderSelect">Pi chat provider</label>' in index_source
+    assert '<div class="settings-field-help">默认 ollama，可自定义 provider，如 deepseek</div>' in index_source
+    assert "Pi chat provider（默认 ollama，可自定义 provider，如 deepseek）" not in index_source
+    for element_id in (
+        "settingsTranslationProvider",
+        "settingsTranslationModelSelect",
+        "settingsChatProviderSelect",
+        "settingsCodexChatModelSelect",
+        "settingsPiChatProviderSelect",
+        "settingsPiChatModelSelect",
+    ):
+        assert f'id="{element_id}"' in index_source
+    assert ".settings-form-grid {" in style_source
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in style_source
+    assert "grid-template-columns: 1fr" in style_source
+    assert ".settings-field-note {" in style_source
+
+
 def test_scrollbars_are_hidden_but_scrollable():
     path = Path("/Users/x/news-reader/news-reader/static/style.css")
     source = path.read_text(encoding="utf-8")
