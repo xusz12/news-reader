@@ -4852,14 +4852,16 @@ def test_frontend_keeps_failures_near_the_affected_workflow():
     assert ".detail-action-feedback" in style_source
 
 
-def test_frontend_is_v219_without_later_visual_experiments():
+def test_frontend_is_v211_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.0.9" in app_source
-    assert "News Reader v2.1.0.9" in index_source
+    assert "News Reader v2.1.0.11" in app_source
+    assert "News Reader v2.1.0.11" in index_source
+    assert "/static/style.css?v=2.1.0.11" in index_source
+    assert "/static/app.js?v=2.1.0.11" in index_source
     assert "v2.1.0.10" not in app_source
     assert "v2.1.0.10" not in index_source
     assert "--navigation-surface" not in style_source
@@ -4880,6 +4882,23 @@ def test_frontend_syncs_feed_rhythm_tuning_across_themes_and_devices():
     assert "font-weight: 600" in style_source
     assert "Phase 2: desktop-light feed rhythm only" not in style_source
     assert "margin: 6px 10px 8px" not in style_source
+
+
+def test_frontend_keeps_daily_metadata_groups_readable_on_narrow_layouts():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+
+    assert "function renderDailyMetadata(container, briefing = {}, { includeDate = false, fallbackText = \"\" } = {})" in app_source
+    assert 'renderDailyMetadata(summary, item, { includeDate: false, fallbackText: "无额外元数据" })' in app_source
+    assert "renderDailyMetadata(detailDailyMeta, briefing, { includeDate: true })" in app_source
+    assert ".daily-meta-pair" in style_source
+    assert "white-space: nowrap" in style_source
+    assert ".daily-meta-fallback" in style_source
+    assert ".daily-briefing-row .summary .daily-meta-separator" in style_source
+    assert ".detail-daily-body .detail-meta .daily-meta-separator" in style_source
+    assert "part.dataset.dailyMetaKey = fragment.key" in app_source
+    assert '.daily-meta-pair[data-daily-meta-key="执行时间"]' in style_source
+    assert '.daily-meta-pair[data-daily-meta-key="使用文件"]' in style_source
 
 
 def test_frontend_separates_visible_feed_action_groups_without_changing_targets():

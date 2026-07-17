@@ -1733,6 +1733,50 @@ button.active {
   color: color-mix(in srgb, var(--row-summary) 90%, var(--muted));
 }
 
+.daily-meta-pair,
+.daily-meta-date {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.daily-meta-separator {
+  display: inline-block;
+  margin: 0 6px;
+  color: color-mix(in srgb, var(--muted) 68%, var(--text));
+}
+
+.daily-meta-fallback {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .daily-briefing-row .summary,
+  .detail-daily-body .detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
+  }
+
+  .daily-briefing-row .summary .daily-meta-separator,
+  .detail-daily-body .detail-meta .daily-meta-separator {
+    display: none;
+  }
+
+  .daily-meta-pair[data-daily-meta-key="执行模式"] {
+    order: 1;
+  }
+
+  .daily-meta-pair[data-daily-meta-key="执行时间"] {
+    order: 2;
+  }
+
+  .daily-meta-pair[data-daily-meta-key="使用文件"] {
+    order: 3;
+  }
+}
+
 .news-item.selected {
   outline: none;
   background:

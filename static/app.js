@@ -2683,7 +2683,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.9";
+  version.textContent = "News Reader v2.1.0.11";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -6855,7 +6855,7 @@ function buildDailyBriefingRow(item) {
 
   const summary = document.createElement("p");
   summary.className = "summary";
-  summary.textContent = item.metadata_summary || "无额外元数据";
+  renderDailyMetadata(summary, item, { includeDate: false, fallbackText: "无额外元数据" });
 
   li.appendChild(line1);
   li.appendChild(title);
@@ -6914,21 +6914,56 @@ function dailyBriefingTitle(briefing = {}) {
   return briefing.title || briefing.page_title || (briefing.date_label ? `${briefing.date_label} 日报` : "日报");
 }
 
-function dailyBriefingMeta(briefing = {}) {
-  const parts = [];
-  const dateLabel = briefing.date_label || briefing.date || "";
-  if (dateLabel) parts.push(dateLabel);
-  if (briefing.metadata_summary) parts.push(briefing.metadata_summary);
-  return parts.join(" · ");
+function renderDailyMetadata(container, briefing = {}, { includeDate = false, fallbackText = "" } = {}) {
+  if (!container) return false;
+  container.replaceChildren();
+
+  const fragments = [];
+  if (includeDate) {
+    const dateLabel = briefing.date_label || briefing.date || "";
+    if (dateLabel) fragments.push({ className: "daily-meta-date", text: dateLabel });
+  }
+
+  const metadata = Array.isArray(briefing.metadata)
+    ? briefing.metadata.filter((entry) => entry && (entry.key || entry.value))
+    : [];
+  if (metadata.length) {
+    metadata.forEach((entry) => {
+      fragments.push({
+        className: "daily-meta-pair",
+        key: entry.key || "",
+        text: `${entry.key || "元数据"}：${entry.value || "-"}`,
+      });
+    });
+  } else {
+    const text = briefing.metadata_summary || fallbackText;
+    if (text) fragments.push({ className: "daily-meta-fallback", text });
+  }
+
+  fragments.forEach((fragment, index) => {
+    if (index > 0) {
+      const separator = document.createElement("span");
+      separator.className = "daily-meta-separator";
+      separator.setAttribute("aria-hidden", "true");
+      separator.textContent = "·";
+      container.appendChild(separator);
+    }
+    const part = document.createElement("span");
+    part.className = fragment.className;
+    if (fragment.key) part.dataset.dailyMetaKey = fragment.key;
+    part.textContent = fragment.text;
+    container.appendChild(part);
+  });
+
+  return fragments.length > 0;
 }
 
 function setDailyBriefingHeader(briefing = {}, statusText = "", statusClass = "muted") {
   detailDailyTitle.textContent = dailyBriefingTitle(briefing);
   detailDailyTitle.classList.remove("hidden");
 
-  const metaText = dailyBriefingMeta(briefing);
-  detailDailyMeta.textContent = metaText;
-  detailDailyMeta.classList.toggle("hidden", !metaText);
+  const hasMeta = renderDailyMetadata(detailDailyMeta, briefing, { includeDate: true });
+  detailDailyMeta.classList.toggle("hidden", !hasMeta);
 
   detailDailyStatus.textContent = statusText;
   detailDailyStatus.className = `detail-status ${statusText ? statusClass : "hidden"}`;
