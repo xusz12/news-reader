@@ -87,6 +87,8 @@ let state = {
 };
 
 const TITLE_CHAR_LIMIT = 100;
+const FEED_KEYBOARD_NAV_MIN_WIDTH = 1181;
+const FEED_KEYBOARD_DETAIL_DELAY_MS = 120;
 const sourceIconMap = {
   reuters: "/static/source-icons/reuters.ico",
   bloomberg: "/static/source-icons/bloomberg.png",
@@ -452,6 +454,9 @@ let loadObserver = null;
 let detailPollTimer = null;
 let rowStatusPollTimer = null;
 let feedEndAutoReadTimer = null;
+let feedKeyboardDetailTimer = null;
+let feedKeyboardLoadMorePromise = null;
+let feedKeyboardMode = false;
 let feedEndAutoReadFiredKey = "";
 let marketPickerDirection = null;
 let lastListScrollTop = 0;
@@ -953,6 +958,152 @@ function currentLoadedRowIds() {
   return Array.from(newsList.querySelectorAll(".news-item"))
     .map((row) => row.dataset.id || "")
     .filter(Boolean);
+}
+
+function feedKeyboardRows() {
+  if (!newsList) return [];
+  return Array.from(newsList.querySelectorAll(".feed-news-item"));
+}
+
+function isFeedKeyboardDesktopEnabled() {
+  return Number(window.innerWidth || 0) >= FEED_KEYBOARD_NAV_MIN_WIDTH;
+}
+
+function isKeyboardInteractiveTarget(target) {
+  if (!target) return false;
+  if (target.isContentEditable) return true;
+  if (typeof target.closest !== "function") return false;
+  return !!target.closest("input, textarea, select, button, a, [contenteditable]");
+}
+
+function clearFeedKeyboardDetailTimer() {
+  if (!feedKeyboardDetailTimer) return;
+  window.clearTimeout(feedKeyboardDetailTimer);
+  feedKeyboardDetailTimer = null;
+}
+
+function syncFeedKeyboardRows({ focusSelected = false } = {}) {
+  const rows = feedKeyboardRows();
+  let selectedRow = null;
+  rows.forEach((row) => {
+    const active = !!state.selectedId && row.dataset.id === state.selectedId;
+    row.classList.toggle("selected", active);
+    row.tabIndex = active ? 0 : -1;
+    if (active) {
+      row.setAttribute("aria-current", "page");
+      selectedRow = row;
+    } else {
+      row.removeAttribute("aria-current");
+    }
+  });
+  if (focusSelected && selectedRow && typeof selectedRow.focus === "function") {
+    try {
+      selectedRow.focus({ preventScroll: true });
+    } catch {
+      selectedRow.focus();
+    }
+  }
+  return selectedRow;
+}
+
+function enterFeedKeyboardMode() {
+  if (!isFeedKeyboardDesktopEnabled()) {
+    feedKeyboardMode = false;
+    clearFeedKeyboardDetailTimer();
+    syncFeedKeyboardRows();
+    return false;
+  }
+  feedKeyboardMode = true;
+  syncFeedKeyboardRows();
+  return true;
+}
+
+function exitFeedKeyboardMode() {
+  feedKeyboardMode = false;
+  syncFeedKeyboardRows();
+}
+
+function scrollFeedKeyboardRowIntoView(row) {
+  if (!row || typeof row.scrollIntoView !== "function") return;
+  row.scrollIntoView({ block: "nearest", behavior: "auto" });
+}
+
+function scheduleFeedKeyboardDetailOpen(item) {
+  clearFeedKeyboardDetailTimer();
+  if (!item || !feedKeyboardMode || !isFeedKeyboardDesktopEnabled()) return;
+  feedKeyboardDetailTimer = window.setTimeout(() => {
+    feedKeyboardDetailTimer = null;
+    if (state.selectedId !== item.id) return;
+    openItemDetail(item);
+  }, FEED_KEYBOARD_DETAIL_DELAY_MS);
+}
+
+function selectFeedKeyboardRow(row) {
+  const itemId = row?.dataset?.id || "";
+  const item = itemId ? state.itemsById.get(itemId) : null;
+  if (!item) return false;
+  const changed = state.selectedId !== item.id;
+  if (changed) {
+    resetDetailChatState();
+    stopDetailPolling();
+  }
+  state.itemsById.set(item.id, item);
+  state.selectedId = item.id;
+  state.detailReturnToTrackedTopicId = null;
+  const selectedRow = syncFeedKeyboardRows({ focusSelected: true }) || row;
+  scrollFeedKeyboardRowIntoView(selectedRow);
+  renderDetail(state.itemsById.get(item.id) || item);
+  scheduleFeedKeyboardDetailOpen(item);
+  return true;
+}
+
+async function moveFeedKeyboardSelection(delta) {
+  if (!feedKeyboardMode || !isFeedKeyboardDesktopEnabled() || state.loading) return;
+  const rows = feedKeyboardRows();
+  if (!rows.length) return;
+  const currentIndex = rows.findIndex((row) => row.dataset.id === state.selectedId);
+  if (currentIndex < 0) {
+    if (delta > 0) selectFeedKeyboardRow(rows[0]);
+    return;
+  }
+  const nextIndex = currentIndex + delta;
+  if (nextIndex >= 0 && nextIndex < rows.length) {
+    selectFeedKeyboardRow(rows[nextIndex]);
+    return;
+  }
+  if (delta <= 0 || currentIndex !== rows.length - 1 || !state.hasMore || feedKeyboardLoadMorePromise) return;
+
+  const currentId = state.selectedId;
+  feedKeyboardLoadMorePromise = loadNextPage()
+    .then(() => {
+      const nextRows = feedKeyboardRows();
+      const stillCurrentIndex = nextRows.findIndex((row) => row.dataset.id === currentId);
+      const nextRow = stillCurrentIndex >= 0 ? nextRows[stillCurrentIndex + 1] : null;
+      if (state.selectedId === currentId && nextRow) selectFeedKeyboardRow(nextRow);
+    })
+    .catch(() => {})
+    .finally(() => {
+      feedKeyboardLoadMorePromise = null;
+    });
+  await feedKeyboardLoadMorePromise;
+}
+
+function handleFeedKeyboardKeydown(event) {
+  if (!feedKeyboardMode || !isFeedKeyboardDesktopEnabled()) return;
+  if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  if (isKeyboardInteractiveTarget(event.target)) return;
+
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    event.stopPropagation();
+    moveFeedKeyboardSelection(event.key === "ArrowDown" ? 1 : -1).catch(() => {});
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    exitFeedKeyboardMode();
+  }
 }
 
 function setDateCounts(dateCounts) {
@@ -2028,7 +2179,11 @@ function syncRowUI(li, item) {
     });
   }
 
-  li.classList.toggle("selected", state.selectedId === item.id);
+  const selected = state.selectedId === item.id;
+  li.classList.toggle("selected", selected);
+  li.tabIndex = selected ? 0 : -1;
+  if (selected) li.setAttribute("aria-current", "page");
+  else li.removeAttribute("aria-current");
 }
 
 function updateFilterButtons() {
@@ -2683,7 +2838,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.11";
+  version.textContent = "News Reader v2.1.0.12";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -4295,10 +4450,12 @@ async function restoreTrackedTopicFromDetail() {
 
 async function openItemDetail(item, { fromTrackedTopicId = null } = {}) {
   if (!item) return;
+  clearFeedKeyboardDetailTimer();
   if (state.selectedId !== item.id) resetDetailChatState();
   state.itemsById.set(item.id, item);
   state.selectedId = item.id;
   state.detailReturnToTrackedTopicId = fromTrackedTopicId || null;
+  syncFeedKeyboardRows();
   renderDetail(state.itemsById.get(item.id) || item);
   if (!item.snapshotOnly) {
     loadDetail(item.id);
@@ -5831,16 +5988,22 @@ function buildItemRow(item) {
 
   li.addEventListener("click", () => {
     if (state.selectedId === item.id) {
+      if (!feedKeyboardMode && enterFeedKeyboardMode()) {
+        syncFeedKeyboardRows({ focusSelected: true });
+        return;
+      }
       state.selectedId = null;
+      clearFeedKeyboardDetailTimer();
+      exitFeedKeyboardMode();
       stopDetailPolling();
       closeDetailOnMobile();
       renderDetail(null);
     } else {
+      const keyboardEntered = enterFeedKeyboardMode();
       openItemDetail(item);
+      syncFeedKeyboardRows({ focusSelected: keyboardEntered });
     }
-    newsList.querySelectorAll(".news-item").forEach((row) => {
-      row.classList.toggle("selected", row.dataset.id === state.selectedId);
-    });
+    syncFeedKeyboardRows();
   });
 
   state.itemsById.set(item.id, item);
@@ -7380,6 +7543,8 @@ async function fetchSearchPage(page) {
 }
 
 function resetList() {
+  clearFeedKeyboardDetailTimer();
+  exitFeedKeyboardMode();
   newsList.querySelectorAll(".news-item, .date-section, .market-summary-row, .daily-month-section").forEach((node) => node.remove());
   enteredViewport.clear();
   state.itemsById.clear();
@@ -9396,6 +9561,15 @@ newsList.addEventListener("scroll", () => {
   scheduleFeedEndAutoReadIfNeeded();
 });
 
+newsList.addEventListener("keydown", handleFeedKeyboardKeydown);
+
+document.addEventListener("click", (event) => {
+  if (!feedKeyboardMode) return;
+  const target = event.target;
+  const insideFeedColumn = !!(target && typeof target.closest === "function" && target.closest(".feed-column"));
+  if (!insideFeedColumn) exitFeedKeyboardMode();
+});
+
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     lastListScrollTop = newsList.scrollTop;
@@ -9411,6 +9585,7 @@ window.addEventListener("resize", () => {
   syncSearchPageControls();
   scheduleFeedControlsOverflowSync();
   scheduleDetailToolbarOverflowSync();
+  if (feedKeyboardMode && !isFeedKeyboardDesktopEnabled()) exitFeedKeyboardMode();
 });
 
 window.addEventListener("keydown", (event) => {

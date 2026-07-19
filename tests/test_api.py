@@ -4852,16 +4852,16 @@ def test_frontend_keeps_failures_near_the_affected_workflow():
     assert ".detail-action-feedback" in style_source
 
 
-def test_frontend_is_v211_without_later_visual_experiments():
+def test_frontend_is_v212_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.0.11" in app_source
-    assert "News Reader v2.1.0.11" in index_source
-    assert "/static/style.css?v=2.1.0.11" in index_source
-    assert "/static/app.js?v=2.1.0.11" in index_source
+    assert "News Reader v2.1.0.12" in app_source
+    assert "News Reader v2.1.0.12" in index_source
+    assert "/static/style.css?v=2.1.0.12" in index_source
+    assert "/static/app.js?v=2.1.0.12" in index_source
     assert "v2.1.0.10" not in app_source
     assert "v2.1.0.10" not in index_source
     assert "--navigation-surface" not in style_source
@@ -9436,5 +9436,315 @@ function assert(cond, msg) { if (!cond) throw new Error(msg); }
   console.error(error);
   process.exitCode = 1;
 });
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_feed_keyboard_navigation_desktop_mode_and_tail_detail():
+    """Desktop feed rows should support roving arrow navigation with delayed detail side effects."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) throw new Error("front-end bootstrap marker missing");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by keyboard navigation regression test");
+source = source.replace("let state = {", "var state = {");
+source = source.replace("let feedKeyboardMode = false;", "var feedKeyboardMode = false;");
+source = source.replace("let feedKeyboardDetailTimer = null;", "var feedKeyboardDetailTimer = null;");
+source = source.replace("let feedKeyboardLoadMorePromise = null;", "var feedKeyboardLoadMorePromise = null;");
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+class FakeEvent {
+  constructor(type, props = {}) {
+    this.type = type;
+    this.key = props.key || "";
+    this.target = props.target || null;
+    this.isComposing = !!props.isComposing;
+    this.ctrlKey = !!props.ctrlKey;
+    this.metaKey = !!props.metaKey;
+    this.altKey = !!props.altKey;
+    this.shiftKey = !!props.shiftKey;
+    this.defaultPrevented = false;
+    this.cancelBubble = false;
+  }
+  preventDefault() { this.defaultPrevented = true; }
+  stopPropagation() { this.cancelBubble = true; }
+}
+
+function classTokens(el) { return String(el.className || "").split(/\s+/).filter(Boolean); }
+function matchesSelector(el, selector) {
+  if (!el) return false;
+  if (selector.includes(",")) return selector.split(",").some((part) => matchesSelector(el, part.trim()));
+  if (selector.startsWith(".")) return classTokens(el).includes(selector.slice(1));
+  if (selector.startsWith("#")) return el.id === selector.slice(1);
+  if (selector.includes("[data-id=")) {
+    const cls = selector.match(/\.([\w-]+)/)?.[1];
+    const id = selector.match(/data-id=\\?"([^"\\]+)\\?"/)?.[1];
+    return (!cls || classTokens(el).includes(cls)) && (!id || el.dataset.id === id);
+  }
+  if (selector === "input" || selector === "textarea" || selector === "select" || selector === "button" || selector === "a") {
+    return el.tagName.toLowerCase() === selector;
+  }
+  if (selector === "[contenteditable]") return !!el.isContentEditable;
+  return el.tagName.toLowerCase() === selector.toLowerCase();
+}
+function findAll(root, selector) {
+  let out = [];
+  for (const child of root.children) {
+    if (matchesSelector(child, selector)) out.push(child);
+    out = out.concat(findAll(child, selector));
+  }
+  return out;
+}
+
+class Element {
+  constructor(tag = "div", id = "") {
+    this.tagName = tag.toUpperCase();
+    this.id = id;
+    this.className = "";
+    this.textContent = "";
+    this.innerHTML = "";
+    this.dataset = {};
+    this.style = {};
+    this.children = [];
+    this.parentElement = null;
+    this.listeners = {};
+    this.attributes = {};
+    this.value = "";
+    this.checked = false;
+    this.disabled = false;
+    this.scrollIntoViewCalls = [];
+    this.tabIndex = -1;
+    this.isContentEditable = false;
+    this.classList = {
+      add: (...classes) => { const set = new Set(classTokens(this)); classes.forEach((c) => set.add(c)); this.className = [...set].join(" "); },
+      remove: (...classes) => { const remove = new Set(classes); this.className = classTokens(this).filter((c) => !remove.has(c)).join(" "); },
+      toggle: (c, force) => {
+        const has = classTokens(this).includes(c);
+        const next = force === undefined ? !has : !!force;
+        if (next) this.classList.add(c); else this.classList.remove(c);
+        return next;
+      },
+      contains: (c) => classTokens(this).includes(c),
+    };
+  }
+  appendChild(child) { child.parentElement = this; this.children.push(child); return child; }
+  insertBefore(child, ref) {
+    child.parentElement = this;
+    const i = this.children.indexOf(ref);
+    if (i >= 0) this.children.splice(i, 0, child); else this.children.push(child);
+    return child;
+  }
+  removeChild(child) { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); child.parentElement = null; return child; }
+  remove() { if (this.parentElement) this.parentElement.removeChild(this); }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  removeEventListener() {}
+  dispatchEvent(event) {
+    if (!event.target) event.target = this;
+    for (const fn of this.listeners[event.type] || []) fn(event);
+    if (!event.cancelBubble && this.parentElement) this.parentElement.dispatchEvent(event);
+    return !event.defaultPrevented;
+  }
+  click() { this.dispatchEvent(new FakeEvent("click", { target: this })); }
+  focus() { document.activeElement = this; }
+  blur() { if (document.activeElement === this) document.activeElement = null; }
+  scrollIntoView(opts) { this.scrollIntoViewCalls.push(opts); }
+  querySelectorAll(selector) { return findAll(this, selector); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  getElementsByTagName(tag) { return findAll(this, tag); }
+  setAttribute(k, v) { this.attributes[k] = String(v); if (k === "aria-current") this.ariaCurrent = String(v); }
+  getAttribute(k) { return this.attributes[k]; }
+  removeAttribute(k) { delete this.attributes[k]; if (k === "aria-current") delete this.ariaCurrent; }
+  closest(selector) {
+    let node = this;
+    while (node) {
+      if (selector.includes(",")) {
+        if (selector.split(",").some((part) => matchesSelector(node, part.trim()))) return node;
+      } else if (matchesSelector(node, selector)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+  get childElementCount() { return this.children.length; }
+  contains(node) { let cur = node; while (cur) { if (cur === this) return true; cur = cur.parentElement; } return false; }
+  getBoundingClientRect() { return { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 }; }
+}
+
+class FakeDocument extends Element {
+  constructor() { super("document"); this.map = new Map(); this.body = new Element("body"); this.documentElement = new Element("html"); this.activeElement = null; this.appendChild(this.body); }
+  getElementById(id) { if (!this.map.has(id)) this.map.set(id, new Element("div", id)); return this.map.get(id); }
+  createElement(tag) { return new Element(tag); }
+}
+
+const document = new FakeDocument();
+const feedColumn = new Element("section");
+feedColumn.className = "feed-column";
+const newsList = document.getElementById("newsList");
+const listHint = document.getElementById("listHint");
+const loadMoreSentinel = document.getElementById("loadMoreSentinel");
+feedColumn.appendChild(newsList);
+document.body.appendChild(feedColumn);
+const detailPanel = document.getElementById("detailPanel");
+document.body.appendChild(detailPanel);
+
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const localStorage = { getItem: () => null, setItem: () => {} };
+const window = {
+  addEventListener: () => {},
+  matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  confirm: () => false,
+  innerWidth: 1440,
+  localStorage,
+};
+const context = { console, document, window, localStorage, IntersectionObserver, FakeEvent,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent, CSS: { escape: (s) => String(s).replace(/"/g, '\\"') },
+  setTimeout, clearTimeout, setInterval, clearInterval, Node: Element };
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+newsList.appendChild(listHint);
+newsList.appendChild(loadMoreSentinel);
+const calls = { renders: [], loads: [], polls: [], checkpoints: [], stops: 0 };
+context.renderDetail = (item) => calls.renders.push(item ? item.id : null);
+context.loadDetail = async (id) => { calls.loads.push(id); };
+context.startDetailPolling = (id) => { calls.polls.push(id); };
+context.stopDetailPolling = () => { calls.stops += 1; };
+context.saveReadingCheckpoint = async (item) => { calls.checkpoints.push(item.id); };
+
+function append(item) { context.appendNewsRow(item, context.buildItemRow(item)); }
+[1, 2, 3, 4].forEach((n) => append({ id: `n${n}`, url: `https://example.com/${n}`, title: `T${n}`, summary: `S${n}`, source: "Reuters", published_at: "2026-07-19" }));
+const rows = newsList.querySelectorAll(".feed-news-item");
+assert(rows.length === 4, `rows=${rows.length}`);
+
+(async () => {
+  rows[1].click();
+  assert(context.feedKeyboardMode === true, "clicking selected feed row should enter keyboard mode");
+  assert(context.state.selectedId === "n2", `selected after click=${context.state.selectedId}`);
+  assert(document.activeElement === rows[1], "clicked row should receive focus for keyboard mode");
+  assert(rows[1].tabIndex === 0 && rows[1].getAttribute("aria-current") === "page", "selected row should be roving tab stop/current");
+
+  rows[1].dispatchEvent(new FakeEvent("keydown", { key: "ArrowDown", target: rows[1] }));
+  rows[2].dispatchEvent(new FakeEvent("keydown", { key: "ArrowDown", target: rows[2] }));
+  assert(context.state.selectedId === "n4", `selected after quick arrows=${context.state.selectedId}`);
+  assert(document.activeElement === rows[3], "final selected row should be focused");
+  assert(rows[3].scrollIntoViewCalls.some((opts) => opts.block === "nearest" && opts.behavior === "auto"), "keyboard move should use nearest/auto scrollIntoView");
+  assert(calls.renders.includes("n3") && calls.renders.includes("n4"), "right-pane base render should update immediately during movement");
+  await wait(170);
+  assert(calls.loads.filter((id) => id === "n3").length === 0, "intermediate row should not trigger delayed detail fetch");
+  assert(calls.loads.filter((id) => id === "n4").length === 1, `final detail load count=${JSON.stringify(calls.loads)}`);
+  assert(calls.checkpoints[calls.checkpoints.length - 1] === "n4", `final checkpoint=${calls.checkpoints[calls.checkpoints.length - 1]}`);
+
+  detailPanel.click();
+  assert(context.feedKeyboardMode === false, "outside middle column click should exit keyboard mode");
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "ArrowUp", target: rows[3] }));
+  assert(context.state.selectedId === "n4", "arrows after exit should not move selection");
+
+  rows[3].click();
+  assert(context.feedKeyboardMode === true && context.state.selectedId === "n4", "clicking retained selected row should re-enter keyboard mode without clearing detail");
+  const input = new Element("input");
+  rows[3].appendChild(input);
+  input.dispatchEvent(new FakeEvent("keydown", { key: "ArrowUp", target: input }));
+  assert(context.state.selectedId === "n4", "interactive input target should not be hijacked");
+
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "Escape", target: rows[3] }));
+  assert(context.feedKeyboardMode === false && context.state.selectedId === "n4", "Escape should exit mode and preserve detail selection");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_feed_keyboard_navigation_loads_next_page_once():
+    """ArrowDown on the loaded tail should reuse existing pagination once and select the new row."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) throw new Error("front-end bootstrap marker missing");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by keyboard load-more regression test");
+source = source.replace("let state = {", "var state = {");
+source = source.replace("let feedKeyboardMode = false;", "var feedKeyboardMode = false;");
+source = source.replace("let feedKeyboardDetailTimer = null;", "var feedKeyboardDetailTimer = null;");
+source = source.replace("let feedKeyboardLoadMorePromise = null;", "var feedKeyboardLoadMorePromise = null;");
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+class FakeEvent { constructor(type, props = {}) { this.type = type; this.key = props.key || ""; this.target = props.target || null; this.defaultPrevented = false; this.cancelBubble = false; this.isComposing = false; this.ctrlKey = false; this.metaKey = false; this.altKey = false; this.shiftKey = false; } preventDefault(){this.defaultPrevented=true;} stopPropagation(){this.cancelBubble=true;} }
+function classTokens(el) { return String(el.className || "").split(/\s+/).filter(Boolean); }
+function matchesSelector(el, selector) {
+  if (!el) return false;
+  if (selector.includes(",")) return selector.split(",").some((part) => matchesSelector(el, part.trim()));
+  if (selector.startsWith(".")) return classTokens(el).includes(selector.slice(1));
+  if (selector === "input" || selector === "textarea" || selector === "select" || selector === "button" || selector === "a") return el.tagName.toLowerCase() === selector;
+  if (selector === "[contenteditable]") return !!el.isContentEditable;
+  return el.tagName.toLowerCase() === selector.toLowerCase();
+}
+function findAll(root, selector) { let out = []; for (const child of root.children) { if (matchesSelector(child, selector)) out.push(child); out = out.concat(findAll(child, selector)); } return out; }
+class Element {
+  constructor(tag = "div", id = "") { this.tagName = tag.toUpperCase(); this.id = id; this.className = ""; this.textContent = ""; this.innerHTML = ""; this.dataset = {}; this.style = {}; this.children = []; this.parentElement = null; this.listeners = {}; this.attributes = {}; this.value = ""; this.checked = false; this.disabled = false; this.tabIndex = -1; this.isContentEditable = false; this.classList = { add: (...cs) => { const s = new Set(classTokens(this)); cs.forEach((c) => s.add(c)); this.className = [...s].join(" "); }, remove: (...cs) => { const r = new Set(cs); this.className = classTokens(this).filter((c) => !r.has(c)).join(" "); }, toggle: (c, force) => { const next = force === undefined ? !this.classList.contains(c) : !!force; if (next) this.classList.add(c); else this.classList.remove(c); return next; }, contains: (c) => classTokens(this).includes(c) }; }
+  appendChild(child) { child.parentElement = this; this.children.push(child); return child; }
+  insertBefore(child, ref) { child.parentElement = this; const i = this.children.indexOf(ref); if (i >= 0) this.children.splice(i, 0, child); else this.children.push(child); return child; }
+  removeChild(child) { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); child.parentElement = null; return child; }
+  remove() { if (this.parentElement) this.parentElement.removeChild(this); }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  removeEventListener() {}
+  dispatchEvent(event) { if (!event.target) event.target = this; for (const fn of this.listeners[event.type] || []) fn(event); if (!event.cancelBubble && this.parentElement) this.parentElement.dispatchEvent(event); return !event.defaultPrevented; }
+  click() { this.dispatchEvent(new FakeEvent("click", { target: this })); }
+  focus() { document.activeElement = this; }
+  blur() {}
+  scrollIntoView() {}
+  querySelectorAll(selector) { return findAll(this, selector); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  getElementsByTagName(tag) { return findAll(this, tag); }
+  setAttribute(k, v) { this.attributes[k] = String(v); }
+  getAttribute(k) { return this.attributes[k]; }
+  removeAttribute(k) { delete this.attributes[k]; }
+  closest(selector) { let node = this; while (node) { if (matchesSelector(node, selector)) return node; node = node.parentElement; } return null; }
+  get childElementCount() { return this.children.length; }
+  contains(node) { let cur = node; while (cur) { if (cur === this) return true; cur = cur.parentElement; } return false; }
+  getBoundingClientRect() { return { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 }; }
+}
+class FakeDocument extends Element { constructor(){ super("document"); this.map = new Map(); this.body = new Element("body"); this.documentElement = new Element("html"); this.activeElement = null; this.appendChild(this.body); } getElementById(id){ if (!this.map.has(id)) this.map.set(id, new Element("div", id)); return this.map.get(id); } createElement(tag){ return new Element(tag); } }
+const document = new FakeDocument();
+const feedColumn = new Element("section"); feedColumn.className = "feed-column";
+const newsList = document.getElementById("newsList"); const listHint = document.getElementById("listHint"); const loadMoreSentinel = document.getElementById("loadMoreSentinel");
+feedColumn.appendChild(newsList); document.body.appendChild(feedColumn);
+class IntersectionObserver { constructor(){} observe(){} disconnect(){} }
+const localStorage = { getItem: () => null, setItem: () => {} };
+const window = { addEventListener: () => {}, matchMedia: () => ({ matches: false, addEventListener: () => {} }), setTimeout, clearTimeout, setInterval, clearInterval, confirm: () => false, innerWidth: 1440, localStorage };
+const context = { console, document, window, localStorage, IntersectionObserver, FakeEvent, URLSearchParams, Date, Map, Set, JSON, encodeURIComponent, CSS: { escape: (s) => String(s) }, setTimeout, clearTimeout, setInterval, clearInterval, Node: Element };
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+newsList.appendChild(listHint); newsList.appendChild(loadMoreSentinel);
+context.renderDetail = () => {}; context.loadDetail = async () => {}; context.startDetailPolling = () => {}; context.stopDetailPolling = () => {}; context.saveReadingCheckpoint = async () => {};
+function append(item) { context.appendNewsRow(item, context.buildItemRow(item)); }
+append({ id: "n1", url: "https://example.com/1", title: "T1", source: "Reuters", published_at: "2026-07-19" });
+append({ id: "n2", url: "https://example.com/2", title: "T2", source: "Reuters", published_at: "2026-07-19" });
+const rows = () => newsList.querySelectorAll(".feed-news-item");
+(async () => {
+  rows()[1].click();
+  context.state.hasMore = true;
+  context.state.loading = false;
+  let loadCalls = 0;
+  context.loadNextPage = async () => {
+    loadCalls += 1;
+    await wait(30);
+    append({ id: "n3", url: "https://example.com/3", title: "T3", source: "Reuters", published_at: "2026-07-19" });
+    context.state.hasMore = false;
+  };
+  rows()[1].dispatchEvent(new FakeEvent("keydown", { key: "ArrowDown", target: rows()[1] }));
+  rows()[1].dispatchEvent(new FakeEvent("keydown", { key: "ArrowDown", target: rows()[1] }));
+  await wait(80);
+  assert(loadCalls === 1, `loadCalls=${loadCalls}`);
+  assert(context.state.selectedId === "n3", `selected=${context.state.selectedId}`);
+  rows()[2].dispatchEvent(new FakeEvent("keydown", { key: "ArrowDown", target: rows()[2] }));
+  await wait(20);
+  assert(loadCalls === 1, "last row without hasMore should no-op");
+  window.innerWidth = 1180;
+  rows()[2].dispatchEvent(new FakeEvent("keydown", { key: "ArrowUp", target: rows()[2] }));
+  assert(context.state.selectedId === "n3", "1180px should not enable arrow navigation");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
