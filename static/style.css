@@ -3558,6 +3558,13 @@ html[data-detail-font="large"] {
   scrollbar-gutter: auto;
 }
 
+.detail-scroll-area.detail-keyboard-focus,
+.detail-scroll-area:focus-visible,
+.detail-panel.detail-keyboard-focus-fallback:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 44%, transparent);
+  outline-offset: -2px;
+}
+
 .detail-scroll-area > .detail-note-card {
   margin: 0 0 12px;
   border: 1px solid color-mix(in srgb, var(--detail-card-border) 72%, transparent);

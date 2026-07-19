@@ -360,6 +360,7 @@ const trackedDefaultsExcludePenaltyInput = document.getElementById("trackedDefau
 const trackedDefaultsSaveBtn = document.getElementById("trackedDefaultsSaveBtn");
 const trackedDefaultsRestoreBtn = document.getElementById("trackedDefaultsRestoreBtn");
 const detailBody = document.getElementById("detailBody");
+const detailScrollArea = document.getElementById("detailScrollArea");
 const detailToolbarFrame = document.getElementById("detailToolbarFrame");
 const detailToolbarScroll = document.getElementById("detailToolbarScroll");
 const detailDailyBody = document.getElementById("detailDailyBody");
@@ -455,8 +456,10 @@ let detailPollTimer = null;
 let rowStatusPollTimer = null;
 let feedEndAutoReadTimer = null;
 let feedKeyboardDetailTimer = null;
+let feedKeyboardDetailTimerItemId = "";
 let feedKeyboardLoadMorePromise = null;
 let feedKeyboardMode = false;
+let feedKeyboardDetailFocusMode = false;
 let feedEndAutoReadFiredKey = "";
 let marketPickerDirection = null;
 let lastListScrollTop = 0;
@@ -977,9 +980,103 @@ function isKeyboardInteractiveTarget(target) {
 }
 
 function clearFeedKeyboardDetailTimer() {
-  if (!feedKeyboardDetailTimer) return;
+  if (!feedKeyboardDetailTimer) {
+    feedKeyboardDetailTimerItemId = "";
+    return;
+  }
   window.clearTimeout(feedKeyboardDetailTimer);
   feedKeyboardDetailTimer = null;
+  feedKeyboardDetailTimerItemId = "";
+}
+
+function selectedFeedKeyboardItem() {
+  return state.selectedId ? state.itemsById.get(state.selectedId) : null;
+}
+
+function selectedFeedKeyboardRow() {
+  if (!state.selectedId) return null;
+  return feedKeyboardRows().find((row) => row.dataset.id === state.selectedId) || null;
+}
+
+function clearFeedKeyboardDetailFocusMode() {
+  feedKeyboardDetailFocusMode = false;
+  if (detailScrollArea) detailScrollArea.classList.remove("detail-keyboard-focus");
+  if (detailPanel) detailPanel.classList.remove("detail-keyboard-focus-fallback");
+}
+
+function toggleItemImportant(itemId) {
+  const current = !!state.itemsById.get(itemId)?.important_at;
+  return patchStateWithRollback(itemId, { important: !current });
+}
+
+function toggleItemReadLater(itemId) {
+  const current = !!state.itemsById.get(itemId)?.read_later_at;
+  return patchStateWithRollback(itemId, { read_later: !current });
+}
+
+function toggleFeedKeyboardImportant() {
+  const item = selectedFeedKeyboardItem();
+  const row = selectedFeedKeyboardRow();
+  const action = row?.querySelector(".btn-important");
+  if (!item || !action || action.disabled || writeInFlight.has(item.id)) return;
+  toggleItemImportant(item.id);
+}
+
+function toggleFeedKeyboardReadLater() {
+  const item = selectedFeedKeyboardItem();
+  const row = selectedFeedKeyboardRow();
+  const action = row?.querySelector(".btn-read-later");
+  if (!item || !action || action.disabled || writeInFlight.has(item.id)) return;
+  toggleItemReadLater(item.id);
+}
+
+function commitPendingFeedKeyboardDetail() {
+  const item = selectedFeedKeyboardItem();
+  if (!item) return false;
+  const pendingItemId = feedKeyboardDetailTimerItemId;
+  if (feedKeyboardDetailTimer) {
+    clearFeedKeyboardDetailTimer();
+    if (!pendingItemId || pendingItemId === item.id) openItemDetail(item);
+  }
+  return true;
+}
+
+function focusDetailFromFeedKeyboard() {
+  if (!feedKeyboardMode || !isFeedKeyboardDesktopEnabled()) return;
+  if (!commitPendingFeedKeyboardDetail()) return;
+  feedKeyboardMode = false;
+  feedKeyboardDetailFocusMode = true;
+  syncFeedKeyboardRows();
+  const focusTarget = detailScrollArea && detailBody && !detailBody.classList.contains("hidden") ? detailScrollArea : detailPanel;
+  if (!focusTarget || typeof focusTarget.focus !== "function") return;
+  if (focusTarget === detailScrollArea) {
+    detailScrollArea.classList.add("detail-keyboard-focus");
+  } else if (detailPanel) {
+    detailPanel.classList.add("detail-keyboard-focus-fallback");
+  }
+  try {
+    focusTarget.focus({ preventScroll: true });
+  } catch {
+    focusTarget.focus();
+  }
+}
+
+function returnFocusFromDetailToFeedKeyboard() {
+  clearFeedKeyboardDetailFocusMode();
+  if (!isFeedKeyboardDesktopEnabled()) {
+    feedKeyboardMode = false;
+    syncFeedKeyboardRows();
+    return;
+  }
+  const selectedRow = selectedFeedKeyboardRow();
+  if (!selectedRow) {
+    feedKeyboardMode = false;
+    syncFeedKeyboardRows();
+    return;
+  }
+  feedKeyboardMode = true;
+  const focusedRow = syncFeedKeyboardRows({ focusSelected: true }) || selectedRow;
+  scrollFeedKeyboardRowIntoView(focusedRow);
 }
 
 function syncFeedKeyboardRows({ focusSelected = false } = {}) {
@@ -1020,6 +1117,7 @@ function enterFeedKeyboardMode() {
 
 function exitFeedKeyboardMode() {
   feedKeyboardMode = false;
+  clearFeedKeyboardDetailFocusMode();
   syncFeedKeyboardRows();
 }
 
@@ -1031,8 +1129,10 @@ function scrollFeedKeyboardRowIntoView(row) {
 function scheduleFeedKeyboardDetailOpen(item) {
   clearFeedKeyboardDetailTimer();
   if (!item || !feedKeyboardMode || !isFeedKeyboardDesktopEnabled()) return;
+  feedKeyboardDetailTimerItemId = item.id;
   feedKeyboardDetailTimer = window.setTimeout(() => {
     feedKeyboardDetailTimer = null;
+    feedKeyboardDetailTimerItemId = "";
     if (state.selectedId !== item.id) return;
     openItemDetail(item);
   }, FEED_KEYBOARD_DETAIL_DELAY_MS);
@@ -1099,11 +1199,34 @@ function handleFeedKeyboardKeydown(event) {
     moveFeedKeyboardSelection(event.key === "ArrowDown" ? 1 : -1).catch(() => {});
     return;
   }
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    if (event.key === "ArrowLeft") toggleFeedKeyboardImportant();
+    else toggleFeedKeyboardReadLater();
+    return;
+  }
+  if (event.key === "Enter" || event.key === "Return") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) focusDetailFromFeedKeyboard();
+    return;
+  }
   if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
     exitFeedKeyboardMode();
   }
+}
+
+function handleDetailKeyboardKeydown(event) {
+  if (!feedKeyboardDetailFocusMode || !isFeedKeyboardDesktopEnabled()) return;
+  if (event.key !== "Escape") return;
+  if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  event.preventDefault();
+  event.stopPropagation();
+  returnFocusFromDetailToFeedKeyboard();
 }
 
 function setDateCounts(dateCounts) {
@@ -2838,7 +2961,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.12";
+  version.textContent = "News Reader v2.1.0.13";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5406,6 +5529,7 @@ function renderDetail(item) {
     if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
     if (detailDailyBody) detailDailyBody.classList.add("hidden");
     detailBody.classList.add("hidden");
+    clearFeedKeyboardDetailFocusMode();
     detailChatBody.classList.add("hidden");
     closeAllReviewPanels();
     renderDetailEmpty();
@@ -5871,6 +5995,7 @@ function buildItemRow(item) {
   const li = document.createElement("li");
   li.className = "news-item feed-news-item";
   li.dataset.id = item.id;
+  li.setAttribute("aria-keyshortcuts", "ArrowUp ArrowDown ArrowLeft ArrowRight Enter Escape");
 
   const header = document.createElement("div");
   header.className = "news-row-header";
@@ -5951,8 +6076,7 @@ function buildItemRow(item) {
   btnImportant.type = "button";
   btnImportant.addEventListener("click", (e) => {
     e.stopPropagation();
-    const current = !!state.itemsById.get(item.id)?.important_at;
-    patchStateWithRollback(item.id, { important: !current });
+    toggleItemImportant(item.id);
   });
 
   const btnReadLater = document.createElement("button");
@@ -5960,8 +6084,7 @@ function buildItemRow(item) {
   btnReadLater.type = "button";
   btnReadLater.addEventListener("click", (e) => {
     e.stopPropagation();
-    const current = !!state.itemsById.get(item.id)?.read_later_at;
-    patchStateWithRollback(item.id, { read_later: !current });
+    toggleItemReadLater(item.id);
   });
 
   const btnFavorite = document.createElement("button");
@@ -8178,6 +8301,7 @@ async function switchCollection(collection) {
   if (state.collection === collection) {
     return;
   }
+  exitFeedKeyboardMode();
   removeMarketWorkbenchSummaryInline();
   closeAllReviewPanels();
   state.selectedReviewId = null;
@@ -8620,6 +8744,7 @@ refreshBtn.addEventListener("click", async () => {
 });
 
 detailCloseBtn.addEventListener("click", () => {
+  exitFeedKeyboardMode();
   if (canReturnToTrackedTopic()) {
     restoreTrackedTopicFromDetail().catch(() => {});
     return;
@@ -9562,12 +9687,29 @@ newsList.addEventListener("scroll", () => {
 });
 
 newsList.addEventListener("keydown", handleFeedKeyboardKeydown);
+detailPanel.addEventListener("keydown", handleDetailKeyboardKeydown);
 
 document.addEventListener("click", (event) => {
-  if (!feedKeyboardMode) return;
+  if (!feedKeyboardMode && !feedKeyboardDetailFocusMode) return;
   const target = event.target;
   const insideFeedColumn = !!(target && typeof target.closest === "function" && target.closest(".feed-column"));
-  if (!insideFeedColumn) exitFeedKeyboardMode();
+  const insideDetailPanel = !!(target && detailPanel && typeof detailPanel.contains === "function" && detailPanel.contains(target));
+  if (insideFeedColumn) {
+    clearFeedKeyboardDetailFocusMode();
+    return;
+  }
+  if (insideDetailPanel) {
+    if (feedKeyboardMode) exitFeedKeyboardMode();
+    return;
+  }
+  exitFeedKeyboardMode();
+});
+
+document.addEventListener("focusin", (event) => {
+  if (!feedKeyboardDetailFocusMode) return;
+  const target = event.target;
+  const insideDetailPanel = !!(target && detailPanel && typeof detailPanel.contains === "function" && detailPanel.contains(target));
+  if (!insideDetailPanel) clearFeedKeyboardDetailFocusMode();
 });
 
 document.addEventListener("visibilitychange", () => {
@@ -9585,7 +9727,7 @@ window.addEventListener("resize", () => {
   syncSearchPageControls();
   scheduleFeedControlsOverflowSync();
   scheduleDetailToolbarOverflowSync();
-  if (feedKeyboardMode && !isFeedKeyboardDesktopEnabled()) exitFeedKeyboardMode();
+  if ((feedKeyboardMode || feedKeyboardDetailFocusMode) && !isFeedKeyboardDesktopEnabled()) exitFeedKeyboardMode();
 });
 
 window.addEventListener("keydown", (event) => {

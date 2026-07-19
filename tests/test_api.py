@@ -4852,16 +4852,16 @@ def test_frontend_keeps_failures_near_the_affected_workflow():
     assert ".detail-action-feedback" in style_source
 
 
-def test_frontend_is_v212_without_later_visual_experiments():
+def test_frontend_is_v213_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.0.12" in app_source
-    assert "News Reader v2.1.0.12" in index_source
-    assert "/static/style.css?v=2.1.0.12" in index_source
-    assert "/static/app.js?v=2.1.0.12" in index_source
+    assert "News Reader v2.1.0.13" in app_source
+    assert "News Reader v2.1.0.13" in index_source
+    assert "/static/style.css?v=2.1.0.13" in index_source
+    assert "/static/app.js?v=2.1.0.13" in index_source
     assert "v2.1.0.10" not in app_source
     assert "v2.1.0.10" not in index_source
     assert "--navigation-surface" not in style_source
@@ -9451,7 +9451,9 @@ source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by ke
 source = source.replace("let state = {", "var state = {");
 source = source.replace("let feedKeyboardMode = false;", "var feedKeyboardMode = false;");
 source = source.replace("let feedKeyboardDetailTimer = null;", "var feedKeyboardDetailTimer = null;");
+source = source.replace("let feedKeyboardDetailTimerItemId = \"\";", "var feedKeyboardDetailTimerItemId = \"\";");
 source = source.replace("let feedKeyboardLoadMorePromise = null;", "var feedKeyboardLoadMorePromise = null;");
+source = source.replace("let feedKeyboardDetailFocusMode = false;", "var feedKeyboardDetailFocusMode = false;");
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -9466,6 +9468,7 @@ class FakeEvent {
     this.metaKey = !!props.metaKey;
     this.altKey = !!props.altKey;
     this.shiftKey = !!props.shiftKey;
+    this.repeat = !!props.repeat;
     this.defaultPrevented = false;
     this.cancelBubble = false;
   }
@@ -9587,6 +9590,10 @@ const loadMoreSentinel = document.getElementById("loadMoreSentinel");
 feedColumn.appendChild(newsList);
 document.body.appendChild(feedColumn);
 const detailPanel = document.getElementById("detailPanel");
+const detailBody = document.getElementById("detailBody");
+const detailScrollArea = document.getElementById("detailScrollArea");
+detailBody.appendChild(detailScrollArea);
+detailPanel.appendChild(detailBody);
 document.body.appendChild(detailPanel);
 
 class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
@@ -9600,7 +9607,7 @@ const window = {
   localStorage,
 };
 const context = { console, document, window, localStorage, IntersectionObserver, FakeEvent,
-  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent, CSS: { escape: (s) => String(s).replace(/"/g, '\\"') },
+  URL, URLSearchParams, Date, Map, Set, JSON, encodeURIComponent, CSS: { escape: (s) => String(s).replace(/"/g, '\\"') },
   setTimeout, clearTimeout, setInterval, clearInterval, Node: Element };
 vm.createContext(context);
 vm.runInContext(source, context, { filename: "static/app.js" });
@@ -9644,6 +9651,59 @@ assert(rows.length === 4, `rows=${rows.length}`);
 
   rows[3].click();
   assert(context.feedKeyboardMode === true && context.state.selectedId === "n4", "clicking retained selected row should re-enter keyboard mode without clearing detail");
+  const patches = [];
+  context.patchState = async (id, payload) => {
+    patches.push({ id, payload: { ...payload } });
+    if ("important" in payload) return { important_at: payload.important ? "server-important" : null };
+    if ("read_later" in payload) return { read_later_at: payload.read_later ? "server-read-later" : null, read_later_done_at: payload.read_later ? null : "done" };
+    return {};
+  };
+
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "ArrowLeft", target: rows[3] }));
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "ArrowLeft", target: rows[3], repeat: true }));
+  await wait(0);
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "ArrowLeft", target: rows[3] }));
+  await wait(0);
+  assert(JSON.stringify(patches.map((p) => p.payload)) === JSON.stringify([{ important: true }, { important: false }]), `important patches=${JSON.stringify(patches)}`);
+  assert(context.state.selectedId === "n4" && document.activeElement === rows[3], "left toggle should keep selected row focus");
+
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "ArrowRight", target: rows[3] }));
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "ArrowRight", target: rows[3], repeat: true }));
+  await wait(0);
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "ArrowRight", target: rows[3] }));
+  await wait(0);
+  assert(JSON.stringify(patches.slice(2).map((p) => p.payload)) === JSON.stringify([{ read_later: true }, { read_later: false }]), `read-later patches=${JSON.stringify(patches)}`);
+
+  append({ id: "video", url: "https://www.bloomberg.com/news/videos/2026-07-19/example-video", title: "V", source: "Bloomberg", published_at: "2026-07-19" });
+  const videoRow = newsList.querySelectorAll(".feed-news-item").find((row) => row.dataset.id === "video");
+  videoRow.click();
+  const beforeUnsupported = patches.length;
+  videoRow.dispatchEvent(new FakeEvent("keydown", { key: "ArrowRight", target: videoRow }));
+  await wait(0);
+  assert(patches.length === beforeUnsupported, "unsupported read-later row should not patch on ArrowRight");
+
+  rows[3].click();
+  rows[3].dispatchEvent(new FakeEvent("keydown", { key: "ArrowUp", target: rows[3] }));
+  detailBody.classList.remove("hidden");
+  assert(context.state.selectedId === "n3" && context.feedKeyboardDetailTimer, "ArrowUp should select n3 and leave a pending detail timer");
+  const loadsBeforeEnter = calls.loads.filter((id) => id === "n3").length;
+  rows[2].dispatchEvent(new FakeEvent("keydown", { key: "Enter", target: rows[2] }));
+  assert(context.feedKeyboardMode === false && context.feedKeyboardDetailFocusMode === true, "Enter should move from list mode into detail focus mode");
+  assert(document.activeElement === detailScrollArea, "Enter should focus detail scroll area");
+  assert(detailScrollArea.classList.contains("detail-keyboard-focus"), "detail scroll area should show keyboard focus mode");
+  await wait(170);
+  assert(calls.loads.filter((id) => id === "n3").length === loadsBeforeEnter + 1, `Enter should flush once, loads=${JSON.stringify(calls.loads)}`);
+
+  const textarea = new Element("textarea");
+  textarea.value = "draft text";
+  detailScrollArea.appendChild(textarea);
+  textarea.dispatchEvent(new FakeEvent("keydown", { key: "Escape", target: textarea }));
+  assert(textarea.value === "draft text", "detail Escape should preserve editor draft value");
+  assert(context.feedKeyboardMode === true && context.feedKeyboardDetailFocusMode === false, "detail Escape should restore list keyboard mode");
+  assert(context.state.selectedId === "n3" && document.activeElement === rows[2], "detail Escape should focus original selected row");
+  rows[2].dispatchEvent(new FakeEvent("keydown", { key: "ArrowDown", target: rows[2] }));
+  assert(context.state.selectedId === "n4", "restored list mode should accept ArrowDown after detail Escape");
+
   const input = new Element("input");
   rows[3].appendChild(input);
   input.dispatchEvent(new FakeEvent("keydown", { key: "ArrowUp", target: input }));
@@ -9667,11 +9727,13 @@ source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by ke
 source = source.replace("let state = {", "var state = {");
 source = source.replace("let feedKeyboardMode = false;", "var feedKeyboardMode = false;");
 source = source.replace("let feedKeyboardDetailTimer = null;", "var feedKeyboardDetailTimer = null;");
+source = source.replace("let feedKeyboardDetailTimerItemId = \"\";", "var feedKeyboardDetailTimerItemId = \"\";");
 source = source.replace("let feedKeyboardLoadMorePromise = null;", "var feedKeyboardLoadMorePromise = null;");
+source = source.replace("let feedKeyboardDetailFocusMode = false;", "var feedKeyboardDetailFocusMode = false;");
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-class FakeEvent { constructor(type, props = {}) { this.type = type; this.key = props.key || ""; this.target = props.target || null; this.defaultPrevented = false; this.cancelBubble = false; this.isComposing = false; this.ctrlKey = false; this.metaKey = false; this.altKey = false; this.shiftKey = false; } preventDefault(){this.defaultPrevented=true;} stopPropagation(){this.cancelBubble=true;} }
+class FakeEvent { constructor(type, props = {}) { this.type = type; this.key = props.key || ""; this.target = props.target || null; this.repeat = !!props.repeat; this.defaultPrevented = false; this.cancelBubble = false; this.isComposing = false; this.ctrlKey = false; this.metaKey = false; this.altKey = false; this.shiftKey = false; } preventDefault(){this.defaultPrevented=true;} stopPropagation(){this.cancelBubble=true;} }
 function classTokens(el) { return String(el.className || "").split(/\s+/).filter(Boolean); }
 function matchesSelector(el, selector) {
   if (!el) return false;
@@ -9745,6 +9807,14 @@ const rows = () => newsList.querySelectorAll(".feed-news-item");
   window.innerWidth = 1180;
   rows()[2].dispatchEvent(new FakeEvent("keydown", { key: "ArrowUp", target: rows()[2] }));
   assert(context.state.selectedId === "n3", "1180px should not enable arrow navigation");
+  const disabledPatches = [];
+  context.patchState = async (id, payload) => { disabledPatches.push({ id, payload }); return {}; };
+  rows()[2].dispatchEvent(new FakeEvent("keydown", { key: "ArrowLeft", target: rows()[2] }));
+  rows()[2].dispatchEvent(new FakeEvent("keydown", { key: "ArrowRight", target: rows()[2] }));
+  rows()[2].dispatchEvent(new FakeEvent("keydown", { key: "Enter", target: rows()[2] }));
+  await wait(20);
+  assert(disabledPatches.length === 0, `1180px should not toggle state, patches=${JSON.stringify(disabledPatches)}`);
+  assert(context.feedKeyboardMode === true, "1180px ignored Enter should not switch to detail focus mode");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
