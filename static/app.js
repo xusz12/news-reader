@@ -2961,7 +2961,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.13";
+  version.textContent = "News Reader v2.1.0.14";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -4226,11 +4226,17 @@ function applyPatchToItem(item, patchResult) {
   state.itemsById.set(item.id, item);
 }
 
-function rerenderOne(itemId) {
+function isSameSelectedDetailItem(itemId) {
+  return !!itemId && String(state.selectedId || "") === String(itemId);
+}
+
+function rerenderOne(itemId, { preserveDetailTransientUi = isSameSelectedDetailItem(itemId) } = {}) {
   const item = state.itemsById.get(itemId);
   const row = newsList.querySelector(`.news-item[data-id=\"${itemId}\"]`);
   if (item && row) syncRowUI(row, item);
-  if (item && state.selectedId === itemId) renderDetail(item);
+  if (item && isSameSelectedDetailItem(itemId)) {
+    renderDetail(item, { preserveTransientUi: preserveDetailTransientUi });
+  }
 }
 
 function statePatchActionLabel(payload) {
@@ -4983,7 +4989,7 @@ async function deleteMarketTag(item, tag) {
   rerenderOne(item.id);
 }
 
-function refreshDetailNoteUI(item) {
+function refreshDetailNoteUI(item, { preserveEditorDraft = false } = {}) {
   const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
   const noteText = normalizedDetailNote(cached);
   const hasNote = noteText.length > 0;
@@ -5002,7 +5008,7 @@ function refreshDetailNoteUI(item) {
     detailReviewAddBtn.classList.toggle("hidden", !hasNote);
     applyIcon(detailReviewAddBtn, "target", { label: "加入复盘" });
   }
-  if (!detailNoteEditor.classList.contains("hidden") && !detailNoteSaveBtn.disabled) {
+  if (!preserveEditorDraft && !detailNoteEditor.classList.contains("hidden") && !detailNoteSaveBtn.disabled) {
     detailNoteInput.value = noteText;
   }
 }
@@ -5513,7 +5519,7 @@ async function openReminderCard(reminder) {
   openItemDetail(pseudoItem);
 }
 
-function renderDetail(item) {
+function renderDetail(item, { preserveTransientUi = false } = {}) {
   closeTagAdminView();
   clearTrendIdeaDetailState();
   if (!item) {
@@ -5605,13 +5611,16 @@ function renderDetail(item) {
     detailMediaGallery.innerHTML = "";
     detailMediaGallery.classList.add("hidden");
   }
-  closeMarketPicker();
+  const preserveSupportedTransientUi = preserveTransientUi && isSameSelectedDetailItem(item.id) && !item.snapshotOnly;
+  if (!preserveSupportedTransientUi) {
+    closeMarketPicker();
+    setDetailNoteEditorOpen(false);
+    detailNoteInput.value = "";
+    closeReminderEditor();
+    closeDetailTrackEditor();
+  }
   detailInlineMarketTags.classList.add("hidden");
   detailInlineMarketTags.innerHTML = "";
-  setDetailNoteEditorOpen(false);
-  detailNoteInput.value = "";
-  closeReminderEditor();
-  closeDetailTrackEditor();
 
   if (item.snapshotOnly) {
     statusEl.textContent = "原新闻已不在当前索引中，仅保留提醒快照。";
@@ -5785,7 +5794,7 @@ function renderDetail(item) {
   importantBtn.disabled = snapshotOnly;
   detailReminderToggleBtn.disabled = snapshotOnly;
   detailTrackBtn.disabled = snapshotOnly || !item.id;
-  refreshDetailNoteUI(item);
+  refreshDetailNoteUI(item, { preserveEditorDraft: preserveSupportedTransientUi });
   refreshDetailMarketTagsUI(item);
   refreshDetailReminderUI(item);
   updateWorkspaceLayout();
@@ -5862,10 +5871,7 @@ async function loadDetail(itemId) {
   cached.reminders = Array.isArray(payload.reminders) ? payload.reminders : [];
   cached.reminder_summary = payload.reminder_summary || null;
   state.itemsById.set(item.id, item);
-  rerenderOne(item.id);
-  if (state.selectedId === itemId) {
-    renderDetail(item);
-  }
+  rerenderOne(item.id, { preserveDetailTransientUi: isSameSelectedDetailItem(itemId) });
 
   // 在“稍后再看”集合中，用户打开且详情已可读后自动取消稍后标记。
   // 仅清 read_later，不影响已抓取详情/AI缓存与其它状态。

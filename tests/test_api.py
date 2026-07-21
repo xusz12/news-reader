@@ -4852,16 +4852,16 @@ def test_frontend_keeps_failures_near_the_affected_workflow():
     assert ".detail-action-feedback" in style_source
 
 
-def test_frontend_is_v213_without_later_visual_experiments():
+def test_frontend_is_v214_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.0.13" in app_source
-    assert "News Reader v2.1.0.13" in index_source
-    assert "/static/style.css?v=2.1.0.13" in index_source
-    assert "/static/app.js?v=2.1.0.13" in index_source
+    assert "News Reader v2.1.0.14" in app_source
+    assert "News Reader v2.1.0.14" in index_source
+    assert "/static/style.css?v=2.1.0.14" in index_source
+    assert "/static/app.js?v=2.1.0.14" in index_source
     assert "v2.1.0.10" not in app_source
     assert "v2.1.0.10" not in index_source
     assert "--navigation-surface" not in style_source
@@ -9308,6 +9308,212 @@ assert(context.state.pendingReviewSource.source_key === "42", "standalone source
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
 
+
+
+def test_detail_polling_preserves_transient_ui_but_switching_clears_it():
+    """Same-item background refresh must not destroy in-progress right-pane editors."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) throw new Error("front-end bootstrap marker missing");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by transient detail UI regression test");
+source = source.replace("let state = {", "var state = {");
+source = source.replace("let marketPickerDirection = null;", "var marketPickerDirection = null;");
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+function classTokens(el) { return String(el.className || "").split(/\s+/).filter(Boolean); }
+function matchesSelector(el, selector) {
+  if (!el) return false;
+  if (selector.includes(",")) return selector.split(",").some((part) => matchesSelector(el, part.trim()));
+  if (selector.startsWith(".")) return classTokens(el).includes(selector.slice(1));
+  if (selector.startsWith("#")) return el.id === selector.slice(1);
+  if (selector.includes("[data-id=")) {
+    const cls = selector.match(/\.([\w-]+)/)?.[1];
+    const id = selector.match(/data-id=\\?"([^"\\]+)\\?"/)?.[1];
+    return (!cls || classTokens(el).includes(cls)) && (!id || el.dataset.id === id);
+  }
+  return el.tagName.toLowerCase() === selector.toLowerCase();
+}
+function findAll(root, selector) {
+  let out = [];
+  for (const child of root.children) {
+    if (matchesSelector(child, selector)) out.push(child);
+    out = out.concat(findAll(child, selector));
+  }
+  return out;
+}
+class Element {
+  constructor(tag = "div", id = "") {
+    this.tagName = tag.toUpperCase();
+    this.id = id;
+    this.className = "";
+    this._textContent = "";
+    this._innerHTML = "";
+    this.dataset = {};
+    this.style = {};
+    this.children = [];
+    this.parentElement = null;
+    this.listeners = {};
+    this.attributes = {};
+    this.value = "";
+    this.checked = false;
+    this.disabled = false;
+    this.selectionStart = 0;
+    this.selectionEnd = 0;
+    this.href = "";
+    this.title = "";
+    this.classList = {
+      add: (...cs) => { const set = new Set(classTokens(this)); cs.forEach((c) => set.add(c)); this.className = [...set].join(" "); },
+      remove: (...cs) => { const rm = new Set(cs); this.className = classTokens(this).filter((c) => !rm.has(c)).join(" "); },
+      toggle: (c, force) => { const next = force === undefined ? !this.classList.contains(c) : !!force; if (next) this.classList.add(c); else this.classList.remove(c); return next; },
+      contains: (c) => classTokens(this).includes(c),
+    };
+  }
+  set innerHTML(v) { this._innerHTML = String(v); this.children = []; }
+  get innerHTML() { return this._innerHTML; }
+  set textContent(v) { this._textContent = String(v); this.children = []; }
+  get textContent() { return this._textContent; }
+  appendChild(child) { child.parentElement = this; this.children.push(child); return child; }
+  removeChild(child) { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); child.parentElement = null; return child; }
+  remove() { if (this.parentElement) this.parentElement.removeChild(this); }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  removeEventListener() {}
+  focus() { document.activeElement = this; }
+  blur() { if (document.activeElement === this) document.activeElement = null; }
+  setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+  querySelectorAll(selector) { return findAll(this, selector); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  getElementsByTagName(tag) { return findAll(this, tag); }
+  setAttribute(k, v) { this.attributes[k] = String(v); if (k === "aria-label") this.ariaLabel = String(v); }
+  getAttribute(k) { return this.attributes[k]; }
+  removeAttribute(k) { delete this.attributes[k]; }
+  get childElementCount() { return this.children.length; }
+  contains(node) { let cur = node; while (cur) { if (cur === this) return true; cur = cur.parentElement; } return false; }
+  click() { for (const fn of this.listeners.click || []) fn({ target: this, stopPropagation() {} }); }
+}
+class FakeDocument extends Element {
+  constructor() {
+    super("document");
+    this.map = new Map();
+    this.body = new Element("body");
+    this.documentElement = new Element("html");
+    this.activeElement = null;
+    this.hidden = false;
+    this.appendChild(this.body);
+  }
+  getElementById(id) {
+    if (!this.map.has(id)) {
+      const tag = id.includes("Input") ? "textarea" : (id.includes("Select") ? "select" : (id.includes("Btn") ? "button" : "div"));
+      this.map.set(id, new Element(tag, id));
+    }
+    return this.map.get(id);
+  }
+  createElement(tag) { return new Element(tag); }
+}
+const document = new FakeDocument();
+const newsList = document.getElementById("newsList");
+const detailReminderCard = document.getElementById("detailReminderCard");
+detailReminderCard.appendChild(new Element("h4"));
+document.getElementById("detailScrollArea");
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const localStorage = { getItem: () => null, setItem: () => {} };
+const window = {
+  addEventListener: () => {},
+  matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  confirm: () => false,
+  innerWidth: 1440,
+  localStorage,
+};
+const fetch = async (url) => {
+  if (String(url).startsWith("/api/news/status?")) {
+    return { ok: true, json: async () => ({ ok: true, items: [{ id: "n1", read_later_at: "2026-07-21 10:00:00", read_later_done_at: null, active_reminder_count: 1, due_reminder_count: 0, next_remind_at: null, detail_status: "running", detail_error: "", detail_ready: 0, ai_status: "none" }] }) };
+  }
+  return { ok: true, json: async () => ({ ok: true, detail_status: "running", read_at: null, favorite_at: null, important_at: null, read_later_at: "2026-07-21 10:00:00", read_later_done_at: null, has_note: 1, note: { note: "server note" }, market_tags: [], has_market_tags: 0, ai_status: "none", ai: null, detail: null, reminder_summary: { active_total: 1, due_total: 0, done_total: 0 }, reminders: [] }) };
+};
+const context = { console, document, window, localStorage, IntersectionObserver, fetch,
+  URL, URLSearchParams, Date, Map, Set, JSON, encodeURIComponent, CSS: { escape: (s) => String(s).replace(/"/g, '\"') },
+  setTimeout, clearTimeout, setInterval, clearInterval, Node: Element };
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+const item = { id: "n1", url: "https://example.com/n1", title: "News 1", source: "Reuters", published_at: "2026-07-21", read_later_at: "2026-07-21 10:00:00", detail_status: "running", detail_ready: 0, ai_status: "none", has_note: 1, has_market_tags: 0 };
+context.state.selectedId = "n1";
+context.state.itemsById.set("n1", item);
+context.state.detailCacheByUrl.set(item.url, { note: { note: "server note" }, reminders: [], reminder_summary: { active_total: 0, due_total: 0, done_total: 0 }, tracked_topic_choices: [{ id: 1, title: "T1" }, { id: 2, title: "T2" }] });
+context.state.marketTagChoices = [{ key: "ai", display_name: "AI" }, { key: "chips", display_name: "Chips" }];
+const realRenderDetail = context.renderDetail;
+
+context.setDetailNoteEditorOpen(true);
+const noteEditor = document.getElementById("detailNoteEditor");
+const noteInput = document.getElementById("detailNoteInput");
+noteInput.value = "unique-draft-v214";
+noteInput.focus();
+noteInput.setSelectionRange(7, 12);
+realRenderDetail(item, { preserveTransientUi: true });
+assert(!noteEditor.classList.contains("hidden"), "note editor should stay open on preserve render");
+assert(noteInput.value === "unique-draft-v214", `note draft changed to ${noteInput.value}`);
+assert(document.activeElement === noteInput, "note textarea focus should stay during preserve render");
+assert(noteInput.selectionStart === 7 && noteInput.selectionEnd === 12, "note selection should stay during preserve render");
+
+context.openMarketPicker(item, "bullish");
+const picker = document.getElementById("detailMarketPicker");
+const pickerOptions = document.getElementById("detailMarketPickerOptions");
+assert(!picker.classList.contains("hidden") && context.marketPickerDirection === "bullish", "bullish picker should be open before refresh");
+const optionText = pickerOptions.children.map((el) => el.textContent).join("|");
+realRenderDetail(item, { preserveTransientUi: true });
+assert(!picker.classList.contains("hidden"), "bullish picker should stay open on preserve render");
+assert(context.marketPickerDirection === "bullish", `market direction changed to ${context.marketPickerDirection}`);
+assert(pickerOptions.children.map((el) => el.textContent).join("|") === optionText, "market picker options should stay stable");
+
+context.closeMarketPicker();
+context.openMarketPicker(item, "bearish");
+realRenderDetail(item, { preserveTransientUi: true });
+assert(!picker.classList.contains("hidden") && context.marketPickerDirection === "bearish", "bearish picker should stay open on preserve render");
+
+context.openReminderEditor(item);
+const reminderEditor = document.getElementById("detailReminderEditor");
+const reminderDate = document.getElementById("detailReminderEventDateInput");
+const reminderNote = document.getElementById("detailReminderNoteInput");
+reminderDate.value = "2026-08-01";
+reminderNote.value = "reminder-draft-v214";
+realRenderDetail(item, { preserveTransientUi: true });
+assert(!reminderEditor.classList.contains("hidden"), "reminder editor should stay open on preserve render");
+assert(reminderDate.value === "2026-08-01" && reminderNote.value === "reminder-draft-v214", "reminder draft should stay during preserve render");
+
+(async () => {
+  await context.openDetailTrackEditor(item);
+  const trackEditor = document.getElementById("detailTrackEditor");
+  const trackSelect = document.getElementById("detailTrackTopicSelect");
+  trackSelect.value = "2";
+  realRenderDetail(item, { preserveTransientUi: true });
+  assert(!trackEditor.classList.contains("hidden"), "track editor should stay open on preserve render");
+  assert(trackSelect.value === "2", `track selection changed to ${trackSelect.value}`);
+
+  const routed = [];
+  context.renderDetail = (rendered, options = {}) => routed.push({ id: rendered?.id || null, preserve: !!options.preserveTransientUi });
+  await context.loadDetail("n1");
+  assert(routed.some((r) => r.id === "n1" && r.preserve), `loadDetail did not route preserve render: ${JSON.stringify(routed)}`);
+  const row = new Element("div");
+  row.className = "news-item";
+  row.dataset.id = "n1";
+  newsList.appendChild(row);
+  await context.pollRowStatusesOnce();
+  assert(routed.filter((r) => r.id === "n1" && r.preserve).length >= 2, `pollRowStatusesOnce did not route preserve render: ${JSON.stringify(routed)}`);
+
+  context.renderDetail = realRenderDetail;
+  const other = { id: "n2", url: "https://example.com/n2", title: "News 2", source: "Reuters", published_at: "2026-07-21", read_later_at: null, detail_ready: 0, detail_status: "none", ai_status: "none" };
+  context.state.selectedId = "n2";
+  context.state.itemsById.set("n2", other);
+  realRenderDetail(other);
+  assert(noteEditor.classList.contains("hidden"), "switching item should close note editor");
+  assert(picker.classList.contains("hidden") && context.marketPickerDirection === null, "switching item should close market picker");
+  assert(reminderEditor.classList.contains("hidden"), "switching item should close reminder editor");
+  assert(trackEditor.classList.contains("hidden"), "switching item should close track editor");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
 
 def test_read_later_rollback_restores_detail_ai_status_and_polling():
     """Failed read-later toggles must restore detail/AI status fields and polling."""
