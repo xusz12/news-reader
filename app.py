@@ -57,7 +57,7 @@ STATIC_DIR = BASE_DIR / "static"
 DAILY_NEWS_DIR = resolve_daily_news_dir()
 DAILY_BRIEFING_DIR = resolve_daily_briefing_dir()
 DB_PATH = resolve_db_path()
-README_PATH = BASE_DIR / "README.md"
+CHANGELOG_PATH = BASE_DIR / "CHANGELOG.md"
 
 
 def resolve_media_cache_dir() -> Path:
@@ -1061,9 +1061,9 @@ def categorize_release_note(title: str) -> str:
 
 
 def parse_release_notes() -> list[dict]:
-    if not README_PATH.exists():
+    if not CHANGELOG_PATH.exists():
         return []
-    lines = README_PATH.read_text(encoding="utf-8").splitlines()
+    lines = CHANGELOG_PATH.read_text(encoding="utf-8").splitlines()
     notes: list[dict] = []
     in_changes = False
     current: dict | None = None

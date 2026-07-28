@@ -2952,7 +2952,7 @@ function renderMobileMoreOptions() {
   });
   appendMobileMoreAction(system, {
     label: "Release Notes",
-    desc: "查看 README 中的版本记录",
+    desc: "查看 CHANGELOG 中的版本记录",
     onClick: async () => {
       closeMobileCollectionSheet();
       state.settingsSection = "release";
@@ -2961,7 +2961,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.14";
+  version.textContent = "News Reader v2.1.0.15";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }

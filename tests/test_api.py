@@ -4852,16 +4852,16 @@ def test_frontend_keeps_failures_near_the_affected_workflow():
     assert ".detail-action-feedback" in style_source
 
 
-def test_frontend_is_v214_without_later_visual_experiments():
+def test_frontend_is_v215_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.0.14" in app_source
-    assert "News Reader v2.1.0.14" in index_source
-    assert "/static/style.css?v=2.1.0.14" in index_source
-    assert "/static/app.js?v=2.1.0.14" in index_source
+    assert "News Reader v2.1.0.15" in app_source
+    assert "News Reader v2.1.0.15" in index_source
+    assert "/static/style.css?v=2.1.0.15" in index_source
+    assert "/static/app.js?v=2.1.0.15" in index_source
     assert "v2.1.0.10" not in app_source
     assert "v2.1.0.10" not in index_source
     assert "--navigation-surface" not in style_source
