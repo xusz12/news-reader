@@ -4,6 +4,11 @@
 
 ## What's Changed
 
+### 2026-07-30 — v2.1.1.0 feat: 新闻流二级信源显示开关
+- 设置页新增“新闻流信源显示”板块，按一级信源分组展示动态二级来源开关及未读/总数；关闭二级信源只影响新闻流，不修改 `read_at`，恢复后历史未读重新出现。
+- 后端新增二级信源归一化：Reuters/Bloomberg 等媒体按栏目派生，X/Twitter 按采集入口账号归并、URL 作者仅作缺失兜底；新闻流列表、未读数、分页、来源计数和“全部已读”共用同一排除规则，重要/稍后再看等集合不受影响。
+- 设置保存到 `app_settings.json` 的 `feed.hidden_source_subkeys`，无需新增数据库表；同步版本号 v2.1.1.0（title、顶栏、CSS/JS cache-bust、移动端更多面板）。
+
 ### 2026-07-28 — v2.1.0.15 fix: 拆分 README 更新记录并保持 Release Notes 可用
 - README 收敛为项目介绍、输入数据口径、运行方式、配置、测试与数据边界；历史版本记录迁入独立 `CHANGELOG.md`，保留既有版本顺序与内容。
 - `/api/release-notes` 改为读取 `CHANGELOG.md` 的 `## What's Changed`，设置页与移动端 Release Notes 文案同步到 CHANGELOG，避免 README 拆分后更新记录为空。

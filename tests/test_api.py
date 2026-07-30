@@ -4852,16 +4852,25 @@ def test_frontend_keeps_failures_near_the_affected_workflow():
     assert ".detail-action-feedback" in style_source
 
 
-def test_frontend_is_v215_without_later_visual_experiments():
+def test_frontend_feed_source_restore_warns_with_unread_count():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+
+    assert "const unread = Number(item.unread_count || 0);" in app_source
+    assert "input.checked && hidden && unread > 0" in app_source
+    assert "将重新显示 ${unread} 条未读新闻" in app_source
+    assert "window.confirm(`恢复显示“${label}”？将重新显示 ${unread} 条未读新闻。`)" in app_source
+
+
+def test_frontend_is_v2110_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.0.15" in app_source
-    assert "News Reader v2.1.0.15" in index_source
-    assert "/static/style.css?v=2.1.0.15" in index_source
-    assert "/static/app.js?v=2.1.0.15" in index_source
+    assert "News Reader v2.1.1.0" in app_source
+    assert "News Reader v2.1.1.0" in index_source
+    assert "/static/style.css?v=2.1.1.0" in index_source
+    assert "/static/app.js?v=2.1.1.0" in index_source
     assert "v2.1.0.10" not in app_source
     assert "v2.1.0.10" not in index_source
     assert "--navigation-surface" not in style_source
@@ -5587,6 +5596,197 @@ def test_release_notes_api_returns_items(tmp_path: Path, monkeypatch):
     first = payload["items"][0]
     assert "date" in first and "title" in first and "category" in first
     assert first["category"] in {"NEW", "IMPROVE", "FIX"}
+
+def test_feed_source_subkey_visibility_settings_only_filter_feed(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年7月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    ts = "2026-07-30 10:00:00"
+    rows = [
+        ("1", "manual.md", 1, "2026-07-30 09:00:00", "2026-07-30", "09:00", "Reuters · China", "rss", "Reuters", "China visible", "s", "https://www.reuters.com/world/china/visible", ts, ts),
+        ("2", "manual.md", 2, "2026-07-30 09:01:00", "2026-07-30", "09:01", "Reuters · Middle East", "rss", "Reuters", "ME hidden", "s", "https://www.reuters.com/world/middle-east/hidden", ts, ts),
+        ("3", "manual.md", 3, "2026-07-30 09:02:00", "2026-07-30", "09:02", "MacroMargin", "twitter", "X", "X hidden", "s", "https://x.com/MacroMargin/status/1", ts, ts),
+        ("4", "manual.md", 4, "2026-07-30 09:03:00", "2026-07-30", "09:03", "Reuters · Middle East", "rss", "Reuters", "ME important", "s", "https://www.reuters.com/world/middle-east/important", ts, ts),
+    ]
+    conn = app_module.db_conn()
+    try:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO items(
+                  id, source_file, item_order, published_at, date, time, source, source_type,
+                  source_name, title, summary, url, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            conn.execute("INSERT INTO item_state(item_id, important_at, updated_at) VALUES (?, ?, ?)", ("4", ts, ts))
+            conn.execute("INSERT INTO item_state(item_id, read_later_at, updated_at) VALUES (?, ?, ?)", ("2", ts, ts))
+    finally:
+        conn.close()
+
+    settings = app_module.default_app_settings()
+    settings["feed"]["hidden_source_subkeys"] = ["reuters/middle-east", "x/macromargin"]
+    app_module.save_app_settings(settings)
+    client = app_module.app.test_client()
+
+    feed = client.get("/api/news?collection=feed&read_filter=all&per=10").get_json()
+    assert feed["total"] == 1
+    assert [item["id"] for item in feed["items"]] == ["1"]
+
+    unread_feed = client.get("/api/news?collection=feed&read_filter=unread&per=10").get_json()
+    assert unread_feed["total"] == 1
+    assert unread_feed["date_counts"] == {"2026-07-30": 1}
+
+    sources = client.get("/api/sources?collection=feed&read_filter=unread").get_json()["sources"]
+    assert sources == [{"key": "reuters", "label": "Reuters", "count": 1}]
+
+    important = client.get("/api/news?collection=important&read_filter=all&per=10").get_json()
+    assert [item["id"] for item in important["items"]] == ["4"]
+
+    read_later = client.get("/api/news?collection=read_later&read_filter=all&per=10").get_json()
+    assert [item["id"] for item in read_later["items"]] == ["2"]
+
+    settings_payload = client.get("/api/settings").get_json()
+    assert settings_payload["feed"]["hidden_source_subkeys"] == ["reuters/middle-east", "x/macromargin"]
+    groups = {group["source_key"]: group for group in settings_payload["feed_source_subkeys"]["groups"]}
+    reuters_items = {item["key"]: item for item in groups["reuters"]["items"]}
+    x_items = {item["key"]: item for item in groups["x"]["items"]}
+    assert reuters_items["reuters/middle-east"]["hidden"] is True
+    assert reuters_items["reuters/middle-east"]["unread_count"] == 2
+    assert x_items["x/macromargin"]["label"] == "@MacroMargin"
+    assert x_items["x/macromargin"]["hidden"] is True
+
+    marked = client.post(
+        "/api/news/mark-all-read",
+        json={"collection": "feed", "read_filter": "unread", "source_filter": "all"},
+    ).get_json()
+    assert marked == {"ok": True, "marked": 1}
+    conn = app_module.db_conn()
+    try:
+        states = {
+            row["item_id"]: row["read_at"]
+            for row in conn.execute("SELECT item_id, read_at FROM item_state WHERE item_id IN ('1','2','3','4')").fetchall()
+        }
+    finally:
+        conn.close()
+    assert states["1"]
+    assert states["2"] is None
+    assert "3" not in states or states["3"] is None
+    assert states["4"] is None
+
+
+def test_feed_source_subkeys_use_collection_source_for_x_and_merge_bloomberg(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年7月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    ts = "2026-07-30 10:00:00"
+    rows = [
+        ("x1", "manual.md", 1, "2026-07-30 09:00:00", "2026-07-30", "09:00", "卡比卡比", "twitter", "卡比卡比", "Kabi retweeted external", "s", "https://x.com/aiandcloud/status/1", ts, ts),
+        ("x2", "manual.md", 2, "2026-07-30 09:01:00", "2026-07-30", "09:01", "seekinganythingbutalpha", "twitter", "seekinganythingbutalpha", "Seeking quoted external", "s", "https://x.com/DonMiami3/status/1", ts, ts),
+        ("x3", "manual.md", 3, "2026-07-30 09:02:00", "2026-07-30", "09:02", "ChinaMacroFacts", "other", "ChinaMacroFacts", "New handle source", "s", "https://x.com/ChinaMacroFacts/status/1", ts, ts),
+        ("b1", "manual.md", 4, "2026-07-30 09:03:00", "2026-07-30", "09:03", "bloomberg_tech", "bloomberg", "Bloomberg", "Bloomberg sidecar tech", "s", "https://www.bloomberg.com/news/articles/1", ts, ts),
+        ("b2", "manual.md", 5, "2026-07-30 09:04:00", "2026-07-30", "09:04", "Bloomberg · Tech", None, None, "Bloomberg display tech", "s", "https://www.bloomberg.com/news/articles/2", ts, ts),
+        ("b3", "manual.md", 6, "2026-07-30 09:05:00", "2026-07-30", "09:05", "Bloomberg · Economics", None, None, "Bloomberg economics", "s", "https://www.bloomberg.com/news/articles/3", ts, ts),
+    ]
+    conn = app_module.db_conn()
+    try:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO items(
+                  id, source_file, item_order, published_at, date, time, source, source_type,
+                  source_name, title, summary, url, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+    finally:
+        conn.close()
+
+    settings = app_module.default_app_settings()
+    settings["feed"]["hidden_source_subkeys"] = ["x/aiandcloud", "bloomberg/bloomberg_tech"]
+    app_module.save_app_settings(settings)
+    client = app_module.app.test_client()
+
+    settings_payload = client.get("/api/settings").get_json()
+    assert settings_payload["feed"]["hidden_source_subkeys"] == ["x/aiandcloud", "bloomberg/tech"]
+    assert settings_payload["feed_source_subkeys"]["hidden_source_subkeys"] == ["bloomberg/tech"]
+    groups = {group["source_key"]: group for group in settings_payload["feed_source_subkeys"]["groups"]}
+    x_items = {item["key"]: item for item in groups["x"]["items"]}
+    assert set(x_items) == {"x/jakevin7", "x/ivanalog_com", "x/chinamacrofacts"}
+    assert x_items["x/jakevin7"]["label"] == "卡比卡比 (@jakevin7)"
+    assert x_items["x/ivanalog_com"]["label"] == "seekinganythingbutalpha (@ivanalog_com)"
+    assert "x/aiandcloud" not in x_items
+    assert "x/donmiami3" not in x_items
+    bloomberg_items = {item["key"]: item for item in groups["bloomberg"]["items"]}
+    assert bloomberg_items["bloomberg/tech"]["count"] == 2
+    assert bloomberg_items["bloomberg/tech"]["hidden"] is True
+    assert bloomberg_items["bloomberg/economics"]["count"] == 1
+
+    feed = client.get("/api/news?collection=feed&read_filter=all&per=20").get_json()
+    assert feed["total"] == 4
+    assert {item["id"] for item in feed["items"]} == {"x1", "x2", "x3", "b3"}
+
+    settings["feed"]["hidden_source_subkeys"] = ["x/jakevin7"]
+    app_module.save_app_settings(settings)
+    feed = client.get("/api/news?collection=feed&read_filter=all&per=20").get_json()
+    assert feed["total"] == 5
+    assert {item["id"] for item in feed["items"]} == {"x2", "x3", "b1", "b2", "b3"}
+
+
+
+def test_feed_source_subkey_settings_roundtrip_normalizes_values(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年7月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+
+    res = client.put(
+        "/api/settings",
+        json={
+            "llm": {
+                "translation": {"provider": "deepseek", "model": ""},
+                "chat": {"provider": "codex"},
+                "codex_chat": {"model": ""},
+                "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"},
+            },
+            "feed": {"hidden_source_subkeys": ["Reuters / Middle East", "x/MacroMargin", "Bloomberg / bloomberg_tech", "bad", "x/MacroMargin"]},
+        },
+    )
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["feed"]["hidden_source_subkeys"] == ["reuters/middle-east", "x/macromargin", "bloomberg/tech"]
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert saved["feed"]["hidden_source_subkeys"] == ["reuters/middle-east", "x/macromargin", "bloomberg/tech"]
 
 
 def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):

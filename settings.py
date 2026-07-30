@@ -33,6 +33,9 @@ DEFAULT_APP_SETTINGS = {
             "model": DEFAULT_PI_CHAT_MODEL,
         },
     },
+    "feed": {
+        "hidden_source_subkeys": [],
+    },
     "tracked": {
         "default_rule_params": {
             "title_weight": 1,
@@ -71,6 +74,28 @@ def resolve_app_settings_path() -> Path:
 
 def default_app_settings() -> dict:
     return json.loads(json.dumps(DEFAULT_APP_SETTINGS))
+
+
+def _normalize_hidden_source_subkeys(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        key = item.strip().lower()
+        if not key or "/" not in key:
+            continue
+        key = {
+            "bloomberg/bloomberg_tech": "bloomberg/tech",
+            "bloomberg/technology": "bloomberg/tech",
+        }.get(key, key)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    return normalized[:500]
 
 
 def load_app_settings() -> dict:
@@ -116,6 +141,12 @@ def load_app_settings() -> dict:
             base["llm"]["pi_chat"]["provider"] = provider
         if isinstance(model, str):
             base["llm"]["pi_chat"]["model"] = model.strip()
+
+    feed = payload.get("feed") if isinstance(payload, dict) else None
+    if isinstance(feed, dict):
+        base["feed"]["hidden_source_subkeys"] = _normalize_hidden_source_subkeys(
+            feed.get("hidden_source_subkeys")
+        )
 
     tracked = payload.get("tracked") if isinstance(payload, dict) else None
     if isinstance(tracked, dict):

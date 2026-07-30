@@ -347,6 +347,183 @@ def source_label_for_key(key: str, source: str | None = None) -> str:
     return source or key
 
 
+def _slug_source_part(value: str | None) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[\s/]+", "-", text)
+    text = re.sub(r"[^a-z0-9_-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-_")
+    return text[:80]
+
+
+def _x_account_from_url(url: str | None) -> str:
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host not in {"x.com", "twitter.com"}:
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts:
+        return ""
+    account = parts[0].strip()
+    if account.lower() in {"i", "home", "search", "intent", "share", "explore", "notifications", "messages"}:
+        return ""
+    return account[:80]
+
+
+X_COLLECTION_SOURCE_ALIASES = {
+    "ilya sutskever": ("ilyasut", "Ilya Sutskever"),
+    "郭明錤": ("mingchikuo", "郭明錤"),
+    "外汇交易员": ("fxtrader", "外汇交易员"),
+    "time horizon": ("Time_HorizonX", "Time Horizon"),
+    "卡比卡比": ("jakevin7", "卡比卡比"),
+    "seekinganythingbutalpha": ("ivanalog_com", "seekinganythingbutalpha"),
+}
+X_GENERIC_SOURCE_NAMES = {"", "x", "twitter", "twitter/x"}
+SOURCE_SUBKEY_COMPAT_ALIASES = {
+    "bloomberg/bloomberg_tech": "bloomberg/tech",
+    "bloomberg/technology": "bloomberg/tech",
+}
+
+
+def _candidate_account_label(*values: str | None) -> str:
+    for value in values:
+        text = (value or "").strip().lstrip("@")
+        if not text or text.lower() in X_GENERIC_SOURCE_NAMES:
+            continue
+        if " · " in text:
+            text = text.split(" · ")[-1].strip().lstrip("@")
+        return text[:80]
+    return ""
+
+
+def _looks_like_x_handle(value: str | None) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_]{1,15}", (value or "").strip().lstrip("@")))
+
+
+def _x_collection_source_from_meta(source_type: str | None, source: str | None, source_name: str | None, url: str | None = None) -> tuple[str, str]:
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    is_x_url = host in {"x.com", "twitter.com"}
+    st = (source_type or "").strip().lower()
+
+    for raw in (source, source_name):
+        text = (raw or "").strip().lstrip("@")
+        if not text:
+            continue
+        alias = X_COLLECTION_SOURCE_ALIASES.get(text.lower())
+        if alias:
+            handle, label = alias
+            return handle, f"{label} (@{handle})"
+
+    for raw in (source, source_name):
+        text = (raw or "").strip().lstrip("@")
+        if not text or text.lower() in X_GENERIC_SOURCE_NAMES:
+            continue
+        if _looks_like_x_handle(text) and (st == "twitter" or is_x_url):
+            return text[:80], f"@{text[:80]}"
+
+    return "", ""
+
+
+def _media_subsource_label(source_key: str, source: str | None, source_name: str | None = None) -> str:
+    generic = {
+        "reuters": {"reuters"},
+        "bloomberg": {"bloomberg"},
+        "techcrunch": {"techcrunch", "tech crunch"},
+        "ars": {"ars", "ars technica", "arstechnica"},
+    }
+    for raw in (source, source_name):
+        text = (raw or "").strip()
+        if not text:
+            continue
+        if "·" in text:
+            prefix, suffix = [part.strip() for part in text.split("·", 1)]
+            if derive_source_key(None, None, prefix) == source_key and suffix:
+                if source_key == "bloomberg" and _slug_source_part(suffix) in {"bloomberg_tech", "technology"}:
+                    return "Tech"
+                return suffix[:80]
+        lowered = text.lower()
+        if lowered in generic.get(source_key, set()):
+            continue
+        if source_key == "bloomberg" and _slug_source_part(text) in {"bloomberg_tech", "technology"}:
+            return "Tech"
+        return text[:80]
+    return ""
+
+
+def normalize_source_subkey_key(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip().lower()
+    if "/" not in raw:
+        return ""
+    source_key, subkey = raw.split("/", 1)
+    source_key = _slug_source_part(source_key)
+    subkey = _slug_source_part(subkey)
+    if not source_key or not subkey:
+        return ""
+    key = f"{source_key}/{subkey}"
+    return SOURCE_SUBKEY_COMPAT_ALIASES.get(key, key)
+
+
+def normalize_hidden_source_subkeys(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        key = normalize_source_subkey_key(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    return normalized[:500]
+
+
+def derive_source_subkey(url: str | None, source_type: str | None, source: str | None, source_name: str | None = None) -> dict | None:
+    source_key = derive_source_key(url, source_type, source)
+    source_label = SOURCE_LABELS.get(source_key) or source_label_for_key(source_key, source)
+    if source_key == "x":
+        account, label = _x_collection_source_from_meta(source_type, source, source_name, url)
+        if not account:
+            account = _x_account_from_url(url) or _candidate_account_label(source, source_name)
+            label = f"@{account.lstrip('@')}" if account else ""
+        slug = _slug_source_part(account)
+        if not slug:
+            return None
+        return {"key": f"x/{slug}", "source_key": "x", "source_label": SOURCE_LABELS["x"], "label": label or f"@{account.lstrip('@')}"}
+
+    if source_key in {"reuters", "bloomberg", "techcrunch", "ars"}:
+        sub_label = _media_subsource_label(source_key, source, source_name)
+        sub_slug = _slug_source_part(sub_label)
+        if not sub_slug:
+            return None
+        key = SOURCE_SUBKEY_COMPAT_ALIASES.get(f"{source_key}/{sub_slug}", f"{source_key}/{sub_slug}")
+        if key == "bloomberg/tech":
+            sub_label = "Tech"
+        return {"key": key, "source_key": source_key, "source_label": source_label, "label": sub_label}
+
+    return None
+
+
+def feed_source_subkey_sql(url: str | None, source_type: str | None, source: str | None, source_name: str | None = None) -> str:
+    item = derive_source_subkey(url, source_type, source, source_name)
+    return item["key"] if item else ""
+
+
+def build_feed_source_hidden_clause(collection: str) -> tuple[str, list[str]]:
+    if collection != "feed":
+        return "", []
+    hidden = current_runtime_settings()["feed"].get("hidden_source_subkeys") or []
+    if not hidden:
+        return "", []
+    placeholders = ",".join(["?"] * len(hidden))
+    return f"feed_source_subkey(items.url, items.source_type, items.source, items.source_name) NOT IN ({placeholders})", list(hidden)
+
+
 def build_source_filter_clause(source_filter: str) -> tuple[str, list[str]]:
     sf = (source_filter or "all").strip().lower()
     if sf in ("", "all"):
@@ -404,6 +581,10 @@ def _build_news_where_clause(
     if source_clause:
         where.append(source_clause)
         args.extend(source_args)
+    hidden_clause, hidden_args = build_feed_source_hidden_clause(collection)
+    if hidden_clause:
+        where.append(hidden_clause)
+        args.extend(hidden_args)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     return where_sql, args
 
@@ -435,6 +616,10 @@ def _build_search_filter_clause(range_value: str, time_value: str) -> tuple[str,
 def db_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.create_function("feed_source_subkey", 4, feed_source_subkey_sql, deterministic=True)
+    except TypeError:  # pragma: no cover - older sqlite/python fallback
+        conn.create_function("feed_source_subkey", 4, feed_source_subkey_sql)
     return conn
 
 
@@ -1136,6 +1321,11 @@ def current_runtime_settings() -> dict:
                 merged["llm"]["pi_chat"]["provider"] = provider.strip()
             if isinstance(model, str):
                 merged["llm"]["pi_chat"]["model"] = model.strip()
+    feed = raw.get("feed") if isinstance(raw, dict) else {}
+    if isinstance(feed, dict):
+        merged["feed"]["hidden_source_subkeys"] = normalize_hidden_source_subkeys(
+            feed.get("hidden_source_subkeys")
+        )
     tracked = raw.get("tracked") if isinstance(raw, dict) else {}
     if isinstance(tracked, dict):
         merged["tracked"]["default_rule_params"] = tracked_default_rule_params(
@@ -1535,6 +1725,57 @@ def pi_chat_settings_snapshot(saved_model: str, saved_provider: str = "") -> dic
     }
 
 
+def build_feed_source_settings_snapshot(hidden_keys: list[str]) -> dict:
+    hidden = set(normalize_hidden_source_subkeys(hidden_keys or []))
+    groups: dict[str, dict] = {}
+    conn = db_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT items.url, items.source_type, items.source, items.source_name, st.read_at
+            FROM items
+            LEFT JOIN item_state st ON st.item_id = items.id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for row in rows:
+        item = derive_source_subkey(row["url"], row["source_type"], row["source"], row["source_name"])
+        if not item:
+            continue
+        source_key = item["source_key"]
+        group = groups.setdefault(
+            source_key,
+            {"source_key": source_key, "label": item["source_label"], "items": {}},
+        )
+        bucket = group["items"].setdefault(
+            item["key"],
+            {
+                "key": item["key"],
+                "label": item["label"],
+                "count": 0,
+                "unread_count": 0,
+                "hidden": item["key"] in hidden,
+            },
+        )
+        bucket["count"] += 1
+        if row["read_at"] is None:
+            bucket["unread_count"] += 1
+
+    known_order = ["reuters", "bloomberg", "techcrunch", "ars", "x"]
+    ordered_groups = []
+    known_item_keys: set[str] = set()
+    for source_key in sorted(groups.keys(), key=lambda key: (known_order.index(key) if key in known_order else len(known_order), groups[key]["label"].lower())):
+        group = groups[source_key]
+        items = list(group["items"].values())
+        items.sort(key=lambda item: (item["label"].lower(), item["key"]))
+        known_item_keys.update(item["key"] for item in items)
+        ordered_groups.append({"source_key": source_key, "label": group["label"], "items": items})
+    visible_hidden_keys = [key for key in normalize_hidden_source_subkeys(hidden_keys or []) if key in known_item_keys]
+    return {"hidden_source_subkeys": visible_hidden_keys, "groups": ordered_groups}
+
+
 def serialize_runtime_settings() -> dict:
     settings = current_runtime_settings()
     translation_model = (settings["llm"]["translation"].get("model") or "").strip()
@@ -1544,6 +1785,7 @@ def serialize_runtime_settings() -> dict:
     deepseek_snapshot = deepseek_settings_snapshot(translation_model)
     codex_snapshot = codex_settings_snapshot(codex_chat_model)
     pi_snapshot = pi_chat_settings_snapshot(pi_chat_model, pi_chat_provider)
+    feed_source_snapshot = build_feed_source_settings_snapshot(settings["feed"].get("hidden_source_subkeys") or [])
     return {
         "api_status": {
             "deepseek": deepseek_snapshot["service"],
@@ -1556,6 +1798,8 @@ def serialize_runtime_settings() -> dict:
             "pi_chat": pi_snapshot["catalog"],
         },
         "llm": settings["llm"],
+        "feed": settings["feed"],
+        "feed_source_subkeys": feed_source_snapshot,
         "tracked": settings["tracked"],
         "restart_notice": "翻译 / 总结与 chat 的新请求通常立即生效；涉及 app.py 本版改动，终验前请重启 Flask。",
     }
@@ -1564,6 +1808,7 @@ def serialize_runtime_settings() -> dict:
 def validate_runtime_settings(payload: object) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("invalid_payload")
+    current_settings = current_runtime_settings()
     llm = payload.get("llm")
     if not isinstance(llm, dict):
         raise ValueError("invalid_llm_settings")
@@ -1594,6 +1839,11 @@ def validate_runtime_settings(payload: object) -> dict:
     if len(pi_chat_model) > 120:
         raise ValueError("invalid_pi_chat_model")
 
+    feed_payload = payload.get("feed") if isinstance(payload.get("feed"), dict) else None
+    hidden_source_subkeys = normalize_hidden_source_subkeys(
+        feed_payload.get("hidden_source_subkeys") if feed_payload is not None else current_settings["feed"].get("hidden_source_subkeys")
+    )
+
     normalized = {
         "llm": {
             "translation": {
@@ -1611,7 +1861,10 @@ def validate_runtime_settings(payload: object) -> dict:
                 "model": pi_chat_model,
             },
         },
-        "tracked": current_runtime_settings()["tracked"],
+        "feed": {
+            "hidden_source_subkeys": hidden_source_subkeys,
+        },
+        "tracked": current_settings["tracked"],
     }
     return normalized
 
@@ -5679,12 +5932,16 @@ def api_sources():
         where.append("EXISTS (SELECT 1 FROM article_notes an WHERE an.url = items.url)")
     elif collection == "market_tags":
         where.append("EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)")
+    hidden_clause, hidden_args = build_feed_source_hidden_clause(collection)
+    if hidden_clause:
+        where.append(hidden_clause)
+        args.extend(hidden_args)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()
     try:
         rows = conn.execute(
-            f"SELECT items.url, items.source_type, items.source FROM items {join_sql} {where_sql}",
+            f"SELECT items.url, items.source_type, items.source, items.source_name FROM items {join_sql} {where_sql}",
             args,
         ).fetchall()
     finally:
@@ -7968,6 +8225,10 @@ def api_mark_all_read():
     if source_clause:
         where.append(source_clause)
         args.extend(source_args)
+    hidden_clause, hidden_args = build_feed_source_hidden_clause(collection)
+    if hidden_clause:
+        where.append(hidden_clause)
+        args.extend(hidden_args)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = db_conn()

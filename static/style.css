@@ -813,6 +813,51 @@ body.search-bar-open .topbar-search {
   margin-top: 4px;
 }
 
+.settings-feed-source-list {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-feed-source-group {
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.48);
+  padding: 12px;
+}
+
+.settings-feed-source-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 0;
+  cursor: pointer;
+}
+
+.settings-feed-source-row + .settings-feed-source-row {
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.settings-feed-source-row input {
+  margin-top: 3px;
+}
+
+.settings-feed-source-row-body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-feed-source-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.settings-feed-source-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .error-stats-panel {
   position: fixed;
   right: 16px;

@@ -82,6 +82,7 @@ let state = {
   settingsSection: "services",
   runtimeSettings: null,
   releaseNotes: [],
+  settingsFeedHiddenDraft: null,
   settingsMessage: "",
   settingsMessageTone: "muted",
 };
@@ -385,9 +386,11 @@ const settingsStatus = document.getElementById("settingsStatus");
 const settingsApiStatus = document.getElementById("settingsApiStatus");
 const settingsNavServices = document.getElementById("settingsNavServices");
 const settingsNavModels = document.getElementById("settingsNavModels");
+const settingsNavFeedSources = document.getElementById("settingsNavFeedSources");
 const settingsNavRelease = document.getElementById("settingsNavRelease");
 const settingsSectionServices = document.getElementById("settingsSectionServices");
 const settingsSectionModels = document.getElementById("settingsSectionModels");
+const settingsSectionFeedSources = document.getElementById("settingsSectionFeedSources");
 const settingsSectionRelease = document.getElementById("settingsSectionRelease");
 const settingsTranslationProvider = document.getElementById("settingsTranslationProvider");
 const settingsTranslationModelSelect = document.getElementById("settingsTranslationModelSelect");
@@ -407,6 +410,8 @@ const settingsPiChatProviderField = document.getElementById("settingsPiChatProvi
 const settingsPiChatModelField = document.getElementById("settingsPiChatModelField");
 const settingsChatArchiveNote = document.getElementById("settingsChatArchiveNote");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
+const settingsFeedSourceSaveBtn = document.getElementById("settingsFeedSourceSaveBtn");
+const settingsFeedSourceSubkeys = document.getElementById("settingsFeedSourceSubkeys");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
 const detailAiBox = document.getElementById("detailAiBox");
@@ -1625,6 +1630,84 @@ function renderReleaseNotes() {
   });
 }
 
+function feedHiddenDraftSet() {
+  if (!state.settingsFeedHiddenDraft) {
+    const snapshotHidden = state.runtimeSettings?.feed_source_subkeys?.hidden_source_subkeys;
+    const saved = Array.isArray(snapshotHidden)
+      ? snapshotHidden
+      : (state.runtimeSettings?.feed?.hidden_source_subkeys || []);
+    state.settingsFeedHiddenDraft = new Set(saved);
+  }
+  return state.settingsFeedHiddenDraft;
+}
+
+function renderFeedSourceSettings() {
+  if (!settingsFeedSourceSubkeys) return;
+  settingsFeedSourceSubkeys.innerHTML = "";
+  if (!state.runtimeSettings) return;
+  const snapshot = state.runtimeSettings?.feed_source_subkeys || {};
+  const groups = Array.isArray(snapshot.groups) ? snapshot.groups : [];
+  const hiddenDraft = feedHiddenDraftSet();
+  if (!groups.length) {
+    const empty = document.createElement("div");
+    empty.className = "detail-status muted";
+    empty.textContent = "当前还没有可配置的二级信源。";
+    settingsFeedSourceSubkeys.appendChild(empty);
+    return;
+  }
+
+  groups.forEach((group) => {
+    const card = document.createElement("section");
+    card.className = "settings-feed-source-group";
+    const title = document.createElement("h4");
+    title.className = "settings-form-group-title";
+    title.textContent = group.label || group.source_key || "未命名信源";
+    card.appendChild(title);
+
+    (group.items || []).forEach((item) => {
+      const row = document.createElement("label");
+      row.className = "settings-feed-source-row";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = !hiddenDraft.has(item.key);
+      input.disabled = state.settingsSaving;
+      const hidden = hiddenDraft.has(item.key);
+      const unread = Number(item.unread_count || 0);
+      input.addEventListener("change", () => {
+        if (input.checked && hidden && unread > 0) {
+          const label = item.label || item.key || "这个二级信源";
+          const ok = window.confirm(`恢复显示“${label}”？将重新显示 ${unread} 条未读新闻。`);
+          if (!ok) {
+            input.checked = false;
+            return;
+          }
+        }
+        if (input.checked) hiddenDraft.delete(item.key);
+        else hiddenDraft.add(item.key);
+        state.runtimeSettings.feed = state.runtimeSettings.feed || {};
+        state.runtimeSettings.feed.hidden_source_subkeys = Array.from(hiddenDraft);
+        renderFeedSourceSettings();
+      });
+      const body = document.createElement("span");
+      body.className = "settings-feed-source-row-body";
+      const name = document.createElement("span");
+      name.className = "settings-feed-source-name";
+      name.textContent = item.label || item.key;
+      const meta = document.createElement("span");
+      meta.className = "settings-feed-source-meta";
+      meta.textContent = hidden
+        ? `已关闭 · 隐藏未读 ${unread} 条 · 共 ${Number(item.count || 0)} 条`
+        : `显示中 · 未读 ${unread} 条 · 共 ${Number(item.count || 0)} 条`;
+      body.appendChild(name);
+      body.appendChild(meta);
+      row.appendChild(input);
+      row.appendChild(body);
+      card.appendChild(row);
+    });
+    settingsFeedSourceSubkeys.appendChild(card);
+  });
+}
+
 function populateModelSelect(select, customInput, catalog, currentValue) {
   if (!select || !customInput) return;
   const savedValue = (currentValue || "").trim();
@@ -1689,6 +1772,7 @@ function renderSettingsNav() {
   [
     [settingsNavServices, "services"],
     [settingsNavModels, "models"],
+    [settingsNavFeedSources, "feed_sources"],
     [settingsNavRelease, "release"],
   ].forEach(([button, section]) => {
     if (!button) return;
@@ -1702,6 +1786,7 @@ function renderSettingsSections() {
   [
     [settingsSectionServices, "services"],
     [settingsSectionModels, "models"],
+    [settingsSectionFeedSources, "feed_sources"],
     [settingsSectionRelease, "release"],
   ].forEach(([sectionEl, section]) => {
     if (!sectionEl) return;
@@ -1821,8 +1906,10 @@ function renderSettingsOverlay() {
   renderSettingsSections();
   renderSettingsApiStatus();
   renderReleaseNotes();
+  renderFeedSourceSettings();
   populateSettingsForm();
-  settingsSaveBtn.disabled = state.settingsSaving;
+  if (settingsSaveBtn) settingsSaveBtn.disabled = state.settingsSaving;
+  if (settingsFeedSourceSaveBtn) settingsFeedSourceSaveBtn.disabled = state.settingsSaving;
   const statusText = state.settingsLoading
     ? "读取中..."
     : state.settingsSaving
@@ -1838,12 +1925,14 @@ async function openSettingsOverlay() {
   state.settingsLoading = true;
   state.settingsMessage = "";
   state.settingsMessageTone = "muted";
+  state.settingsFeedHiddenDraft = null;
   renderSettingsOverlay();
   closeErrorStatsPanel();
   try {
     const [runtimeSettings, releaseNotes] = await Promise.all([fetchRuntimeSettings(), fetchReleaseNotes()]);
     state.runtimeSettings = runtimeSettings;
     state.releaseNotes = releaseNotes;
+    state.settingsFeedHiddenDraft = null;
   } catch {
     state.settingsMessage = "读取设置失败，请稍后重试。";
     state.settingsMessageTone = "failed";
@@ -1866,6 +1955,7 @@ async function saveRuntimeSettings() {
   const draftCodexChatModel = readModelSetting(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
   const draftPiChatProvider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
   const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
+  const draftHiddenSourceSubkeys = Array.from(feedHiddenDraftSet());
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
@@ -1873,6 +1963,7 @@ async function saveRuntimeSettings() {
     const previousCodexModel = state.runtimeSettings?.llm?.codex_chat?.model || "";
     const previousPiProvider = state.runtimeSettings?.llm?.pi_chat?.provider || "";
     const previousPiModel = state.runtimeSettings?.llm?.pi_chat?.model || "";
+    const previousHiddenSourceSubkeys = (state.runtimeSettings?.feed?.hidden_source_subkeys || []).slice().sort().join("|");
     const payload = {
       llm: {
         translation: {
@@ -1890,6 +1981,9 @@ async function saveRuntimeSettings() {
           model: draftPiChatModel,
         },
       },
+      feed: {
+        hidden_source_subkeys: draftHiddenSourceSubkeys,
+      },
     };
     const res = await fetch("/api/settings", {
       method: "PUT",
@@ -1904,6 +1998,8 @@ async function saveRuntimeSettings() {
     const currentPiProvider = data.llm?.pi_chat?.provider || "";
     const currentPiModel = data.llm?.pi_chat?.model || "";
     const providerChanged = currentProvider !== previousProvider;
+    const currentHiddenSourceSubkeys = (data.feed?.hidden_source_subkeys || []).slice().sort().join("|");
+    const feedSourceVisibilityChanged = currentHiddenSourceSubkeys !== previousHiddenSourceSubkeys;
     const modelChanged = currentProvider === "codex"
       ? currentCodexModel !== previousCodexModel
       : (currentPiModel !== previousPiModel || currentPiProvider !== previousPiProvider);
@@ -1913,6 +2009,11 @@ async function saveRuntimeSettings() {
       state.detailChatModel = "";
       state.detailChatMessages = [];
       state.detailChatStatus = `${currentProvider === "pi" ? "Pi" : "Codex"} chat 配置已切换，当前临时对话已清空。`;
+    }
+    state.settingsFeedHiddenDraft = null;
+    if (feedSourceVisibilityChanged && state.collection === "feed") {
+      await loadSources();
+      await loadFirstPage();
     }
     state.settingsMessage = "保存成功。新请求通常立即生效；终验前建议重启 Flask。";
     state.settingsMessageTone = "ready";
@@ -2961,7 +3062,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.0.15";
+  version.textContent = "News Reader v2.1.1.0";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -8615,9 +8716,16 @@ if (settingsSaveBtn) {
   });
 }
 
+if (settingsFeedSourceSaveBtn) {
+  settingsFeedSourceSaveBtn.addEventListener("click", async () => {
+    await saveRuntimeSettings();
+  });
+}
+
 [
   [settingsNavServices, "services"],
   [settingsNavModels, "models"],
+  [settingsNavFeedSources, "feed_sources"],
   [settingsNavRelease, "release"],
 ].forEach(([button, section]) => {
   if (!button) return;

@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.0.15</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.0.15" />
+    <title>News Reader v2.1.1.0</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.1.1.0" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.0.15</span>
+          <span class="topbar-version">v2.1.1.0</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -772,6 +772,9 @@
             <button id="settingsNavModels" class="settings-nav-btn" type="button" data-section="models" aria-label="模型管理" title="模型管理">
               <span class="settings-nav-label">模型</span>
             </button>
+            <button id="settingsNavFeedSources" class="settings-nav-btn" type="button" data-section="feed_sources" aria-label="新闻流信源" title="新闻流信源">
+              <span class="settings-nav-label">信源</span>
+            </button>
             <button id="settingsNavRelease" class="settings-nav-btn" type="button" data-section="release" aria-label="更新记录" title="更新记录">
               <span class="settings-nav-label">更新</span>
             </button>
@@ -840,6 +843,14 @@
               </div>
             </div>
           </section>
+          <section id="settingsSectionFeedSources" class="settings-card settings-section-panel hidden">
+            <h3 class="settings-card-title">新闻流信源显示</h3>
+            <div class="settings-field-note">关闭二级信源只影响新闻流，不修改已读状态；恢复后历史未读会重新出现。重要、稍后再看等集合不受影响。</div>
+            <div id="settingsFeedSourceSubkeys" class="settings-feed-source-list"></div>
+            <div class="settings-actions">
+              <button id="settingsFeedSourceSaveBtn" class="detail-retry-btn" type="button">保存信源设置</button>
+            </div>
+          </section>
           <section id="settingsSectionRelease" class="settings-card settings-release-card settings-section-panel hidden">
           <div class="settings-release-header">
             <h3 class="settings-card-title">更新记录</h3>
@@ -886,6 +897,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.0.15"></script>
+    <script src="/static/app.js?v=2.1.1.0"></script>
   </body>
 </html>
