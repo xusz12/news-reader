@@ -4861,16 +4861,19 @@ def test_frontend_feed_source_restore_warns_with_unread_count():
     assert "window.confirm(`恢复显示“${label}”？将重新显示 ${unread} 条未读新闻。`)" in app_source
 
 
-def test_frontend_is_v2110_without_later_visual_experiments():
+def test_frontend_is_v2111_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.1.0" in app_source
-    assert "News Reader v2.1.1.0" in index_source
-    assert "/static/style.css?v=2.1.1.0" in index_source
-    assert "/static/app.js?v=2.1.1.0" in index_source
+    assert "News Reader v2.1.1.1" in app_source
+    assert "News Reader v2.1.1.1" in index_source
+    assert "/static/style.css?v=2.1.1.1" in index_source
+    assert "/static/app.js?v=2.1.1.1" in index_source
+    assert 'id="navFeedBadge"' in index_source
+    assert 'id="navReadLaterBadge"' in index_source
+    assert 'id="navReviewsBadge"' in index_source
     assert "v2.1.0.10" not in app_source
     assert "v2.1.0.10" not in index_source
     assert "--navigation-surface" not in style_source
@@ -5683,6 +5686,95 @@ def test_feed_source_subkey_visibility_settings_only_filter_feed(tmp_path: Path,
     assert states["2"] is None
     assert "3" not in states or states["3"] is None
     assert states["4"] is None
+
+
+def test_nav_summary_counts_use_independent_collection_semantics(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "news_index.sqlite3"
+    settings_path = tmp_path / "app_settings.json"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    ts = "2026-07-31 10:00:00"
+    rows = [
+        ("visible", "manual.md", 1, "2026-07-31 09:00:00", "2026-07-31", "09:00", "Reuters · China", "rss", "Reuters", "Visible unread", "s", "https://www.reuters.com/world/china/visible", ts, ts),
+        ("hidden", "manual.md", 2, "2026-07-31 09:01:00", "2026-07-31", "09:01", "Reuters · Middle East", "rss", "Reuters", "Hidden unread", "s", "https://www.reuters.com/world/middle-east/hidden", ts, ts),
+        ("read", "manual.md", 3, "2026-07-31 09:02:00", "2026-07-31", "09:02", "Reuters · China", "rss", "Reuters", "Read feed item", "s", "https://www.reuters.com/world/china/read", ts, ts),
+        ("later", "manual.md", 4, "2026-07-31 09:03:00", "2026-07-31", "09:03", "Reuters · China", "rss", "Reuters", "Read later queue", "s", "https://www.reuters.com/world/china/later", ts, ts),
+    ]
+    conn = app_module.db_conn()
+    try:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO items(
+                  id, source_file, item_order, published_at, date, time, source, source_type,
+                  source_name, title, summary, url, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            conn.execute("INSERT INTO item_state(item_id, read_at, updated_at) VALUES (?, ?, ?)", ("read", ts, ts))
+            conn.execute(
+                "INSERT INTO item_state(item_id, read_at, read_later_at, updated_at) VALUES (?, ?, ?, ?)",
+                ("later", ts, ts, ts),
+            )
+    finally:
+        conn.close()
+
+    settings = app_module.default_app_settings()
+    settings["feed"]["hidden_source_subkeys"] = ["reuters/middle-east"]
+    app_module.save_app_settings(settings)
+    client = app_module.app.test_client()
+
+    idea_id = _create_standalone_idea(client, "待复盘角标想法")
+    pending = client.post("/api/reviews", json={
+        "source_type": "standalone_idea",
+        "source_key": str(idea_id),
+        "judgment": "到期判断",
+        "plan_review_date": "2020-01-01",
+    })
+    assert pending.status_code == 200
+    pending_id = pending.get_json()["review"]["id"]
+    future_idea_id = _create_standalone_idea(client, "未来复盘想法")
+    future = client.post("/api/reviews", json={
+        "source_type": "standalone_idea",
+        "source_key": str(future_idea_id),
+        "judgment": "未来判断",
+        "plan_review_date": "2099-01-01",
+    })
+    assert future.status_code == 200
+
+    summary = client.get("/api/nav-summary")
+    assert summary.status_code == 200
+    assert summary.get_json()["summary"] == {
+        "feed_unread": 1,
+        "read_later_unread": 1,
+        "pending_review": 1,
+    }
+
+    settings["feed"]["hidden_source_subkeys"] = []
+    app_module.save_app_settings(settings)
+    restored = client.get("/api/nav-summary").get_json()["summary"]
+    assert restored["feed_unread"] == 2
+    assert restored["read_later_unread"] == 1
+
+    removed = client.patch("/api/news/later/state", json={"read_later": False})
+    assert removed.status_code == 200
+    after_later_done = client.get("/api/nav-summary").get_json()["summary"]
+    assert after_later_done["read_later_unread"] == 0
+
+    completed = client.post(f"/api/reviews/{pending_id}/complete", json={
+        "result": "confirmed",
+        "actual_text": "事实",
+        "experience": "经验",
+    })
+    assert completed.status_code == 200
+    assert client.get("/api/nav-summary").get_json()["summary"]["pending_review"] == 0
 
 
 def test_feed_source_subkeys_use_collection_source_for_x_and_merge_bloomberg(tmp_path: Path, monkeypatch):

@@ -545,6 +545,49 @@ def build_source_filter_clause(source_filter: str) -> tuple[str, list[str]]:
     return "", []
 
 
+def count_news_items(
+    conn: sqlite3.Connection,
+    *,
+    collection: str = "feed",
+    read_filter: str = "all",
+    source_filter: str = "all",
+    q: str = "",
+) -> int:
+    join_sql = """
+    LEFT JOIN item_state st ON st.item_id = items.id
+    LEFT JOIN article_details ad ON ad.url = items.url
+    """
+    where_sql, args = _build_news_where_clause(q, read_filter, collection, source_filter)
+    row = conn.execute(
+        f"SELECT COUNT(DISTINCT items.id) AS c FROM items {join_sql} {where_sql}",
+        args,
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
+
+
+def count_pending_review_chains(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM review_chains
+        WHERE status = 'active' AND plan_review_date <= ?
+        """,
+        (_today_str(),),
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
+
+
+def load_nav_summary(conn: sqlite3.Connection) -> dict:
+    feed_unread = count_news_items(conn, collection="feed", read_filter="unread")
+    read_later_unread = count_news_items(conn, collection="read_later", read_filter="unread")
+    pending_review = count_pending_review_chains(conn)
+    return {
+        "feed_unread": feed_unread,
+        "read_later_unread": read_later_unread,
+        "pending_review": pending_review,
+    }
+
+
 def _build_news_where_clause(
     q: str,
     read_filter: str,
@@ -5129,6 +5172,15 @@ def api_daily_briefing_detail(date_key: str):
         return jsonify({"ok": False, "error": "not_found"}), 404
 
     return jsonify({"ok": True, "briefing": parse_daily_briefing_file(path)})
+
+
+@app.get("/api/nav-summary")
+def api_nav_summary():
+    conn = db_conn()
+    try:
+        return jsonify({"ok": True, "summary": load_nav_summary(conn)})
+    finally:
+        conn.close()
 
 
 @app.get("/api/news")

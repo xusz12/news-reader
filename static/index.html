@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.1.0</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.1.0" />
+    <title>News Reader v2.1.1.1</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.1.1.1" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.1.0</span>
+          <span class="topbar-version">v2.1.1.1</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -57,12 +57,12 @@
         <section class="nav-group nav-group--reading" aria-labelledby="navReadingHeading">
           <h2 id="navReadingHeading">阅读</h2>
           <button id="navSearchBtn" class="nav-btn" type="button"><span class="nav-btn-label">搜索</span></button>
-          <button id="navFeedBtn" class="nav-btn active" type="button" aria-current="page"><span class="nav-btn-label">新闻流</span></button>
+          <button id="navFeedBtn" class="nav-btn active" type="button" aria-current="page"><span class="nav-btn-label">新闻流</span><span id="navFeedBadge" class="nav-btn-badge hidden" aria-hidden="true"></span></button>
           <button id="navDailyBtn" class="nav-btn" type="button"><span class="nav-btn-label">日报</span></button>
         </section>
         <section class="nav-group nav-group--personal" aria-labelledby="navPersonalHeading">
           <h2 id="navPersonalHeading">个人队列</h2>
-          <button id="navReadLaterBtn" class="nav-btn" type="button"><span class="nav-btn-label">稍后再看</span></button>
+          <button id="navReadLaterBtn" class="nav-btn" type="button"><span class="nav-btn-label">稍后再看</span><span id="navReadLaterBadge" class="nav-btn-badge hidden" aria-hidden="true"></span></button>
           <button id="navImportantBtn" class="nav-btn" type="button"><span class="nav-btn-label">重要新闻</span></button>
           <button id="navRemindersBtn" class="nav-btn" type="button">
             <span class="nav-btn-label">提醒</span>
@@ -73,7 +73,7 @@
         <section class="nav-group nav-group--research" aria-labelledby="navResearchHeading">
           <h2 id="navResearchHeading">研究</h2>
           <button id="navNotesBtn" class="nav-btn" type="button"><span class="nav-btn-label">想法</span></button>
-          <button id="navReviewsBtn" class="nav-btn" type="button"><span class="nav-btn-label">复盘</span></button>
+          <button id="navReviewsBtn" class="nav-btn" type="button"><span class="nav-btn-label">复盘</span><span id="navReviewsBadge" class="nav-btn-badge hidden" aria-hidden="true"></span></button>
           <button id="navTrackedBtn" class="nav-btn" type="button"><span class="nav-btn-label">跟踪</span></button>
         </section>
         <section class="nav-group nav-group--market" aria-labelledby="navMarketHeading">
@@ -897,6 +897,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.1.0"></script>
+    <script src="/static/app.js?v=2.1.1.1"></script>
   </body>
 </html>

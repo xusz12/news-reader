@@ -45,6 +45,11 @@ let state = {
     done_total: 0,
     dismissed_total: 0,
   },
+  navSummary: {
+    feed_unread: 0,
+    read_later_unread: 0,
+    pending_review: 0,
+  },
   detailCacheByUrl: new Map(),
   readingCheckpoint: null,
   selectedTrendIdea: null,
@@ -131,14 +136,17 @@ const readLaterFilterAllBtn = document.getElementById("readLaterFilterAllBtn");
 
 const navSearchBtn = document.getElementById("navSearchBtn");
 const navFeedBtn = document.getElementById("navFeedBtn");
+const navFeedBadge = document.getElementById("navFeedBadge");
 const navDailyBtn = document.getElementById("navDailyBtn");
 const navFavoritesBtn = document.getElementById("navFavoritesBtn");
 const navRemindersBtn = document.getElementById("navRemindersBtn");
 const navReminderBadge = document.getElementById("navReminderBadge");
 const navImportantBtn = document.getElementById("navImportantBtn");
 const navReadLaterBtn = document.getElementById("navReadLaterBtn");
+const navReadLaterBadge = document.getElementById("navReadLaterBadge");
 const navNotesBtn = document.getElementById("navNotesBtn");
 const navReviewsBtn = document.getElementById("navReviewsBtn");
+const navReviewsBadge = document.getElementById("navReviewsBadge");
 const navTrackedBtn = document.getElementById("navTrackedBtn");
 const navMarketTagsBtn = document.getElementById("navMarketTagsBtn");
 // Review elements
@@ -630,6 +638,50 @@ function renderErrorStats(days) {
   });
 }
 
+function badgeCount(value) {
+  return Math.max(0, Number(value || 0));
+}
+
+function setNavBadge(button, badge, count, baseLabel, countedLabel) {
+  const normalized = badgeCount(count);
+  if (badge) {
+    badge.textContent = normalized > 0 ? String(normalized) : "";
+    badge.classList.toggle("hidden", normalized <= 0);
+    badge.setAttribute("aria-hidden", "true");
+  }
+  if (button) {
+    button.setAttribute("aria-label", normalized > 0 ? `${baseLabel}，${normalized} ${countedLabel}` : baseLabel);
+  }
+}
+
+function applyNavSummary(summary) {
+  state.navSummary = {
+    feed_unread: badgeCount(summary?.feed_unread),
+    read_later_unread: badgeCount(summary?.read_later_unread),
+    pending_review: badgeCount(summary?.pending_review),
+  };
+  updateCollectionBadges();
+}
+
+function updateCollectionBadges() {
+  setNavBadge(navFeedBtn, navFeedBadge, state.navSummary.feed_unread, "新闻流", "条未读");
+  setNavBadge(navReadLaterBtn, navReadLaterBadge, state.navSummary.read_later_unread, "稍后再看", "条待读");
+  setNavBadge(navReviewsBtn, navReviewsBadge, state.navSummary.pending_review, "复盘", "条待复盘");
+}
+
+async function fetchNavSummary() {
+  const res = await fetch("/api/nav-summary");
+  if (!res.ok) throw new Error("nav_summary_fetch_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "nav_summary_fetch_failed");
+  return data.summary || {};
+}
+
+async function refreshNavSummary() {
+  const summary = await fetchNavSummary();
+  applyNavSummary(summary);
+}
+
 function reminderDueCount() {
   return Number(state.reminderSummary?.due_total || 0);
 }
@@ -698,6 +750,7 @@ function startReminderSummaryTimer() {
   if (reminderSummaryTimer) return;
   reminderSummaryTimer = window.setInterval(() => {
     refreshReminderSummary().catch(() => {});
+    refreshNavSummary().catch(() => {});
   }, 60000);
 }
 
@@ -2011,6 +2064,9 @@ async function saveRuntimeSettings() {
       state.detailChatStatus = `${currentProvider === "pi" ? "Pi" : "Codex"} chat 配置已切换，当前临时对话已清空。`;
     }
     state.settingsFeedHiddenDraft = null;
+    if (feedSourceVisibilityChanged) {
+      await refreshNavSummary().catch(() => {});
+    }
     if (feedSourceVisibilityChanged && state.collection === "feed") {
       await loadSources();
       await loadFirstPage();
@@ -3062,7 +3118,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.1.0";
+  version.textContent = "News Reader v2.1.1.1";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -4445,6 +4501,9 @@ async function patchStateWithRollback(itemId, payload) {
       return;
     }
     rerenderOne(itemId);
+    if ("read" in payload || "read_later" in payload) {
+      refreshNavSummary().catch(() => {});
+    }
     if ("read_later" in payload) {
       if (payload.read_later) {
         kickRowStatusPolling();
@@ -4464,6 +4523,9 @@ async function patchStateWithRollback(itemId, payload) {
     item.ai_status = backup.ai_status;
     item.ai_ready = backup.ai_ready;
     rerenderOne(itemId);
+    if ("read" in payload || "read_later" in payload) {
+      refreshNavSummary().catch(() => {});
+    }
     if ("read_later" in payload) {
       if (rowNeedsStatusPolling(item)) ensureRowStatusPolling();
       if (state.selectedId === itemId) startDetailPolling(itemId);
@@ -7884,7 +7946,10 @@ async function loadFeedPage(page = 1) {
 async function loadFirstPage(page = 1) {
   clearFeedEndAutoReadTimer();
   startReminderSummaryTimer();
-  await refreshReminderSummary().catch(() => {});
+  await Promise.all([
+    refreshReminderSummary().catch(() => {}),
+    refreshNavSummary().catch(() => {}),
+  ]);
   if (state.collection === "feed") {
     state.readFilter = state.feedReadFilter;
   } else if (state.collection === "read_later") {
@@ -10096,6 +10161,7 @@ if (reviewCreateSaveBtn) {
       state.collection = "reviews";
       state.reviewFilter = "all";
       await loadFirstPage();
+      await refreshNavSummary().catch(() => {});
       state.selectedReviewId = review.id;
       syncReviewRowSelection();
       await openReviewCard(review);
@@ -10318,6 +10384,7 @@ if (reviewCompleteSaveBtn) {
     try {
       const updated = await reviewComplete(review.id, { result, actual_text: actual, bias_text: bias, experience });
       renderReviewDetail(updated);
+      await refreshNavSummary().catch(() => {});
       setHint("复盘已完成");
     } catch (err) {
       setInlineFeedback(
@@ -10347,6 +10414,7 @@ if (reviewContinueSaveBtn) {
     try {
       const updated = await reviewContinueObserving(review.id, { new_review_date: newDate });
       renderReviewDetail(updated);
+      await refreshNavSummary().catch(() => {});
       setHint("已继续观察");
     } catch (err) {
       setInlineFeedback(
@@ -10378,6 +10446,7 @@ if (reviewContinueDoneBtn) {
     try {
       const updated = await reviewComplete(review.id, { result: "inconclusive", actual_text: actual, bias_text: bias, experience });
       renderReviewDetail(updated);
+      await refreshNavSummary().catch(() => {});
       setHint("复盘已结束（暂不可判断）");
     } catch (err) {
       setInlineFeedback(
@@ -10438,6 +10507,7 @@ if (reviewRetrackSaveBtn) {
       const updated = await reviewRetrack(review.id, { judgment, criteria, plan_review_date: date });
       state.selectedReviewId = updated.id;
       await loadFirstPage();
+      await refreshNavSummary().catch(() => {});
       await openReviewCard(updated);
       setHint("已派生新复盘链");
     } catch (err) {
