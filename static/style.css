@@ -1574,6 +1574,12 @@ button.active {
   gap: 10px;
 }
 
+.detail-tag-admin-card-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .detail-tag-admin-card {
   border: 1px solid var(--detail-card-border);
   background:
@@ -1607,6 +1613,68 @@ button.active {
 .detail-tag-admin-card-meta {
   font-size: 12px;
   color: var(--muted);
+}
+
+.detail-tag-admin-card-wrap.is-dragging .detail-tag-admin-card {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--detail-card-bg));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.detail-tag-admin-card-wrap.is-drop-before .detail-tag-admin-card,
+.detail-tag-admin-card-wrap.is-drop-after .detail-tag-admin-card {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--detail-card-border));
+}
+
+.detail-tag-admin-drop-indicator {
+  border: 1px dashed color-mix(in srgb, var(--accent) 54%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent-soft) 42%, transparent);
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.detail-tag-admin-order {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.detail-tag-admin-drag-handle,
+.detail-tag-admin-order-btn {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.detail-tag-admin-order-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.detail-tag-admin-drag-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+.tag-admin-dragging,
+.tag-admin-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.detail-tag-admin-drag-handle:not(:disabled):hover,
+.detail-tag-admin-order-btn:not(:disabled):hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .detail-tag-admin-panel {
@@ -2054,7 +2122,7 @@ button.active {
   background: var(--queue-row-read);
 }
 
-.news-item[data-read="1"] .title {
+.news-item[data-read="1"] .title:not(.tone-important):not(.tone-bullish):not(.tone-bearish):not(.tone-mixed) {
   color: color-mix(in srgb, var(--row-title) 72%, var(--muted));
   font-weight: 620;
 }

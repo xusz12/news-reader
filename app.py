@@ -3443,6 +3443,22 @@ def load_market_tag_definition_map(conn: sqlite3.Connection) -> dict[str, dict]:
     return {row["key"]: row for row in load_market_tag_definitions(conn, active_only=False)}
 
 
+def normalize_market_tag_sort_order(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT key
+        FROM market_tag_definitions
+        ORDER BY sort_order ASC, created_at ASC, key ASC
+        """
+    ).fetchall()
+    ts = now_ts()
+    for idx, row in enumerate(rows):
+        conn.execute(
+            "UPDATE market_tag_definitions SET sort_order=?, updated_at=? WHERE key=?",
+            (idx, ts, row["key"]),
+        )
+
+
 def seed_market_tag_definitions(conn: sqlite3.Connection) -> None:
     deleted_keys = {
         row["key"]
@@ -7802,6 +7818,44 @@ def api_market_tags_create():
     return jsonify({"ok": True, "tag": dict(created)})
 
 
+@app.post("/api/market-tags/reorder")
+def api_market_tags_reorder():
+    body = request.get_json(silent=True) or {}
+    ordered_keys = body.get("ordered_keys")
+    if not isinstance(ordered_keys, list) or not all(isinstance(key, str) and key.strip() for key in ordered_keys):
+        return jsonify({"ok": False, "error": "invalid_ordered_keys"}), 400
+    normalized_keys = [key.strip() for key in ordered_keys]
+    if len(set(normalized_keys)) != len(normalized_keys):
+        return jsonify({"ok": False, "error": "duplicate_ordered_keys"}), 400
+
+    conn = db_conn()
+    try:
+        existing_rows = conn.execute(
+            "SELECT key FROM market_tag_definitions ORDER BY sort_order ASC, created_at ASC, key ASC"
+        ).fetchall()
+        existing_keys = [row["key"] for row in existing_rows]
+        existing_set = set(existing_keys)
+        requested_set = set(normalized_keys)
+        unknown = sorted(requested_set - existing_set)
+        missing = [key for key in existing_keys if key not in requested_set]
+        if unknown:
+            return jsonify({"ok": False, "error": "unknown_ordered_keys", "unknown_keys": unknown}), 400
+        if missing:
+            return jsonify({"ok": False, "error": "missing_ordered_keys", "missing_keys": missing}), 400
+
+        ts = now_ts()
+        with conn:
+            for idx, key in enumerate(normalized_keys):
+                conn.execute(
+                    "UPDATE market_tag_definitions SET sort_order=?, updated_at=? WHERE key=?",
+                    (idx, ts, key),
+                )
+        tags = load_market_tag_definitions(conn, active_only=False)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "tags": tags})
+
+
 @app.patch("/api/market-tags/<tag_key>")
 def api_market_tags_update(tag_key: str):
     body = request.get_json(silent=True) or {}
@@ -7895,6 +7949,7 @@ def api_market_tags_delete(tag_key: str):
             conn.execute("DELETE FROM article_market_tags WHERE tag=?", (tag_key,))
             conn.execute("DELETE FROM market_trend_notes WHERE tag=?", (tag_key,))
             conn.execute("DELETE FROM market_tag_definitions WHERE key=?", (tag_key,))
+            normalize_market_tag_sort_order(conn)
             if tag_key in DEFAULT_MARKET_TAG_CHOICES:
                 conn.execute(
                     """
@@ -7997,6 +8052,7 @@ def api_market_tags_merge(tag_key: str):
             )
             conn.execute("DELETE FROM market_tag_definitions WHERE key=?", (tag_key,))
             conn.execute("DELETE FROM market_tag_deleted_keys WHERE key=?", (tag_key,))
+            normalize_market_tag_sort_order(conn)
         remaining_tags = load_market_tag_definitions(conn, active_only=False)
     finally:
         conn.close()

@@ -119,6 +119,8 @@ const TRACKED_SYSTEM_DEFAULT_RULE_PARAMS = {
   threshold: 6,
 };
 
+let tagAdminDragState = null;
+
 const feedControlsFrame = document.getElementById("feedControlsFrame");
 const feedControlsScroll = document.getElementById("feedControlsScroll");
 const refreshBtn = document.getElementById("refreshBtn");
@@ -971,6 +973,19 @@ async function mergeMarketTagDefinition(tagKey, targetKey) {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "market_tag_merge_failed");
   return data;
+}
+
+async function reorderMarketTagDefinitions(orderedKeys) {
+  const res = await fetch("/api/market-tags/reorder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ordered_keys: orderedKeys }),
+  });
+  if (!res.ok) throw new Error("market_tag_reorder_failed");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "market_tag_reorder_failed");
+  state.marketTagChoices = Array.isArray(data.tags) ? data.tags : state.marketTagChoices;
+  return data.tags || [];
 }
 
 function clearFeedEndAutoReadTimer() {
@@ -2823,6 +2838,7 @@ function updateBatchActionButton() {
     state.collection === "reminders" ||
     state.collection === "important" ||
     state.collection === "notes" ||
+    state.collection === "tracked" ||
     state.collection === "market_tags" ||
     state.collection === "reviews"
   ) {
@@ -2846,7 +2862,7 @@ function updateBatchActionButton() {
 
 function updateRefreshButton() {
   if (!refreshBtn) return;
-  const visible = state.collection !== "reviews";
+  const visible = state.collection !== "reviews" && state.collection !== "tracked";
   refreshBtn.classList.toggle("hidden", !visible);
   if (!visible) refreshBtn.disabled = false;
 }
@@ -3118,7 +3134,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.1.1";
+  version.textContent = "News Reader v2.1.1.2";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -4094,13 +4110,171 @@ function getSelectedTagAdminItem() {
   return state.marketTagChoices.find((tag) => tag.key === state.selectedTagAdminKey) || null;
 }
 
+function orderedMarketTagKeys() {
+  return state.marketTagChoices.map((tag) => tag.key);
+}
+
+function applyLocalMarketTagOrder(orderedKeys) {
+  const byKey = new Map(state.marketTagChoices.map((tag) => [tag.key, tag]));
+  state.marketTagChoices = orderedKeys.map((key) => byKey.get(key)).filter(Boolean);
+}
+
+function sameOrderedKeys(left, right) {
+  return left.length === right.length && left.every((key, index) => key === right[index]);
+}
+
+async function commitMarketTagOrder(orderedKeys, { selectedKey = state.selectedTagAdminKey, rollbackTags = null } = {}) {
+  const previousTags = rollbackTags ? rollbackTags.slice() : state.marketTagChoices.slice();
+  const previousKeys = previousTags.map((tag) => tag.key);
+  if (sameOrderedKeys(orderedKeys, previousKeys)) return;
+  try {
+    applyLocalMarketTagOrder(orderedKeys);
+    renderTagAdminList();
+    updateMarketWorkbenchBar();
+    await reorderMarketTagDefinitions(orderedKeys);
+    await refreshTrendTagAdminState(selectedKey);
+    if (state.collection === "market_tags") {
+      await refreshMarketWorkbenchAfterTrendCompose({ preserveTagAdmin: true });
+    }
+  } catch {
+    state.marketTagChoices = previousTags;
+    state.selectedTagAdminKey = selectedKey || state.selectedTagAdminKey;
+    renderTagAdminList();
+    updateMarketWorkbenchBar();
+    setHint("板块排序失败，请稍后重试。");
+  }
+}
+
+async function moveMarketTagDefinition(tagKey, direction) {
+  const currentIndex = state.marketTagChoices.findIndex((tag) => tag.key === tagKey);
+  const nextIndex = currentIndex + direction;
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= state.marketTagChoices.length) return;
+  const orderedKeys = orderedMarketTagKeys();
+  [orderedKeys[currentIndex], orderedKeys[nextIndex]] = [orderedKeys[nextIndex], orderedKeys[currentIndex]];
+  await commitMarketTagOrder(orderedKeys, { selectedKey: tagKey });
+}
+
+function startMarketTagDrag(event, tagKey) {
+  if (event.button !== undefined && event.button !== 0) return;
+  if (!tagKey || tagAdminDragState) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const handle = event.currentTarget;
+  try {
+    handle.setPointerCapture(event.pointerId);
+  } catch {}
+  tagAdminDragState = {
+    tagKey,
+    pointerId: event.pointerId,
+    startTags: state.marketTagChoices.slice(),
+    currentKeys: orderedMarketTagKeys(),
+    dropTargetKey: "",
+    dropPosition: "",
+    selectedKey: state.selectedTagAdminKey,
+  };
+  document.body.classList.add("tag-admin-dragging");
+  renderTagAdminList();
+  window.addEventListener("pointermove", handleMarketTagDragMove, true);
+  window.addEventListener("pointerup", finishMarketTagDrag, true);
+  window.addEventListener("pointercancel", cancelMarketTagDrag, true);
+}
+
+function dragOrderedKeysForPoint(clientX, clientY) {
+  if (!tagAdminDragState || !detailTagAdminList) return null;
+  const draggedKey = tagAdminDragState.tagKey;
+  const wraps = [...detailTagAdminList.querySelectorAll(".detail-tag-admin-card-wrap")];
+  const targetWrap = wraps.find((wrap) => {
+    const rect = wrap.getBoundingClientRect();
+    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  });
+  if (!targetWrap) return null;
+  const targetKey = targetWrap.dataset.tagKey || "";
+  if (!targetKey || targetKey === draggedKey) return null;
+  const targetRect = targetWrap.getBoundingClientRect();
+  const baseKeys = tagAdminDragState.currentKeys.filter((key) => key !== draggedKey);
+  const targetIndex = baseKeys.indexOf(targetKey);
+  if (targetIndex < 0) return null;
+  const grid = detailTagAdminList.querySelector(".detail-tag-admin-grid");
+  const columnCount = grid
+    ? getComputedStyle(grid).gridTemplateColumns.split(/\s+/).filter(Boolean).length
+    : 1;
+  const insertAfter = columnCount > 1
+    ? clientX > targetRect.left + targetRect.width / 2
+    : clientY > targetRect.top + targetRect.height / 2;
+  baseKeys.splice(targetIndex + (insertAfter ? 1 : 0), 0, draggedKey);
+  return {
+    orderedKeys: baseKeys,
+    targetKey,
+    position: insertAfter ? "after" : "before",
+  };
+}
+
+function handleMarketTagDragMove(event) {
+  if (!tagAdminDragState || event.pointerId !== tagAdminDragState.pointerId) return;
+  event.preventDefault();
+  const nextDrop = dragOrderedKeysForPoint(event.clientX, event.clientY);
+  if (!nextDrop) return;
+  const nextKeys = nextDrop.orderedKeys;
+  const sameOrder = sameOrderedKeys(nextKeys, tagAdminDragState.currentKeys);
+  const sameDrop = tagAdminDragState.dropTargetKey === nextDrop.targetKey
+    && tagAdminDragState.dropPosition === nextDrop.position;
+  if (sameOrder && sameDrop) return;
+  tagAdminDragState.currentKeys = nextKeys;
+  tagAdminDragState.dropTargetKey = nextDrop.targetKey;
+  tagAdminDragState.dropPosition = nextDrop.position;
+  applyLocalMarketTagOrder(nextKeys);
+  renderTagAdminList();
+}
+
+function cleanupMarketTagDrag() {
+  window.removeEventListener("pointermove", handleMarketTagDragMove, true);
+  window.removeEventListener("pointerup", finishMarketTagDrag, true);
+  window.removeEventListener("pointercancel", cancelMarketTagDrag, true);
+  document.body.classList.remove("tag-admin-dragging");
+}
+
+async function finishMarketTagDrag(event) {
+  if (!tagAdminDragState || event.pointerId !== tagAdminDragState.pointerId) return;
+  event.preventDefault();
+  const dragState = tagAdminDragState;
+  tagAdminDragState = null;
+  cleanupMarketTagDrag();
+  const startKeys = dragState.startTags.map((tag) => tag.key);
+  if (sameOrderedKeys(dragState.currentKeys, startKeys)) {
+    state.marketTagChoices = dragState.startTags;
+    renderTagAdminList();
+    return;
+  }
+  await commitMarketTagOrder(dragState.currentKeys, {
+    selectedKey: dragState.selectedKey,
+    rollbackTags: dragState.startTags,
+  });
+}
+
+function cancelMarketTagDrag(event) {
+  if (!tagAdminDragState || event.pointerId !== tagAdminDragState.pointerId) return;
+  const dragState = tagAdminDragState;
+  tagAdminDragState = null;
+  cleanupMarketTagDrag();
+  state.marketTagChoices = dragState.startTags;
+  renderTagAdminList();
+}
+
 function renderTagAdminList() {
   if (!detailTagAdminList) return;
   detailTagAdminList.innerHTML = "";
   const grid = document.createElement("div");
   grid.className = "detail-tag-admin-grid";
 
-  state.marketTagChoices.forEach((tag) => {
+  state.marketTagChoices.forEach((tag, index) => {
+    const item = document.createElement("div");
+    item.className = "detail-tag-admin-card-wrap";
+    item.dataset.tagKey = tag.key;
+    if (tagAdminDragState?.tagKey === tag.key) item.classList.add("is-dragging");
+    if (tagAdminDragState?.dropTargetKey === tag.key) {
+      item.classList.add(`is-drop-${tagAdminDragState.dropPosition}`);
+    }
+
     const card = document.createElement("button");
     card.type = "button";
     card.className = `detail-tag-admin-card${state.selectedTagAdminKey === tag.key ? " is-active" : ""}`;
@@ -4118,9 +4292,66 @@ function renderTagAdminList() {
     metaText.className = "detail-tag-admin-card-meta";
     metaText.textContent = `新闻 ${Number(tag.item_tag_count || 0)} · 想法 ${Number(tag.trend_note_count || 0)}`;
 
+    const orderControls = document.createElement("div");
+    orderControls.className = "detail-tag-admin-order";
+
+    const dragHandle = document.createElement("button");
+    dragHandle.type = "button";
+    dragHandle.className = "detail-tag-admin-drag-handle";
+    dragHandle.textContent = "拖拽";
+    dragHandle.setAttribute("aria-label", `拖拽排序板块 ${tag.display_name || tag.key}`);
+    dragHandle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    dragHandle.addEventListener("pointerdown", (event) => startMarketTagDrag(event, tag.key));
+
+    const moveUpBtn = document.createElement("button");
+    moveUpBtn.type = "button";
+    moveUpBtn.className = "detail-tag-admin-order-btn";
+    moveUpBtn.textContent = "上移";
+    moveUpBtn.disabled = index === 0;
+    moveUpBtn.setAttribute("aria-label", `上移板块 ${tag.display_name || tag.key}`);
+    moveUpBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      moveUpBtn.disabled = true;
+      await moveMarketTagDefinition(tag.key, -1).catch(() => refreshTrendTagAdminState(tag.key));
+    });
+
+    const moveDownBtn = document.createElement("button");
+    moveDownBtn.type = "button";
+    moveDownBtn.className = "detail-tag-admin-order-btn";
+    moveDownBtn.textContent = "下移";
+    moveDownBtn.disabled = index === state.marketTagChoices.length - 1;
+    moveDownBtn.setAttribute("aria-label", `下移板块 ${tag.display_name || tag.key}`);
+    moveDownBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      moveDownBtn.disabled = true;
+      await moveMarketTagDefinition(tag.key, 1).catch(() => refreshTrendTagAdminState(tag.key));
+    });
+
     card.appendChild(title);
     card.appendChild(metaText);
-    grid.appendChild(card);
+
+    const appendDropIndicator = (position) => {
+      const indicator = document.createElement("div");
+      indicator.className = "detail-tag-admin-drop-indicator";
+      indicator.textContent = position === "before" ? "放到此板块前" : "放到此板块后";
+      item.appendChild(indicator);
+    };
+
+    if (tagAdminDragState?.dropTargetKey === tag.key && tagAdminDragState.dropPosition === "before") {
+      appendDropIndicator("before");
+    }
+    orderControls.appendChild(dragHandle);
+    orderControls.appendChild(moveUpBtn);
+    orderControls.appendChild(moveDownBtn);
+    item.appendChild(card);
+    item.appendChild(orderControls);
+    if (tagAdminDragState?.dropTargetKey === tag.key && tagAdminDragState.dropPosition === "after") {
+      appendDropIndicator("after");
+    }
+    grid.appendChild(item);
   });
 
   detailTagAdminList.appendChild(grid);
@@ -4167,6 +4398,9 @@ function renderTagAdminList() {
     try {
       await updateMarketTagDefinition(selectedTag.key, { display_name: nextName });
       await refreshTrendTagAdminState(selectedTag.key);
+      if (state.collection === "market_tags") {
+        await refreshMarketWorkbenchAfterTrendCompose({ preserveTagAdmin: true });
+      }
     } finally {
       renameInput.disabled = false;
     }
@@ -4220,6 +4454,9 @@ function renderTagAdminList() {
     try {
       await mergeMarketTagDefinition(selectedTag.key, targetKey);
       await refreshTrendTagAdminState(targetKey);
+      if (state.collection === "market_tags") {
+        await refreshMarketWorkbenchAfterTrendCompose({ preserveTagAdmin: true });
+      }
     } finally {
       mergeSelect.disabled = false;
     }
@@ -4255,6 +4492,9 @@ function renderTagAdminList() {
       if (!ok) return;
       await deleteMarketTagDefinition(selectedTag.key);
       await refreshTrendTagAdminState("");
+      if (state.collection === "market_tags") {
+        await refreshMarketWorkbenchAfterTrendCompose({ preserveTagAdmin: true });
+      }
     } finally {
       deleteBtn.disabled = false;
     }
@@ -4277,10 +4517,10 @@ async function refreshTrendTagAdminState(nextSelectedTagKey = state.selectedTagA
   renderTagAdminList();
 }
 
-async function refreshMarketWorkbenchAfterTrendCompose() {
+async function refreshMarketWorkbenchAfterTrendCompose({ preserveTagAdmin = false } = {}) {
   if (state.collection !== "market_tags") return;
   await fetchMarketTagDefinitions().catch(() => {});
-  resetList();
+  resetList({ preserveTagAdmin });
   removeMarketWorkbenchSummaryInline();
   const data = await fetchMarketWorkbenchPage(1);
   state.total = Number(data.total || 0);
@@ -4289,6 +4529,7 @@ async function refreshMarketWorkbenchAfterTrendCompose() {
   state.hasMore = !!data.has_more;
   state.marketWorkbenchSummary = data.summary || null;
   showListView();
+  updateMarketWorkbenchBar();
   renderMeta();
   (data.items || []).forEach((item) => {
     const row = item.entry_type === "trend_note" ? buildIdeaRow(item) : buildItemRow(item);
@@ -7834,7 +8075,8 @@ async function fetchSearchPage(page) {
   return res.json();
 }
 
-function resetList() {
+function resetList({ preserveTagAdmin = false } = {}) {
+  const preserveTagAdminView = preserveTagAdmin && state.tagAdminOpen;
   clearFeedKeyboardDetailTimer();
   exitFeedKeyboardMode();
   newsList.querySelectorAll(".news-item, .date-section, .market-summary-row, .daily-month-section").forEach((node) => node.remove());
@@ -7863,7 +8105,7 @@ function resetList() {
   state.selectedReviewId = null;
   state.currentReview = null;
   state.pendingReviewSource = null;
-  state.tagAdminOpen = false;
+  if (!preserveTagAdminView) state.tagAdminOpen = false;
   state.trendComposeOpen = false;
   state.dateCounts = new Map();
   state.feedUnreadCursor = null;
@@ -7871,8 +8113,10 @@ function resetList() {
   showListView();
   showTrackedView(false);
   syncSearchPageControls();
-  closeDetailOnMobile();
-  renderDetail(null);
+  if (!preserveTagAdminView) {
+    closeDetailOnMobile();
+    renderDetail(null);
+  }
   lastRenderedDateKey = null;
 }
 
@@ -9307,9 +9551,12 @@ if (detailTagCreateBtn) {
     if (!displayName) return;
     detailTagCreateBtn.disabled = true;
     try {
-      const payload = await createMarketTagDefinition(displayName);
+      const createdTag = await createMarketTagDefinition(displayName);
       detailTagCreateInput.value = "";
-      await refreshTrendTagAdminState(payload?.tag?.key || "");
+      await refreshTrendTagAdminState(createdTag?.key || "");
+      if (state.collection === "market_tags") {
+        await refreshMarketWorkbenchAfterTrendCompose({ preserveTagAdmin: true });
+      }
     } finally {
       detailTagCreateBtn.disabled = false;
     }

@@ -3254,6 +3254,68 @@ def test_market_tag_definitions_crud_and_dynamic_usage(tmp_path: Path, monkeypat
     assert historical_tag["tag"] == "大宏观"
 
 
+def test_market_tag_reorder_is_atomic_and_normalizes_after_delete_merge(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-06-02.md").write_text(
+        """## Reuters · World（1条）
+### [R1](https://www.reuters.com/world/r1)
+- 发布时间：2026-06-02 09:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    first = client.post("/api/market-tags", json={"display_name": "第一自定义"}).get_json()["tag"]
+    second = client.post("/api/market-tags", json={"display_name": "第二自定义"}).get_json()["tag"]
+    initial_keys = [tag["key"] for tag in client.get("/api/market-tags").get_json()["tags"]]
+    assert initial_keys[-2:] == [first["key"], second["key"]]
+
+    reordered_keys = [second["key"], *[key for key in initial_keys if key != second["key"]]]
+    reorder = client.post("/api/market-tags/reorder", json={"ordered_keys": reordered_keys})
+    assert reorder.status_code == 200
+    payload = reorder.get_json()
+    assert [tag["key"] for tag in payload["tags"]] == reordered_keys
+    assert [tag["sort_order"] for tag in payload["tags"]] == list(range(len(reordered_keys)))
+
+    persisted_keys = [tag["key"] for tag in client.get("/api/market-tags").get_json()["tags"]]
+    assert persisted_keys == reordered_keys
+
+    def assert_rejected(body, error):
+        before = [tag["key"] for tag in client.get("/api/market-tags").get_json()["tags"]]
+        res = client.post("/api/market-tags/reorder", json=body)
+        assert res.status_code == 400
+        assert res.get_json()["error"] == error
+        after = [tag["key"] for tag in client.get("/api/market-tags").get_json()["tags"]]
+        assert after == before
+
+    assert_rejected({"ordered_keys": [reordered_keys[0], reordered_keys[0], *reordered_keys[1:]]}, "duplicate_ordered_keys")
+    assert_rejected({"ordered_keys": [*reordered_keys, "missing-key"]}, "unknown_ordered_keys")
+    assert_rejected({"ordered_keys": reordered_keys[:-1]}, "missing_ordered_keys")
+
+    delete_res = client.delete(f"/api/market-tags/{first['key']}")
+    assert delete_res.status_code == 200
+    tags_after_delete = delete_res.get_json()["tags"]
+    assert all(tag["key"] != first["key"] for tag in tags_after_delete)
+    assert [tag["sort_order"] for tag in tags_after_delete] == list(range(len(tags_after_delete)))
+
+    third = client.post("/api/market-tags", json={"display_name": "第三自定义"}).get_json()["tag"]
+    merge_res = client.post(f"/api/market-tags/{third['key']}/merge", json={"target_key": second["key"]})
+    assert merge_res.status_code == 200
+    tags_after_merge = merge_res.get_json()["tags"]
+    assert all(tag["key"] != third["key"] for tag in tags_after_merge)
+    assert [tag["sort_order"] for tag in tags_after_merge] == list(range(len(tags_after_merge)))
+
+
 def test_market_tag_delete_removes_associations_and_blocks_default_reseed(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -4861,19 +4923,37 @@ def test_frontend_feed_source_restore_warns_with_unread_count():
     assert "window.confirm(`恢复显示“${label}”？将重新显示 ${unread} 条未读新闻。`)" in app_source
 
 
-def test_frontend_is_v2111_without_later_visual_experiments():
+def test_frontend_is_v2112_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.1.1" in app_source
-    assert "News Reader v2.1.1.1" in index_source
-    assert "/static/style.css?v=2.1.1.1" in index_source
-    assert "/static/app.js?v=2.1.1.1" in index_source
+    assert "News Reader v2.1.1.2" in app_source
+    assert "News Reader v2.1.1.2" in index_source
+    assert "/static/style.css?v=2.1.1.2" in index_source
+    assert "/static/app.js?v=2.1.1.2" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
+    assert '.news-item[data-read="1"] .title:not(.tone-important):not(.tone-bullish):not(.tone-bearish):not(.tone-mixed)' in style_source
+    assert 'state.collection === "tracked" ||' in app_source
+    assert 'state.collection !== "reviews" && state.collection !== "tracked"' in app_source
+    assert 'function reorderMarketTagDefinitions(orderedKeys)' in app_source
+    assert 'className = "detail-tag-admin-order-btn"' in app_source
+    assert 'function resetList({ preserveTagAdmin = false } = {})' in app_source
+    assert 'const preserveTagAdminView = preserveTagAdmin && state.tagAdminOpen' in app_source
+    assert 'refreshMarketWorkbenchAfterTrendCompose({ preserveTagAdmin: true })' in app_source
+    assert 'function startMarketTagDrag(event, tagKey)' in app_source
+    assert 'function finishMarketTagDrag(event)' in app_source
+    assert 'gridTemplateColumns' in app_source
+    assert 'dropPosition' in app_source
+    assert '放到此板块前' in app_source
+    assert '放到此板块后' in app_source
+    assert 'detail-tag-admin-drop-indicator' in app_source
+    assert 'detail-tag-admin-drag-handle' in app_source
+    assert 'touch-action: none' in style_source
+    assert '.detail-tag-admin-drop-indicator' in style_source
     assert "v2.1.0.10" not in app_source
     assert "v2.1.0.10" not in index_source
     assert "--navigation-surface" not in style_source
