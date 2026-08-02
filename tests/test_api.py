@@ -4914,25 +4914,36 @@ def test_frontend_keeps_failures_near_the_affected_workflow():
     assert ".detail-action-feedback" in style_source
 
 
-def test_frontend_feed_source_restore_warns_with_unread_count():
+def test_frontend_feed_source_visibility_uses_debounced_save_and_close_refresh():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
 
-    assert "const unread = Number(item.unread_count || 0);" in app_source
-    assert "input.checked && hidden && unread > 0" in app_source
-    assert "将重新显示 ${unread} 条未读新闻" in app_source
-    assert "window.confirm(`恢复显示“${label}”？将重新显示 ${unread} 条未读新闻。`)" in app_source
+    assert "const FEED_SOURCE_SAVE_DEBOUNCE_MS = 400;" in app_source
+    assert "scheduleFeedSourceVisibilitySave();" in app_source
+    assert "const nextHiddenSnapshot = Array.from(nextHidden);" in app_source
+    assert "syncRuntimeFeedHiddenSourceSubkeys(nextHiddenSnapshot);" in app_source
+    assert "feedSourceHiddenKey(nextHiddenSnapshot)" in app_source
+    assert "await flushFeedSourceVisibilitySave({ force: true })" in app_source
+    assert "await refreshFeedSourceVisibilityAfterClose()" in app_source
+    assert "信源设置已保存，关闭设置后刷新新闻流。" in app_source
+    assert "信源设置保存失败，已恢复原状态。" in app_source
+    assert "await loadSources();" not in app_source
+    assert "await refreshNavSummary().catch(() => {});" not in app_source.split("async function startFeedSourceVisibilitySave", 1)[1].split("async function openSettingsOverlay", 1)[0]
+    assert "window.confirm(`恢复显示“${label}”？将重新显示 ${unread} 条未读新闻。`)" not in app_source
+    assert "settingsFeedSourceSaveBtn" not in index_source
+    assert "保存信源设置" not in index_source
 
 
-def test_frontend_is_v2112_without_later_visual_experiments():
+def test_frontend_is_v2113_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.1.2" in app_source
-    assert "News Reader v2.1.1.2" in index_source
-    assert "/static/style.css?v=2.1.1.2" in index_source
-    assert "/static/app.js?v=2.1.1.2" in index_source
+    assert "News Reader v2.1.1.3" in app_source
+    assert "News Reader v2.1.1.3" in index_source
+    assert "/static/style.css?v=2.1.1.3" in index_source
+    assert "/static/app.js?v=2.1.1.3" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source

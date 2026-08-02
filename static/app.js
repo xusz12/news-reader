@@ -88,6 +88,13 @@ let state = {
   runtimeSettings: null,
   releaseNotes: [],
   settingsFeedHiddenDraft: null,
+  settingsFeedHiddenSaved: null,
+  settingsFeedSaveTimer: null,
+  settingsFeedSavePromise: null,
+  settingsFeedSaveDirty: false,
+  settingsFeedRefreshBaseline: "",
+  settingsFeedRefreshNeeded: false,
+  settingsClosing: false,
   settingsMessage: "",
   settingsMessageTone: "muted",
 };
@@ -107,6 +114,7 @@ const sourceIconAliases = {
   twitter: "x",
 };
 const SETTINGS_CUSTOM_MODEL_VALUE = "__custom__";
+const FEED_SOURCE_SAVE_DEBOUNCE_MS = 400;
 const TRACKED_SYSTEM_DEFAULT_RULE_PARAMS = {
   title_weight: 1,
   note_weight: 1,
@@ -420,7 +428,6 @@ const settingsPiChatProviderField = document.getElementById("settingsPiChatProvi
 const settingsPiChatModelField = document.getElementById("settingsPiChatModelField");
 const settingsChatArchiveNote = document.getElementById("settingsChatArchiveNote");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
-const settingsFeedSourceSaveBtn = document.getElementById("settingsFeedSourceSaveBtn");
 const settingsFeedSourceSubkeys = document.getElementById("settingsFeedSourceSubkeys");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
@@ -1698,15 +1705,75 @@ function renderReleaseNotes() {
   });
 }
 
+function normalizeFeedHiddenSourceSubkeys(values) {
+  return Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .filter((value) => typeof value === "string" && value.trim())
+        .map((value) => value.trim()),
+    ),
+  ).sort();
+}
+
+function feedSourceHiddenKey(values) {
+  return normalizeFeedHiddenSourceSubkeys(values).join("|");
+}
+
+function savedFeedHiddenSourceSubkeys() {
+  if (Array.isArray(state.settingsFeedHiddenSaved)) {
+    return normalizeFeedHiddenSourceSubkeys(state.settingsFeedHiddenSaved);
+  }
+  return normalizeFeedHiddenSourceSubkeys(state.runtimeSettings?.feed?.hidden_source_subkeys);
+}
+
+function syncRuntimeFeedHiddenSourceSubkeys(values) {
+  state.runtimeSettings = state.runtimeSettings || {};
+  state.runtimeSettings.feed = state.runtimeSettings.feed || {};
+  state.runtimeSettings.feed.hidden_source_subkeys = normalizeFeedHiddenSourceSubkeys(values);
+}
+
+function resetFeedSourceVisibilityDraftState(values) {
+  const saved = normalizeFeedHiddenSourceSubkeys(
+    Array.isArray(values) ? values : state.runtimeSettings?.feed?.hidden_source_subkeys,
+  );
+  state.settingsFeedHiddenSaved = saved;
+  state.settingsFeedHiddenDraft = null;
+  state.settingsFeedSaveDirty = false;
+  state.settingsFeedRefreshBaseline = feedSourceHiddenKey(saved);
+  state.settingsFeedRefreshNeeded = false;
+}
+
+function updateFeedSourceRefreshState() {
+  state.settingsFeedRefreshNeeded =
+    state.settingsFeedRefreshBaseline !== feedSourceHiddenKey(savedFeedHiddenSourceSubkeys());
+}
+
 function feedHiddenDraftSet() {
   if (!state.settingsFeedHiddenDraft) {
-    const snapshotHidden = state.runtimeSettings?.feed_source_subkeys?.hidden_source_subkeys;
-    const saved = Array.isArray(snapshotHidden)
-      ? snapshotHidden
-      : (state.runtimeSettings?.feed?.hidden_source_subkeys || []);
-    state.settingsFeedHiddenDraft = new Set(saved);
+    state.settingsFeedHiddenDraft = new Set(savedFeedHiddenSourceSubkeys());
   }
   return state.settingsFeedHiddenDraft;
+}
+
+function syncFeedSourceSettingRows() {
+  if (!settingsFeedSourceSubkeys) return;
+  const hiddenDraft = feedHiddenDraftSet();
+  settingsFeedSourceSubkeys.querySelectorAll(".settings-feed-source-row").forEach((row) => {
+    const sourceKey = row.dataset.sourceKey || "";
+    const input = row.querySelector('input[type="checkbox"]');
+    const meta = row.querySelector(".settings-feed-source-meta");
+    if (input) {
+      input.checked = !hiddenDraft.has(sourceKey);
+      input.disabled = state.settingsLoading || state.settingsSaving || state.settingsClosing;
+    }
+    if (meta) {
+      const unread = Number(row.dataset.unreadCount || 0);
+      const count = Number(row.dataset.count || 0);
+      meta.textContent = hiddenDraft.has(sourceKey)
+        ? `已关闭 · 隐藏未读 ${unread} 条 · 共 ${count} 条`
+        : `显示中 · 未读 ${unread} 条 · 共 ${count} 条`;
+    }
+  });
 }
 
 function renderFeedSourceSettings() {
@@ -1735,26 +1802,31 @@ function renderFeedSourceSettings() {
     (group.items || []).forEach((item) => {
       const row = document.createElement("label");
       row.className = "settings-feed-source-row";
+      row.dataset.sourceKey = item.key || "";
+      row.dataset.unreadCount = String(Number(item.unread_count || 0));
+      row.dataset.count = String(Number(item.count || 0));
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = !hiddenDraft.has(item.key);
-      input.disabled = state.settingsSaving;
+      input.disabled = state.settingsLoading || state.settingsSaving || state.settingsClosing;
       const hidden = hiddenDraft.has(item.key);
       const unread = Number(item.unread_count || 0);
       input.addEventListener("change", () => {
-        if (input.checked && hidden && unread > 0) {
-          const label = item.label || item.key || "这个二级信源";
-          const ok = window.confirm(`恢复显示“${label}”？将重新显示 ${unread} 条未读新闻。`);
-          if (!ok) {
-            input.checked = false;
-            return;
-          }
-        }
-        if (input.checked) hiddenDraft.delete(item.key);
-        else hiddenDraft.add(item.key);
-        state.runtimeSettings.feed = state.runtimeSettings.feed || {};
-        state.runtimeSettings.feed.hidden_source_subkeys = Array.from(hiddenDraft);
-        renderFeedSourceSettings();
+        const nextHidden = new Set(feedHiddenDraftSet());
+        if (input.checked) nextHidden.delete(item.key);
+        else nextHidden.add(item.key);
+        const nextHiddenSnapshot = Array.from(nextHidden);
+        state.settingsFeedHiddenDraft = new Set(nextHiddenSnapshot);
+        syncRuntimeFeedHiddenSourceSubkeys(nextHiddenSnapshot);
+        state.settingsFeedSaveDirty =
+          feedSourceHiddenKey(nextHiddenSnapshot) !== feedSourceHiddenKey(savedFeedHiddenSourceSubkeys());
+        state.settingsMessage = state.settingsFeedSaveDirty
+          ? "信源更改待保存，关闭设置后刷新新闻流。"
+          : "信源更改已恢复到最近保存状态。";
+        state.settingsMessageTone = state.settingsFeedSaveDirty ? "pending" : "ready";
+        syncFeedSourceSettingRows();
+        renderSettingsStatus();
+        scheduleFeedSourceVisibilitySave();
       });
       const body = document.createElement("span");
       body.className = "settings-feed-source-row-body";
@@ -1774,6 +1846,7 @@ function renderFeedSourceSettings() {
     });
     settingsFeedSourceSubkeys.appendChild(card);
   });
+  syncFeedSourceSettingRows();
 }
 
 function populateModelSelect(select, customInput, catalog, currentValue) {
@@ -1977,7 +2050,11 @@ function renderSettingsOverlay() {
   renderFeedSourceSettings();
   populateSettingsForm();
   if (settingsSaveBtn) settingsSaveBtn.disabled = state.settingsSaving;
-  if (settingsFeedSourceSaveBtn) settingsFeedSourceSaveBtn.disabled = state.settingsSaving;
+  renderSettingsStatus();
+}
+
+function renderSettingsStatus() {
+  if (!settingsStatus) return;
   const statusText = state.settingsLoading
     ? "读取中..."
     : state.settingsSaving
@@ -1988,11 +2065,154 @@ function renderSettingsOverlay() {
   settingsStatus.className = `detail-status ${tone}${statusText ? "" : " hidden"}`;
 }
 
+function runtimeSettingsSavePayload({ hiddenSourceSubkeys = savedFeedHiddenSourceSubkeys() } = {}) {
+  const settings = state.runtimeSettings || {};
+  const llm = settings.llm || {};
+  return {
+    llm: {
+      translation: {
+        provider: llm.translation?.provider || "deepseek",
+        model: llm.translation?.model || "",
+      },
+      chat: {
+        provider: llm.chat?.provider || "codex",
+      },
+      codex_chat: {
+        model: llm.codex_chat?.model || "",
+      },
+      pi_chat: {
+        provider: llm.pi_chat?.provider || "ollama",
+        model: llm.pi_chat?.model || "",
+      },
+    },
+    feed: {
+      hidden_source_subkeys: hiddenSourceSubkeys,
+    },
+  };
+}
+
+function clearFeedSourceVisibilitySaveTimer() {
+  if (state.settingsFeedSaveTimer) {
+    window.clearTimeout(state.settingsFeedSaveTimer);
+    state.settingsFeedSaveTimer = null;
+  }
+}
+
+function scheduleFeedSourceVisibilitySave(delay = FEED_SOURCE_SAVE_DEBOUNCE_MS) {
+  clearFeedSourceVisibilitySaveTimer();
+  if (!state.settingsFeedSaveDirty) return;
+  state.settingsFeedSaveTimer = window.setTimeout(() => {
+    state.settingsFeedSaveTimer = null;
+    void flushFeedSourceVisibilitySave();
+  }, delay);
+}
+
+async function startFeedSourceVisibilitySave(targetHiddenSourceSubkeys, savedBeforeRequest) {
+  const target = normalizeFeedHiddenSourceSubkeys(targetHiddenSourceSubkeys);
+  const targetKey = feedSourceHiddenKey(target);
+  const savedBefore = normalizeFeedHiddenSourceSubkeys(savedBeforeRequest);
+  let saveSucceeded = false;
+  state.settingsFeedSavePromise = (async () => {
+    state.settingsMessage = "信源设置保存中...";
+    state.settingsMessageTone = "pending";
+    renderSettingsStatus();
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(runtimeSettingsSavePayload({ hiddenSourceSubkeys: target })),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
+
+      const draftAtResponse = normalizeFeedHiddenSourceSubkeys(Array.from(feedHiddenDraftSet()));
+      const persisted = normalizeFeedHiddenSourceSubkeys(data.feed?.hidden_source_subkeys || target);
+      state.runtimeSettings = data;
+      state.settingsFeedHiddenSaved = persisted;
+      if (feedSourceHiddenKey(draftAtResponse) === targetKey) {
+        state.settingsFeedHiddenDraft = new Set(persisted);
+        syncRuntimeFeedHiddenSourceSubkeys(persisted);
+      } else {
+        state.settingsFeedHiddenDraft = new Set(draftAtResponse);
+        syncRuntimeFeedHiddenSourceSubkeys(draftAtResponse);
+      }
+      state.settingsFeedSaveDirty = feedSourceHiddenKey(draftAtResponse) !== feedSourceHiddenKey(persisted);
+      updateFeedSourceRefreshState();
+      state.settingsMessage = state.settingsFeedSaveDirty
+        ? "信源更改待保存，关闭设置后刷新新闻流。"
+        : "信源设置已保存，关闭设置后刷新新闻流。";
+      state.settingsMessageTone = state.settingsFeedSaveDirty ? "pending" : "ready";
+      saveSucceeded = true;
+      return true;
+    } catch {
+      state.settingsFeedHiddenSaved = savedBefore;
+      state.settingsFeedHiddenDraft = new Set(savedBefore);
+      syncRuntimeFeedHiddenSourceSubkeys(savedBefore);
+      state.settingsFeedSaveDirty = false;
+      clearFeedSourceVisibilitySaveTimer();
+      state.settingsMessage = "信源设置保存失败，已恢复原状态。";
+      state.settingsMessageTone = "failed";
+      return false;
+    } finally {
+      state.settingsFeedSavePromise = null;
+      syncFeedSourceSettingRows();
+      renderSettingsStatus();
+      if (saveSucceeded && state.settingsFeedSaveDirty) {
+        scheduleFeedSourceVisibilitySave();
+      }
+    }
+  })();
+  return state.settingsFeedSavePromise;
+}
+
+async function flushFeedSourceVisibilitySave({ force = false } = {}) {
+  clearFeedSourceVisibilitySaveTimer();
+  if (state.settingsFeedSavePromise) {
+    const result = await state.settingsFeedSavePromise;
+    if (state.settingsFeedSaveDirty) {
+      if (force) return flushFeedSourceVisibilitySave({ force: true });
+      scheduleFeedSourceVisibilitySave();
+    }
+    return result;
+  }
+  if (!state.settingsFeedSaveDirty) return true;
+
+  const target = normalizeFeedHiddenSourceSubkeys(Array.from(feedHiddenDraftSet()));
+  const saved = savedFeedHiddenSourceSubkeys();
+  if (feedSourceHiddenKey(target) === feedSourceHiddenKey(saved)) {
+    state.settingsFeedSaveDirty = false;
+    return true;
+  }
+  return startFeedSourceVisibilitySave(target, saved);
+}
+
+async function refreshFeedSourceVisibilityAfterClose() {
+  if (!state.settingsFeedRefreshNeeded) return true;
+  try {
+    if (state.collection === "feed") {
+      await loadFirstPage();
+    } else {
+      await refreshNavSummary();
+    }
+    state.settingsFeedRefreshBaseline = feedSourceHiddenKey(savedFeedHiddenSourceSubkeys());
+    state.settingsFeedRefreshNeeded = false;
+    return true;
+  } catch {
+    state.settingsMessage = "信源已保存，但刷新新闻流失败，请保持设置打开后重试。";
+    state.settingsMessageTone = "failed";
+    return false;
+  }
+}
+
 async function openSettingsOverlay() {
   state.settingsOpen = true;
+  state.settingsClosing = false;
   state.settingsLoading = true;
   state.settingsMessage = "";
   state.settingsMessageTone = "muted";
+  clearFeedSourceVisibilitySaveTimer();
+  state.settingsFeedHiddenSaved = null;
+  state.settingsFeedSaveDirty = false;
   state.settingsFeedHiddenDraft = null;
   renderSettingsOverlay();
   closeErrorStatsPanel();
@@ -2000,7 +2220,7 @@ async function openSettingsOverlay() {
     const [runtimeSettings, releaseNotes] = await Promise.all([fetchRuntimeSettings(), fetchReleaseNotes()]);
     state.runtimeSettings = runtimeSettings;
     state.releaseNotes = releaseNotes;
-    state.settingsFeedHiddenDraft = null;
+    resetFeedSourceVisibilityDraftState(runtimeSettings?.feed?.hidden_source_subkeys);
   } catch {
     state.settingsMessage = "读取设置失败，请稍后重试。";
     state.settingsMessageTone = "failed";
@@ -2010,10 +2230,31 @@ async function openSettingsOverlay() {
   }
 }
 
-function closeSettingsOverlay() {
+async function closeSettingsOverlay() {
+  if (!state.settingsOpen || state.settingsClosing || state.settingsSaving) return false;
+  state.settingsClosing = true;
+  syncFeedSourceSettingRows();
+  renderSettingsStatus();
+  const saved = await flushFeedSourceVisibilitySave({ force: true });
+  if (!saved) {
+    state.settingsClosing = false;
+    syncFeedSourceSettingRows();
+    renderSettingsStatus();
+    return false;
+  }
+  const refreshed = await refreshFeedSourceVisibilityAfterClose();
+  if (!refreshed) {
+    state.settingsClosing = false;
+    syncFeedSourceSettingRows();
+    renderSettingsStatus();
+    return false;
+  }
   state.settingsOpen = false;
+  state.settingsClosing = false;
   state.settingsSecretEditorProvider = "";
+  state.settingsFeedHiddenDraft = null;
   renderSettingsOverlay();
+  return true;
 }
 
 async function saveRuntimeSettings() {
@@ -2023,36 +2264,22 @@ async function saveRuntimeSettings() {
   const draftCodexChatModel = readModelSetting(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
   const draftPiChatProvider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
   const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
-  const draftHiddenSourceSubkeys = Array.from(feedHiddenDraftSet());
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
+    const feedSourceSaveOk = await flushFeedSourceVisibilitySave({ force: true });
+    if (!feedSourceSaveOk) return;
     const previousProvider = state.runtimeSettings?.llm?.chat?.provider || "codex";
     const previousCodexModel = state.runtimeSettings?.llm?.codex_chat?.model || "";
     const previousPiProvider = state.runtimeSettings?.llm?.pi_chat?.provider || "";
     const previousPiModel = state.runtimeSettings?.llm?.pi_chat?.model || "";
-    const previousHiddenSourceSubkeys = (state.runtimeSettings?.feed?.hidden_source_subkeys || []).slice().sort().join("|");
-    const payload = {
-      llm: {
-        translation: {
-          provider: draftTranslationProvider,
-          model: draftTranslationModel,
-        },
-        chat: {
-          provider: draftChatProvider,
-        },
-        codex_chat: {
-          model: draftCodexChatModel,
-        },
-        pi_chat: {
-          provider: draftPiChatProvider,
-          model: draftPiChatModel,
-        },
-      },
-      feed: {
-        hidden_source_subkeys: draftHiddenSourceSubkeys,
-      },
-    };
+    const payload = runtimeSettingsSavePayload({ hiddenSourceSubkeys: savedFeedHiddenSourceSubkeys() });
+    payload.llm.translation.provider = draftTranslationProvider;
+    payload.llm.translation.model = draftTranslationModel;
+    payload.llm.chat.provider = draftChatProvider;
+    payload.llm.codex_chat.model = draftCodexChatModel;
+    payload.llm.pi_chat.provider = draftPiChatProvider;
+    payload.llm.pi_chat.model = draftPiChatModel;
     const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -2061,13 +2288,15 @@ async function saveRuntimeSettings() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
     state.runtimeSettings = data;
+    state.settingsFeedHiddenSaved = normalizeFeedHiddenSourceSubkeys(data.feed?.hidden_source_subkeys);
+    state.settingsFeedHiddenDraft = null;
+    state.settingsFeedSaveDirty = false;
+    updateFeedSourceRefreshState();
     const currentProvider = data.llm?.chat?.provider || "codex";
     const currentCodexModel = data.llm?.codex_chat?.model || "";
     const currentPiProvider = data.llm?.pi_chat?.provider || "";
     const currentPiModel = data.llm?.pi_chat?.model || "";
     const providerChanged = currentProvider !== previousProvider;
-    const currentHiddenSourceSubkeys = (data.feed?.hidden_source_subkeys || []).slice().sort().join("|");
-    const feedSourceVisibilityChanged = currentHiddenSourceSubkeys !== previousHiddenSourceSubkeys;
     const modelChanged = currentProvider === "codex"
       ? currentCodexModel !== previousCodexModel
       : (currentPiModel !== previousPiModel || currentPiProvider !== previousPiProvider);
@@ -2077,14 +2306,6 @@ async function saveRuntimeSettings() {
       state.detailChatModel = "";
       state.detailChatMessages = [];
       state.detailChatStatus = `${currentProvider === "pi" ? "Pi" : "Codex"} chat 配置已切换，当前临时对话已清空。`;
-    }
-    state.settingsFeedHiddenDraft = null;
-    if (feedSourceVisibilityChanged) {
-      await refreshNavSummary().catch(() => {});
-    }
-    if (feedSourceVisibilityChanged && state.collection === "feed") {
-      await loadSources();
-      await loadFirstPage();
     }
     state.settingsMessage = "保存成功。新请求通常立即生效；终验前建议重启 Flask。";
     state.settingsMessageTone = "ready";
@@ -3134,7 +3355,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.1.2";
+  version.textContent = "News Reader v2.1.1.3";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -9021,12 +9242,6 @@ if (settingsCloseBtn) {
 
 if (settingsSaveBtn) {
   settingsSaveBtn.addEventListener("click", async () => {
-    await saveRuntimeSettings();
-  });
-}
-
-if (settingsFeedSourceSaveBtn) {
-  settingsFeedSourceSaveBtn.addEventListener("click", async () => {
     await saveRuntimeSettings();
   });
 }
