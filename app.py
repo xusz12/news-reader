@@ -138,6 +138,9 @@ MARKET_TAG_SUMMARY_STATUSES = {"success", "failed"}
 TRACKED_DAILY_SUMMARY_VERSION = "v1.9.8.5"
 TRACKED_RULE_DRAFT_VERSION = "v1.9.8.6"
 MARKET_TAG_SUMMARY_VERSION = "v1.9.8.9"
+ARTICLE_HIGHLIGHT_BODY_KIND = "ai_zh"
+ARTICLE_HIGHLIGHT_CONTEXT_CHARS = 48
+ARTICLE_HIGHLIGHT_UNAVAILABLE_AI_STATUSES = {"pending", "running", "failed"}
 TRACKED_RULE_FIELD_SCORES = {
     "title": {"strong": 8, "core": 4, "context": 2},
     "note": {"strong": 6, "core": 3, "context": 2},
@@ -732,6 +735,129 @@ def build_note_preview(note_text: str | None, limit: int = 120) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def article_highlight_content_hash(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def article_highlight_context(body: str, start_offset: int, end_offset: int) -> tuple[str, str]:
+    prefix = body[max(0, start_offset - ARTICLE_HIGHLIGHT_CONTEXT_CHARS) : start_offset]
+    suffix = body[end_offset : end_offset + ARTICLE_HIGHLIGHT_CONTEXT_CHARS]
+    return prefix, suffix
+
+
+def load_article_highlight_body(conn: sqlite3.Connection, url: str) -> tuple[str | None, str | None]:
+    row = conn.execute(
+        """
+        SELECT aa.body_zh, aj.status
+        FROM article_ai aa
+        LEFT JOIN ai_jobs aj ON aj.url = aa.url
+        WHERE aa.url=?
+        """,
+        (url,),
+    ).fetchone()
+    if not row or not isinstance(row["body_zh"], str) or not row["body_zh"].strip():
+        return None, "body_not_ready"
+    if row["status"] in ARTICLE_HIGHLIGHT_UNAVAILABLE_AI_STATUSES:
+        return None, "body_not_ready"
+    return row["body_zh"], None
+
+
+def find_article_highlight_reanchor_candidates(
+    body: str,
+    selected_text: str,
+    prefix: str,
+    suffix: str,
+) -> list[tuple[int, int]]:
+    candidates: list[tuple[int, int]] = []
+    search_from = 0
+    while True:
+        start_offset = body.find(selected_text, search_from)
+        if start_offset < 0:
+            break
+        end_offset = start_offset + len(selected_text)
+        prefix_matches = not prefix or body[max(0, start_offset - len(prefix)) : start_offset] == prefix
+        suffix_matches = not suffix or body[end_offset : end_offset + len(suffix)] == suffix
+        if prefix_matches and suffix_matches:
+            candidates.append((start_offset, end_offset))
+        search_from = start_offset + 1
+    return candidates
+
+
+def resolve_article_highlight_row(row: sqlite3.Row, body: str, current_hash: str) -> dict:
+    payload = dict(row)
+    start_offset = int(row["start_offset"])
+    end_offset = int(row["end_offset"])
+    selected_text = row["selected_text"]
+    resolved: tuple[int, int] | None = None
+    if (
+        row["content_hash"] == current_hash
+        and 0 <= start_offset < end_offset <= len(body)
+        and body[start_offset:end_offset] == selected_text
+    ):
+        resolved = (start_offset, end_offset)
+    elif row["content_hash"] != current_hash:
+        candidates = find_article_highlight_reanchor_candidates(
+            body,
+            selected_text,
+            row["prefix"] or "",
+            row["suffix"] or "",
+        )
+        if len(candidates) == 1:
+            resolved = candidates[0]
+
+    if resolved:
+        payload["status"] = "active"
+        payload["resolved_start_offset"] = resolved[0]
+        payload["resolved_end_offset"] = resolved[1]
+    else:
+        payload["status"] = "orphan"
+        payload["resolved_start_offset"] = None
+        payload["resolved_end_offset"] = None
+    return payload
+
+
+def load_article_highlights_payload(conn: sqlite3.Connection, url: str) -> dict:
+    rows = conn.execute(
+        """
+        SELECT id, url, body_kind, content_hash, start_offset, end_offset,
+               selected_text, prefix, suffix, created_at, updated_at
+        FROM article_highlights
+        WHERE url=? AND body_kind=?
+        ORDER BY start_offset ASC, id ASC
+        """,
+        (url, ARTICLE_HIGHLIGHT_BODY_KIND),
+    ).fetchall()
+    body, _ = load_article_highlight_body(conn, url)
+    if body is None:
+        return {
+            "body_ready": False,
+            "body_kind": ARTICLE_HIGHLIGHT_BODY_KIND,
+            "content_hash": None,
+            "highlights": [],
+            "highlight_summary": {
+                "total": len(rows),
+                "active": 0,
+                "orphan": 0,
+            },
+        }
+
+    current_hash = article_highlight_content_hash(body)
+    highlights = [resolve_article_highlight_row(row, body, current_hash) for row in rows]
+    active_count = sum(1 for highlight in highlights if highlight["status"] == "active")
+    orphan_count = len(highlights) - active_count
+    return {
+        "body_ready": True,
+        "body_kind": ARTICLE_HIGHLIGHT_BODY_KIND,
+        "content_hash": current_hash,
+        "highlights": highlights,
+        "highlight_summary": {
+            "total": len(highlights),
+            "active": active_count,
+            "orphan": orphan_count,
+        },
+    }
 
 
 def normalize_keyword_list(value: object) -> list[str]:
@@ -7249,6 +7375,13 @@ def api_news_detail(item_id: str):
         market_tags: list[dict] = []
         tracked_topic_choices: list[dict] = []
         reminders: list[dict] = []
+        highlight_payload = {
+            "body_ready": False,
+            "body_kind": ARTICLE_HIGHLIGHT_BODY_KIND,
+            "content_hash": None,
+            "highlights": [],
+            "highlight_summary": {"total": 0, "active": 0, "orphan": 0},
+        }
         reminder_summary = {
             "active_total": 0,
             "due_total": 0,
@@ -7294,6 +7427,7 @@ def api_news_detail(item_id: str):
                 (url,),
             ).fetchone()
             market_tags = load_market_tags_map(conn, [url]).get(url, [])
+            highlight_payload = load_article_highlights_payload(conn, url)
 
             detail_out = dict(detail) if detail else None
             if detail_out and (_is_twitter_url(url) or item["source_type"] == "twitter"):
@@ -7332,6 +7466,11 @@ def api_news_detail(item_id: str):
             "ai": dict(ai) if ai else None,
             "has_note": 1 if note_row else 0,
             "note": (dict(note_row) if note_row else None),
+            "highlights": highlight_payload["highlights"],
+            "highlight_summary": highlight_payload["highlight_summary"],
+            "highlight_body_ready": highlight_payload["body_ready"],
+            "highlight_body_kind": highlight_payload["body_kind"],
+            "highlight_content_hash": highlight_payload["content_hash"],
             "market_tags": market_tags,
             "has_market_tags": 1 if market_tags else 0,
             "market_tag_choices": market_tag_choices,
@@ -7348,6 +7487,151 @@ def api_news_detail(item_id: str):
                 market_tags=market_tags,
             ),
             "chat_providers": chat_provider_catalog(),
+        }
+    )
+
+
+@app.get("/api/news/<item_id>/highlights")
+def api_news_highlights_list(item_id: str):
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        payload = load_article_highlights_payload(conn, url)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "item_id": item_id, **payload})
+
+
+@app.post("/api/news/<item_id>/highlights")
+def api_news_highlight_create(item_id: str):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "invalid_payload"}), 400
+    body_kind = body.get("body_kind", ARTICLE_HIGHLIGHT_BODY_KIND)
+    if body_kind != ARTICLE_HIGHLIGHT_BODY_KIND:
+        return jsonify({"ok": False, "error": "invalid_body_kind"}), 400
+    selected_text = body.get("selected_text")
+    if not isinstance(selected_text, str) or not selected_text.strip():
+        return jsonify({"ok": False, "error": "empty_selected_text"}), 400
+    start_offset = body.get("start_offset")
+    end_offset = body.get("end_offset")
+    if (
+        isinstance(start_offset, bool)
+        or isinstance(end_offset, bool)
+        or not isinstance(start_offset, int)
+        or not isinstance(end_offset, int)
+        or start_offset < 0
+        or end_offset <= start_offset
+    ):
+        return jsonify({"ok": False, "error": "invalid_offset"}), 400
+
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        article_body, body_error = load_article_highlight_body(conn, url)
+        if article_body is None:
+            return jsonify({"ok": False, "error": body_error or "body_not_ready"}), 409
+        if end_offset > len(article_body):
+            return jsonify({"ok": False, "error": "invalid_offset"}), 400
+        if article_body[start_offset:end_offset] != selected_text:
+            return jsonify({"ok": False, "error": "selected_text_mismatch"}), 400
+
+        current_payload = load_article_highlights_payload(conn, url)
+        for existing in current_payload["highlights"]:
+            if existing["status"] != "active":
+                continue
+            existing_start = existing["resolved_start_offset"]
+            existing_end = existing["resolved_end_offset"]
+            if start_offset < existing_end and end_offset > existing_start:
+                return jsonify({"ok": False, "error": "highlight_overlap"}), 409
+
+        content_hash = article_highlight_content_hash(article_body)
+        prefix, suffix = article_highlight_context(article_body, start_offset, end_offset)
+        ts = now_ts()
+        try:
+            with conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO article_highlights(
+                      url, body_kind, content_hash, start_offset, end_offset,
+                      selected_text, prefix, suffix, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        url,
+                        ARTICLE_HIGHLIGHT_BODY_KIND,
+                        content_hash,
+                        start_offset,
+                        end_offset,
+                        selected_text,
+                        prefix,
+                        suffix,
+                        ts,
+                        ts,
+                    ),
+                )
+                highlight_id = cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return jsonify({"ok": False, "error": "highlight_exists"}), 409
+
+        payload = load_article_highlights_payload(conn, url)
+        saved = next(
+            (highlight for highlight in payload["highlights"] if highlight["id"] == highlight_id),
+            None,
+        )
+    finally:
+        conn.close()
+
+    return (
+        jsonify(
+            {
+                "ok": True,
+                "item_id": item_id,
+                "highlight": saved,
+                **payload,
+            }
+        ),
+        201,
+    )
+
+
+@app.delete("/api/news/<item_id>/highlights/<int:highlight_id>")
+def api_news_highlight_delete(item_id: str, highlight_id: int):
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        existing = conn.execute(
+            "SELECT id FROM article_highlights WHERE id=? AND url=? AND body_kind=?",
+            (highlight_id, url, ARTICLE_HIGHLIGHT_BODY_KIND),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "highlight_not_found"}), 404
+        with conn:
+            conn.execute("DELETE FROM article_highlights WHERE id=? AND url=?", (highlight_id, url))
+        payload = load_article_highlights_payload(conn, url)
+    finally:
+        conn.close()
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "deleted_id": highlight_id,
+            **payload,
         }
     )
 

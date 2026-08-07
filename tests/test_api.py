@@ -4934,16 +4934,16 @@ def test_frontend_feed_source_visibility_uses_debounced_save_and_close_refresh()
     assert "保存信源设置" not in index_source
 
 
-def test_frontend_is_v2113_without_later_visual_experiments():
+def test_frontend_is_v2120_without_later_visual_experiments():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.1.3" in app_source
-    assert "News Reader v2.1.1.3" in index_source
-    assert "/static/style.css?v=2.1.1.3" in index_source
-    assert "/static/app.js?v=2.1.1.3" in index_source
+    assert "News Reader v2.1.2.0" in app_source
+    assert "News Reader v2.1.2.0" in index_source
+    assert "/static/style.css?v=2.1.2.0" in index_source
+    assert "/static/app.js?v=2.1.2.0" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -9384,6 +9384,216 @@ vm.runInContext(source, context, { filename: "static/app.js" });
 });
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年8月"
+    daily_dir.mkdir(parents=True)
+    first_url = "https://example.com/highlight-one"
+    second_url = "https://example.com/highlight-two"
+    (daily_dir / "dailyFreshNews_2026-08-07.md").write_text(
+        f"""## Reuters · World（2条）
+### [高亮新闻一]({first_url})
+- 发布时间：2026-08-07 09:00:00
+### [高亮新闻二]({second_url})
+- 发布时间：2026-08-07 08:00:00
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    items = client.get("/api/news?per=20&read_filter=all").get_json()["items"]
+    by_url = {item["url"]: item for item in items}
+    first = by_url[first_url]
+    second = by_url[second_url]
+    body = "第一句中文。\n第二句需要标记。\n第三句。"
+    ts = app_module.now_ts()
+    start = body.index("第二句需要标记。")
+    end = start + len("第二句需要标记。")
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO article_details(
+              url, source, title, author, published_at, content, content_length,
+              raw_json, fetched_at, updated_at
+            ) VALUES (?, 'Reuters', '高亮新闻一', '作者', '2026-08-07', ?, ?, '{}', ?, ?)
+            """,
+            (first_url, "English source body", len("English source body"), ts, ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_ai(
+              url, model, key_points_zh, conclusion_zh, body_zh, raw_json,
+              generated_at, updated_at
+            ) VALUES (?, 'test', '[]', '', ?, '{}', ?, ?)
+            """,
+            (first_url, body, ts, ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_jobs(url, status, attempts, finished_at, updated_at)
+            VALUES (?, 'success', 1, ?, ?)
+            """,
+            (first_url, ts, ts),
+        )
+        conn.commit()
+
+    detail = client.get(f"/api/news/{first['id']}/detail").get_json()
+    assert detail["highlight_body_ready"] is True
+    assert detail["highlights"] == []
+    assert detail["highlight_summary"] == {"active": 0, "orphan": 0, "total": 0}
+
+    created = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={
+            "body_kind": "ai_zh",
+            "start_offset": start,
+            "end_offset": end,
+            "selected_text": "第二句需要标记。",
+        },
+    )
+    assert created.status_code == 201
+    created_payload = created.get_json()
+    assert created_payload["highlight"]["status"] == "active"
+    highlight_id = created_payload["highlight"]["id"]
+    assert created_payload["highlight"]["content_hash"] == app_module.article_highlight_content_hash(body)
+
+    same_hash = client.get(f"/api/news/{first['id']}/highlights").get_json()
+    assert same_hash["highlights"][0]["resolved_start_offset"] == start
+    assert same_hash["highlights"][0]["resolved_end_offset"] == end
+
+    invalid_offset = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={"start_offset": -1, "end_offset": 2, "selected_text": "第一"},
+    )
+    assert invalid_offset.status_code == 400
+    assert invalid_offset.get_json()["error"] == "invalid_offset"
+    mismatch = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={"start_offset": start, "end_offset": end, "selected_text": "错误选区"},
+    )
+    assert mismatch.status_code == 400
+    assert mismatch.get_json()["error"] == "selected_text_mismatch"
+    overlap_text = body[start + 1 : end + 1]
+    overlap = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={
+            "start_offset": start + 1,
+            "end_offset": end + 1,
+            "selected_text": overlap_text,
+        },
+    )
+    assert overlap.status_code == 409
+    assert overlap.get_json()["error"] == "highlight_overlap"
+
+    not_ready = client.post(
+        f"/api/news/{second['id']}/highlights",
+        json={"start_offset": 0, "end_offset": 1, "selected_text": "高"},
+    )
+    assert not_ready.status_code == 409
+    assert not_ready.get_json()["error"] == "body_not_ready"
+    cross_news_delete = client.delete(f"/api/news/{second['id']}/highlights/{highlight_id}")
+    assert cross_news_delete.status_code == 404
+    assert cross_news_delete.get_json()["error"] == "highlight_not_found"
+
+    with app_module.db_conn() as conn:
+        conn.execute("SELECT body_zh FROM article_ai WHERE url=?", (first_url,)).fetchone()
+        original_ai = conn.execute("SELECT body_zh FROM article_ai WHERE url=?", (first_url,)).fetchone()["body_zh"]
+        original_detail = conn.execute("SELECT content FROM article_details WHERE url=?", (first_url,)).fetchone()["content"]
+        assert original_ai == body
+        assert original_detail == "English source body"
+
+    deleted = client.delete(f"/api/news/{first['id']}/highlights/{highlight_id}")
+    assert deleted.status_code == 200
+    assert deleted.get_json()["highlights"] == []
+
+    reanchor_body = "甲乙丙丁\n唯一句子\n收尾"
+    reanchor_start = reanchor_body.index("唯一句子")
+    reanchor_end = reanchor_start + len("唯一句子")
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE article_ai SET body_zh=?, updated_at=? WHERE url=?",
+            (reanchor_body, app_module.now_ts(), first_url),
+        )
+        conn.execute(
+            "UPDATE ai_jobs SET status='success', updated_at=? WHERE url=?",
+            (app_module.now_ts(), first_url),
+        )
+        conn.commit()
+    created = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={
+            "start_offset": reanchor_start,
+            "end_offset": reanchor_end,
+            "selected_text": "唯一句子",
+        },
+    )
+    assert created.status_code == 201
+    reanchor_id = created.get_json()["highlight"]["id"]
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE article_ai SET body_zh=?, updated_at=? WHERE url=?",
+            ("前缀\n" + reanchor_body + "\n后缀", app_module.now_ts(), first_url),
+        )
+        conn.commit()
+    reanchored = client.get(f"/api/news/{first['id']}/highlights").get_json()
+    assert reanchored["highlight_summary"] == {"active": 1, "orphan": 0, "total": 1}
+    assert reanchored["highlights"][0]["id"] == reanchor_id
+    assert reanchored["highlights"][0]["resolved_start_offset"] == len("前缀\n甲乙丙丁\n")
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE article_ai SET body_zh=?, updated_at=? WHERE url=?",
+            (
+                "甲乙丙丁\n唯一句子\n收尾\n甲乙丙丁\n唯一句子\n收尾",
+                app_module.now_ts(),
+                first_url,
+            ),
+        )
+        conn.commit()
+    ambiguous = client.get(f"/api/news/{first['id']}/highlights").get_json()
+    assert ambiguous["highlight_summary"] == {"active": 0, "orphan": 1, "total": 1}
+    assert ambiguous["highlights"][0]["status"] == "orphan"
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE ai_jobs SET status='running', updated_at=? WHERE url=?",
+            (app_module.now_ts(), first_url),
+        )
+        conn.commit()
+    pending = client.get(f"/api/news/{first['id']}/highlights").get_json()
+    assert pending["body_ready"] is False
+    assert pending["highlights"] == []
+
+
+def test_frontend_article_highlight_contract_and_version():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+    render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
+
+    assert "News Reader v2.1.2.0" in app_source
+    assert "News Reader v2.1.2.0" in index_source
+    assert "/static/style.css?v=2.1.2.0" in index_source
+    assert "/static/app.js?v=2.1.2.0" in index_source
+    assert 'id="detailHighlightPopover"' in index_source
+    assert 'id="detailHighlightActionBtn"' in index_source
+    assert "article-highlight" in app_source
+    assert "createElement(\"mark\")" in app_source
+    assert "contentEl.replaceChildren()" in app_source
+    assert "contentEl.innerHTML" not in render_source
+    assert "contenteditable" not in index_source.lower()
+    assert ".detail-content mark.article-highlight" in style_source
+    assert ".detail-highlight-popover" in style_source
 
 def test_review_timeline_criteria_empty_not_rendered():
     """Criteria must not render an empty '成立标准：' tag when criteria is blank."""

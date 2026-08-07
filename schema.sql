@@ -95,6 +95,27 @@ CREATE TABLE IF NOT EXISTS article_ai (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS article_highlights (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT NOT NULL,
+  body_kind TEXT NOT NULL DEFAULT 'ai_zh' CHECK (body_kind = 'ai_zh'),
+  content_hash TEXT NOT NULL,
+  start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
+  end_offset INTEGER NOT NULL CHECK (end_offset > start_offset),
+  selected_text TEXT NOT NULL CHECK (length(selected_text) > 0),
+  prefix TEXT NOT NULL DEFAULT '',
+  suffix TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (url, body_kind, content_hash, start_offset, end_offset)
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_highlights_url
+ON article_highlights(url, body_kind, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_article_highlights_content_hash
+ON article_highlights(url, body_kind, content_hash);
+
 CREATE TABLE IF NOT EXISTS reading_checkpoints (
   scope TEXT PRIMARY KEY,
   item_id TEXT,

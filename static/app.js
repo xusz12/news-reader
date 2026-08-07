@@ -79,6 +79,11 @@ let state = {
   detailChatStatus: "",
   detailChatSending: false,
   detailChatArchiving: false,
+  detailHighlightEligible: false,
+  detailHighlightBody: "",
+  detailHighlightRows: [],
+  detailHighlightAction: null,
+  detailHighlightBusy: false,
   settingsOpen: false,
   settingsLoading: false,
   settingsSaving: false,
@@ -471,6 +476,11 @@ const detailTrackEditorMeta = document.getElementById("detailTrackEditorMeta");
 const detailTrackTopicSelect = document.getElementById("detailTrackTopicSelect");
 const detailTrackSaveBtn = document.getElementById("detailTrackSaveBtn");
 const detailTrackCancelBtn = document.getElementById("detailTrackCancelBtn");
+const detailContent = document.getElementById("detailContent");
+const detailHighlightStatus = document.getElementById("detailHighlightStatus");
+const detailHighlightPopover = document.getElementById("detailHighlightPopover");
+const detailHighlightPopoverMessage = document.getElementById("detailHighlightPopoverMessage");
+const detailHighlightActionBtn = document.getElementById("detailHighlightActionBtn");
 
 let readObserver = null;
 let loadObserver = null;
@@ -3355,7 +3365,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.1.3";
+  version.textContent = "News Reader v2.1.2.0";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -6144,10 +6154,283 @@ async function openReminderCard(reminder) {
   openItemDetail(pseudoItem);
 }
 
+function detailHighlightCodePointLength(text) {
+  return Array.from(text || "").length;
+}
+
+function detailHighlightStringIndex(text, codePointOffset) {
+  if (!text || codePointOffset <= 0) return 0;
+  let stringIndex = 0;
+  let count = 0;
+  for (const character of text) {
+    if (count >= codePointOffset) break;
+    stringIndex += character.length;
+    count += 1;
+  }
+  return stringIndex;
+}
+
+function activeDetailHighlightRows() {
+  return (Array.isArray(state.detailHighlightRows) ? state.detailHighlightRows : [])
+    .filter((highlight) => (
+      highlight && highlight.status === "active" &&
+      Number.isInteger(highlight.resolved_start_offset) &&
+      Number.isInteger(highlight.resolved_end_offset) &&
+      highlight.resolved_end_offset > highlight.resolved_start_offset
+    ));
+}
+
+function hideDetailHighlightPopover() {
+  state.detailHighlightAction = null;
+  if (!detailHighlightPopover) return;
+  detailHighlightPopover.classList.add("hidden");
+  if (detailHighlightPopoverMessage) detailHighlightPopoverMessage.textContent = "";
+  if (detailHighlightActionBtn) {
+    detailHighlightActionBtn.textContent = "";
+    detailHighlightActionBtn.classList.remove("hidden");
+    detailHighlightActionBtn.disabled = false;
+  }
+}
+
+function resetDetailHighlightState() {
+  state.detailHighlightEligible = false;
+  state.detailHighlightBody = "";
+  state.detailHighlightRows = [];
+  hideDetailHighlightPopover();
+  if (detailHighlightStatus) {
+    detailHighlightStatus.textContent = "";
+    detailHighlightStatus.classList.add("hidden");
+  }
+}
+
+function positionDetailHighlightPopover(rect) {
+  if (!detailHighlightPopover || detailHighlightPopover.classList.contains("hidden")) return;
+  const width = detailHighlightPopover.offsetWidth || 180;
+  const height = detailHighlightPopover.offsetHeight || 34;
+  const maxLeft = Math.max(8, window.innerWidth - width - 8);
+  const left = Math.min(Math.max(8, rect.left), maxLeft);
+  const top = rect.top - height - 8 >= 8 ? rect.top - height - 8 : rect.bottom + 8;
+  detailHighlightPopover.style.left = `${left}px`;
+  detailHighlightPopover.style.top = `${Math.max(8, Math.min(top, window.innerHeight - height - 8))}px`;
+}
+
+function showDetailHighlightPopover({ rect, action, message, actionLabel = "" }) {
+  if (!detailHighlightPopover || !detailHighlightPopoverMessage || !detailHighlightActionBtn) return;
+  state.detailHighlightAction = action || null;
+  detailHighlightPopoverMessage.textContent = message || "";
+  detailHighlightActionBtn.textContent = actionLabel;
+  detailHighlightActionBtn.classList.toggle("hidden", !action);
+  detailHighlightActionBtn.disabled = false;
+  detailHighlightPopover.classList.remove("hidden");
+  const schedule = window.requestAnimationFrame || ((callback) => window.setTimeout(callback, 0));
+  schedule(() => positionDetailHighlightPopover(rect));
+}
+
+function renderDetailHighlightText(contentEl, body, highlights) {
+  if (!contentEl) return;
+  contentEl.replaceChildren();
+  const ordered = activeDetailHighlightRows()
+    .sort((left, right) => left.resolved_start_offset - right.resolved_start_offset || left.id - right.id);
+  let cursor = 0;
+  for (const highlight of ordered) {
+    const start = detailHighlightStringIndex(body, highlight.resolved_start_offset);
+    const end = detailHighlightStringIndex(body, highlight.resolved_end_offset);
+    if (start < cursor || end <= start || end > body.length) continue;
+    if (start > cursor) contentEl.appendChild(document.createTextNode(body.slice(cursor, start)));
+    const mark = document.createElement("mark");
+    mark.className = "article-highlight";
+    mark.dataset.highlightId = String(highlight.id);
+    mark.setAttribute("title", "点击后取消高亮");
+    mark.appendChild(document.createTextNode(body.slice(start, end)));
+    contentEl.appendChild(mark);
+    cursor = end;
+  }
+  if (cursor < body.length) contentEl.appendChild(document.createTextNode(body.slice(cursor)));
+  contentEl.classList.remove("hidden");
+  const orphanCount = (Array.isArray(highlights) ? highlights : [])
+    .filter((highlight) => highlight?.status === "orphan").length;
+  if (detailHighlightStatus) {
+    detailHighlightStatus.textContent = orphanCount > 0 ? `有 ${orphanCount} 条高亮待重新定位` : "";
+    detailHighlightStatus.classList.toggle("hidden", orphanCount === 0);
+  }
+}
+
+function detailHighlightRowsKey(highlights) {
+  return JSON.stringify((Array.isArray(highlights) ? highlights : []).map((highlight) => ({
+    id: highlight?.id,
+    status: highlight?.status,
+    start: highlight?.resolved_start_offset,
+    end: highlight?.resolved_end_offset,
+  })));
+}
+
+function activateDetailHighlightBody(contentEl, body, highlights) {
+  const wasEligible = state.detailHighlightEligible;
+  const previousBody = state.detailHighlightBody;
+  const previousRows = state.detailHighlightRows;
+  state.detailHighlightEligible = typeof body === "string" && !!body.trim();
+  state.detailHighlightBody = state.detailHighlightEligible ? body : "";
+  const nextRows = Array.isArray(highlights) ? highlights : [];
+  if (!state.detailHighlightEligible) {
+    state.detailHighlightRows = nextRows;
+    resetDetailHighlightState();
+    contentEl.textContent = body || "";
+    contentEl.classList.toggle("hidden", !body);
+    return;
+  }
+  const keepRenderedBody = (
+    wasEligible &&
+    previousBody === body &&
+    contentEl.textContent === body &&
+    detailHighlightRowsKey(previousRows) === detailHighlightRowsKey(nextRows)
+  );
+  state.detailHighlightRows = nextRows;
+  if (keepRenderedBody) {
+    const orphanCount = nextRows.filter((highlight) => highlight?.status === "orphan").length;
+    if (detailHighlightStatus) {
+      detailHighlightStatus.textContent = orphanCount > 0 ? `有 ${orphanCount} 条高亮待重新定位` : "";
+      detailHighlightStatus.classList.toggle("hidden", orphanCount === 0);
+    }
+    contentEl.classList.remove("hidden");
+    return;
+  }
+  renderDetailHighlightText(contentEl, body, state.detailHighlightRows);
+}
+
+function renderPlainDetailBody(contentEl, body) {
+  resetDetailHighlightState();
+  contentEl.textContent = body || "";
+  contentEl.classList.toggle("hidden", !body);
+}
+
+function detailHighlightSelectionOffsets(range) {
+  if (!detailContent || !range || range.collapsed) return null;
+  if (!detailContent.contains(range.startContainer) || !detailContent.contains(range.endContainer)) return null;
+  const before = document.createRange();
+  before.selectNodeContents(detailContent);
+  before.setEnd(range.startContainer, range.startOffset);
+  const selectedText = range.toString();
+  if (!selectedText || !selectedText.trim()) return null;
+  const startOffset = detailHighlightCodePointLength(before.toString());
+  return {
+    startOffset,
+    endOffset: startOffset + detailHighlightCodePointLength(selectedText),
+    selectedText,
+  };
+}
+
+function detailHighlightSelectionOverlaps(selection) {
+  return activeDetailHighlightRows().some((highlight) => (
+    selection.startOffset < highlight.resolved_end_offset &&
+    selection.endOffset > highlight.resolved_start_offset
+  ));
+}
+
+function updateDetailHighlightSelection() {
+  if (!state.detailHighlightEligible || !detailContent || detailContent.classList.contains("hidden")) return;
+  const selection = window.getSelection?.();
+  const range = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+  if (!range || range.collapsed) {
+    if (state.detailHighlightAction?.type !== "remove") hideDetailHighlightPopover();
+    return;
+  }
+  const offsets = detailHighlightSelectionOffsets(range);
+  if (!offsets) {
+    hideDetailHighlightPopover();
+    return;
+  }
+  if (detailHighlightSelectionOverlaps(offsets)) {
+    showDetailHighlightPopover({
+      rect: range.getBoundingClientRect(),
+      message: "选区与已有高亮重叠，请先取消旧高亮。",
+    });
+    return;
+  }
+  showDetailHighlightPopover({
+    rect: range.getBoundingClientRect(),
+    action: { type: "create", ...offsets },
+    message: "为选中文本添加高亮？",
+    actionLabel: "高亮",
+  });
+}
+
+function scheduleDetailHighlightSelectionUpdate() {
+  window.setTimeout(updateDetailHighlightSelection, 0);
+}
+
+function applyDetailHighlightPayload(item, payload) {
+  if (!item?.url) return;
+  const cached = state.detailCacheByUrl.get(item.url) || {};
+  cached.highlights = Array.isArray(payload.highlights) ? payload.highlights : [];
+  cached.highlight_summary = payload.highlight_summary || { total: 0, active: 0, orphan: 0 };
+  cached.highlight_body_ready = payload.body_ready !== false;
+  cached.highlight_body_kind = payload.body_kind || "ai_zh";
+  cached.highlight_content_hash = payload.content_hash || null;
+  state.detailCacheByUrl.set(item.url, cached);
+}
+
+function detailHighlightErrorLabel(error) {
+  const code = String(error?.message || "");
+  const labels = {
+    body_not_ready: "中文正文尚未稳定生成",
+    invalid_offset: "选区位置无效",
+    selected_text_mismatch: "选中文本已变化，请重新选择",
+    highlight_overlap: "选区与已有高亮重叠，请先取消旧高亮",
+    highlight_exists: "这段文字已经高亮",
+    highlight_not_found: "高亮已不存在，请刷新正文",
+  };
+  return labels[code] || "请稍后重试";
+}
+
+async function runDetailHighlightAction() {
+  const action = state.detailHighlightAction;
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  if (!action || !item?.id || !item.url || state.detailHighlightBusy) return;
+  state.detailHighlightBusy = true;
+  if (detailHighlightActionBtn) detailHighlightActionBtn.disabled = true;
+  try {
+    let res;
+    if (action.type === "create") {
+      res = await fetch(`/api/news/${encodeURIComponent(item.id)}/highlights`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          body_kind: "ai_zh",
+          start_offset: action.startOffset,
+          end_offset: action.endOffset,
+          selected_text: action.selectedText,
+        }),
+      });
+    } else if (action.type === "remove") {
+      res = await fetch(
+        `/api/news/${encodeURIComponent(item.id)}/highlights/${encodeURIComponent(action.highlightId)}`,
+        { method: "DELETE" },
+      );
+    }
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || !payload.ok) throw new Error(payload.error || "highlight_action_failed");
+    applyDetailHighlightPayload(item, payload);
+    hideDetailHighlightPopover();
+    window.getSelection?.()?.removeAllRanges?.();
+    rerenderOne(item.id, { preserveDetailTransientUi: true });
+  } catch (error) {
+    showDetailHighlightPopover({
+      rect: detailHighlightPopover?.getBoundingClientRect?.() || { left: 8, top: 8, bottom: 42 },
+      action,
+      message: `高亮操作失败：${detailHighlightErrorLabel(error)}`,
+      actionLabel: action.type === "remove" ? "取消高亮" : "高亮",
+    });
+  } finally {
+    state.detailHighlightBusy = false;
+    if (detailHighlightActionBtn) detailHighlightActionBtn.disabled = false;
+  }
+}
+
 function renderDetail(item, { preserveTransientUi = false } = {}) {
   closeTagAdminView();
   clearTrendIdeaDetailState();
   if (!item) {
+    resetDetailHighlightState();
     resetDetailChatState({ keepProvider: true });
     state.detailReturnToTrackedTopicId = null;
     stopDetailPolling();
@@ -6217,6 +6500,18 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   const fallbackProvider = fallbackProviderFromAi(ai);
   const isCodexFallback = isCodexFallbackAi(ai);
   const isCodexFallbackBodyOnly = fallbackProvider === "codex-fallback-body-only";
+  const stableHighlightBody = (
+    detail && detail.content && aiStatus === "success" && ai &&
+    typeof ai.body_zh === "string" && ai.body_zh.trim()
+  ) ? ai.body_zh : "";
+  const preserveHighlightPopover = (
+    !!stableHighlightBody &&
+    preserveTransientUi &&
+    isSameSelectedDetailItem(item.id) &&
+    state.detailHighlightEligible &&
+    state.detailHighlightBody === stableHighlightBody
+  );
+  if (!preserveHighlightPopover) resetDetailHighlightState();
 
   detailAiBox.classList.add("hidden");
   detailAiPoints.innerHTML = "";
@@ -6250,8 +6545,7 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   if (item.snapshotOnly) {
     statusEl.textContent = "原新闻已不在当前索引中，仅保留提醒快照。";
     statusEl.className = "detail-status muted";
-    contentEl.textContent = item.summary || "";
-    contentEl.classList.toggle("hidden", !item.summary);
+    renderPlainDetailBody(contentEl, item.summary || "");
     retryBtn.classList.add("hidden");
     retranslateBtn.classList.add("hidden");
     askBtn.classList.add("hidden");
@@ -6267,18 +6561,16 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
       if (isTwitterDetail && aiStatus === "none") {
         statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
         statusEl.className = "detail-status ready";
-        contentEl.textContent = original;
-        contentEl.classList.remove("hidden");
+        renderPlainDetailBody(contentEl, original);
         stopDetailPolling();
       } else {
         statusEl.textContent = aiStatus === "pending" ? "排队生成中文内容" : "正在生成中文内容";
         statusEl.className = "detail-status pending";
-        contentEl.textContent = ai && ai.body_zh ? ai.body_zh : original;
-        contentEl.classList.remove("hidden");
+        renderPlainDetailBody(contentEl, ai && ai.body_zh ? ai.body_zh : original);
         retranslateBtn.textContent = isTwitterDetail ? "正在翻译正文..." : "正在重新翻译...";
         retranslateBtn.disabled = true;
       }
-    } else if (ai && ai.body_zh) {
+    } else if (ai && ai.body_zh && aiStatus === "success") {
       let keyPoints = [];
       try {
         keyPoints = JSON.parse(ai.key_points_zh || "[]");
@@ -6305,8 +6597,7 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
             ? "已由 GPT 完成翻译"
             : "中文摘要与翻译已生成";
       statusEl.className = isTwitterDetail ? "detail-status ready" : (isCodexFallbackBodyOnly ? "detail-status pending" : "detail-status ready");
-      contentEl.textContent = ai.body_zh;
-      contentEl.classList.remove("hidden");
+      activateDetailHighlightBody(contentEl, ai.body_zh, cached?.highlights || []);
       stopDetailPolling();
     } else if (aiStatus === "failed") {
       const err = cached?.ai_job?.last_error || item.ai_error || "中文生成失败";
@@ -6314,14 +6605,12 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
         ? `DeepSeek 失败，Codex fallback 也失败：${err}`
         : `中文生成失败，可重试：${err}`;
       statusEl.className = "detail-status failed";
-      contentEl.textContent = original;
-      contentEl.classList.remove("hidden");
+      renderPlainDetailBody(contentEl, original);
       stopDetailPolling();
     } else {
       statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
       statusEl.className = "detail-status ready";
-      contentEl.textContent = original;
-      contentEl.classList.remove("hidden");
+      renderPlainDetailBody(contentEl, original);
       stopDetailPolling();
     }
 
@@ -9419,6 +9708,40 @@ detailPanel.addEventListener("touchstart", handleDetailTouchStart, { passive: tr
 detailPanel.addEventListener("touchmove", handleDetailTouchMove, { passive: false });
 detailPanel.addEventListener("touchend", handleDetailTouchEnd, { passive: true });
 detailPanel.addEventListener("touchcancel", handleDetailTouchEnd, { passive: true });
+
+if (detailContent) {
+  detailContent.addEventListener("mouseup", scheduleDetailHighlightSelectionUpdate);
+  detailContent.addEventListener("keyup", scheduleDetailHighlightSelectionUpdate);
+  detailContent.addEventListener("click", (event) => {
+    const target = event.target;
+    const mark = target && typeof target.closest === "function"
+      ? target.closest("mark.article-highlight")
+      : null;
+    if (!mark || !detailContent.contains(mark)) return;
+    const highlightId = Number(mark.dataset.highlightId);
+    if (!Number.isInteger(highlightId)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showDetailHighlightPopover({
+      rect: mark.getBoundingClientRect(),
+      action: { type: "remove", highlightId },
+      message: "取消这段高亮？",
+      actionLabel: "取消高亮",
+    });
+  });
+}
+if (detailHighlightActionBtn) {
+  detailHighlightActionBtn.addEventListener("click", runDetailHighlightAction);
+}
+document.addEventListener("selectionchange", () => {
+  if (state.detailHighlightEligible) scheduleDetailHighlightSelectionUpdate();
+});
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (detailHighlightPopover?.contains(target) || detailContent?.contains(target)) return;
+  if (state.detailHighlightAction) hideDetailHighlightPopover();
+});
+if (detailScrollArea) detailScrollArea.addEventListener("scroll", hideDetailHighlightPopover, { passive: true });
 
 const detailImportantBtn = document.getElementById("detailImportantBtn");
 const detailLink = document.getElementById("detailLink");

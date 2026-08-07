@@ -3447,6 +3447,63 @@ html[data-detail-font="large"] {
   white-space: pre-wrap;
 }
 
+.detail-content mark.article-highlight {
+  background: color-mix(in srgb, #facc15 58%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 1px 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  cursor: pointer;
+}
+
+.detail-highlight-status {
+  max-width: var(--detail-measure);
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.detail-highlight-popover {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100vw - 16px);
+  padding: 6px 7px 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--hairline));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--accent) 6%);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  color: var(--detail-text);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.detail-highlight-popover-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-highlight-action {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-strong, var(--accent));
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.detail-highlight-action:hover,
+.detail-highlight-action:focus-visible {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 .detail-media-gallery {
   max-width: var(--detail-measure);
   margin-top: 14px;
