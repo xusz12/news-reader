@@ -139,6 +139,14 @@ TRACKED_DAILY_SUMMARY_VERSION = "v1.9.8.5"
 TRACKED_RULE_DRAFT_VERSION = "v1.9.8.6"
 MARKET_TAG_SUMMARY_VERSION = "v1.9.8.9"
 ARTICLE_HIGHLIGHT_BODY_KIND = "ai_zh"
+ARTICLE_HIGHLIGHT_POINTS_BODY_KIND = "ai_points_zh"
+ARTICLE_HIGHLIGHT_CONCLUSION_BODY_KIND = "ai_conclusion_zh"
+ARTICLE_HIGHLIGHT_BODY_KINDS = {
+    ARTICLE_HIGHLIGHT_BODY_KIND,
+    ARTICLE_HIGHLIGHT_POINTS_BODY_KIND,
+    ARTICLE_HIGHLIGHT_CONCLUSION_BODY_KIND,
+}
+ARTICLE_HIGHLIGHT_COLORS = {"yellow", "green", "blue", "pink"}
 ARTICLE_HIGHLIGHT_CONTEXT_CHARS = 48
 ARTICLE_HIGHLIGHT_UNAVAILABLE_AI_STATUSES = {"pending", "running", "failed"}
 TRACKED_RULE_FIELD_SCORES = {
@@ -669,11 +677,84 @@ def db_conn() -> sqlite3.Connection:
     return conn
 
 
+def migrate_article_highlights_schema(conn: sqlite3.Connection) -> None:
+    table = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='article_highlights'"
+    ).fetchone()
+    if not table:
+        return
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(article_highlights)").fetchall()}
+    table_sql = (table[0] or "").lower()
+    needs_rebuild = not {
+        "ai_points_zh",
+        "ai_conclusion_zh",
+    }.issubset(table_sql)
+    if needs_rebuild:
+        conn.execute("DROP INDEX IF EXISTS idx_article_highlights_url")
+        conn.execute("DROP INDEX IF EXISTS idx_article_highlights_content_hash")
+        conn.execute("ALTER TABLE article_highlights RENAME TO article_highlights_legacy")
+        conn.execute(
+            """
+            CREATE TABLE article_highlights (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              url TEXT NOT NULL,
+              body_kind TEXT NOT NULL DEFAULT 'ai_zh'
+                CHECK (body_kind IN ('ai_zh', 'ai_points_zh', 'ai_conclusion_zh')),
+              content_hash TEXT NOT NULL,
+              start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
+              end_offset INTEGER NOT NULL CHECK (end_offset > start_offset),
+              selected_text TEXT NOT NULL CHECK (length(selected_text) > 0),
+              color TEXT NOT NULL DEFAULT 'yellow'
+                CHECK (color IN ('yellow', 'green', 'blue', 'pink')),
+              prefix TEXT NOT NULL DEFAULT '',
+              suffix TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE (url, body_kind, content_hash, start_offset, end_offset)
+            )
+            """
+        )
+        legacy_columns = {row[1] for row in conn.execute("PRAGMA table_info(article_highlights_legacy)").fetchall()}
+        color_sql = "color" if "color" in legacy_columns else "'yellow'"
+        conn.execute(
+            f"""
+            INSERT INTO article_highlights(
+              id, url, body_kind, content_hash, start_offset, end_offset,
+              selected_text, color, prefix, suffix, created_at, updated_at
+            )
+            SELECT id, url, body_kind, content_hash, start_offset, end_offset,
+                   selected_text, {color_sql}, prefix, suffix, created_at, updated_at
+            FROM article_highlights_legacy
+            """
+        )
+        conn.execute("DROP TABLE article_highlights_legacy")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(article_highlights)").fetchall()}
+
+    if "color" not in columns:
+        conn.execute(
+            "ALTER TABLE article_highlights ADD COLUMN color TEXT NOT NULL DEFAULT 'yellow'"
+        )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_article_highlights_url
+        ON article_highlights(url, body_kind, created_at, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_article_highlights_content_hash
+        ON article_highlights(url, body_kind, content_hash)
+        """
+    )
+
+
 def ensure_db() -> None:
     MEDIA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     conn = db_conn()
     try:
         apply_schema(conn, SCHEMA_PATH)
+        migrate_article_highlights_schema(conn)
         migrate_market_trend_notes(conn)
         migrate_news_reminders_review_chain_id(conn)
         seed_market_tag_definitions(conn)
@@ -747,10 +828,28 @@ def article_highlight_context(body: str, start_offset: int, end_offset: int) -> 
     return prefix, suffix
 
 
-def load_article_highlight_body(conn: sqlite3.Connection, url: str) -> tuple[str | None, str | None]:
+def parse_article_highlight_points(value: object) -> list[str]:
+    if not isinstance(value, str) or not value.strip():
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [point for point in parsed if isinstance(point, str) and point.strip()]
+
+
+def load_article_highlight_body(
+    conn: sqlite3.Connection,
+    url: str,
+    body_kind: str = ARTICLE_HIGHLIGHT_BODY_KIND,
+) -> tuple[str | None, str | None]:
+    if not isinstance(body_kind, str) or body_kind not in ARTICLE_HIGHLIGHT_BODY_KINDS:
+        return None, "invalid_body_kind"
     row = conn.execute(
         """
-        SELECT aa.body_zh, aj.status
+        SELECT aa.body_zh, aa.key_points_zh, aa.conclusion_zh, aj.status
         FROM article_ai aa
         LEFT JOIN ai_jobs aj ON aj.url = aa.url
         WHERE aa.url=?
@@ -761,6 +860,13 @@ def load_article_highlight_body(conn: sqlite3.Connection, url: str) -> tuple[str
         return None, "body_not_ready"
     if row["status"] in ARTICLE_HIGHLIGHT_UNAVAILABLE_AI_STATUSES:
         return None, "body_not_ready"
+    if body_kind == ARTICLE_HIGHLIGHT_POINTS_BODY_KIND:
+        points = parse_article_highlight_points(row["key_points_zh"])
+        body = "".join(points)
+        return (body, None) if body else (None, "body_not_ready")
+    if body_kind == ARTICLE_HIGHLIGHT_CONCLUSION_BODY_KIND:
+        body = row["conclusion_zh"] if isinstance(row["conclusion_zh"], str) else ""
+        return (body, None) if body.strip() else (None, "body_not_ready")
     return row["body_zh"], None
 
 
@@ -818,22 +924,26 @@ def resolve_article_highlight_row(row: sqlite3.Row, body: str, current_hash: str
     return payload
 
 
-def load_article_highlights_payload(conn: sqlite3.Connection, url: str) -> dict:
+def load_article_highlights_payload(
+    conn: sqlite3.Connection,
+    url: str,
+    body_kind: str = ARTICLE_HIGHLIGHT_BODY_KIND,
+) -> dict:
     rows = conn.execute(
         """
         SELECT id, url, body_kind, content_hash, start_offset, end_offset,
-               selected_text, prefix, suffix, created_at, updated_at
+               selected_text, color, prefix, suffix, created_at, updated_at
         FROM article_highlights
         WHERE url=? AND body_kind=?
         ORDER BY start_offset ASC, id ASC
         """,
-        (url, ARTICLE_HIGHLIGHT_BODY_KIND),
+        (url, body_kind),
     ).fetchall()
-    body, _ = load_article_highlight_body(conn, url)
+    body, _ = load_article_highlight_body(conn, url, body_kind)
     if body is None:
         return {
             "body_ready": False,
-            "body_kind": ARTICLE_HIGHLIGHT_BODY_KIND,
+            "body_kind": body_kind,
             "content_hash": None,
             "highlights": [],
             "highlight_summary": {
@@ -849,7 +959,7 @@ def load_article_highlights_payload(conn: sqlite3.Connection, url: str) -> dict:
     orphan_count = len(highlights) - active_count
     return {
         "body_ready": True,
-        "body_kind": ARTICLE_HIGHLIGHT_BODY_KIND,
+        "body_kind": body_kind,
         "content_hash": current_hash,
         "highlights": highlights,
         "highlight_summary": {
@@ -858,6 +968,20 @@ def load_article_highlights_payload(conn: sqlite3.Connection, url: str) -> dict:
             "orphan": orphan_count,
         },
     }
+
+
+def load_article_highlights_response(
+    conn: sqlite3.Connection,
+    url: str,
+    primary_body_kind: str = ARTICLE_HIGHLIGHT_BODY_KIND,
+) -> dict:
+    surfaces = {
+        body_kind: load_article_highlights_payload(conn, url, body_kind)
+        for body_kind in sorted(ARTICLE_HIGHLIGHT_BODY_KINDS)
+    }
+    response = dict(surfaces[primary_body_kind])
+    response["highlight_surfaces"] = surfaces
+    return response
 
 
 def normalize_keyword_list(value: object) -> list[str]:
@@ -7381,6 +7505,16 @@ def api_news_detail(item_id: str):
             "content_hash": None,
             "highlights": [],
             "highlight_summary": {"total": 0, "active": 0, "orphan": 0},
+            "highlight_surfaces": {
+                body_kind: {
+                    "body_ready": False,
+                    "body_kind": body_kind,
+                    "content_hash": None,
+                    "highlights": [],
+                    "highlight_summary": {"total": 0, "active": 0, "orphan": 0},
+                }
+                for body_kind in sorted(ARTICLE_HIGHLIGHT_BODY_KINDS)
+            },
         }
         reminder_summary = {
             "active_total": 0,
@@ -7427,7 +7561,7 @@ def api_news_detail(item_id: str):
                 (url,),
             ).fetchone()
             market_tags = load_market_tags_map(conn, [url]).get(url, [])
-            highlight_payload = load_article_highlights_payload(conn, url)
+            highlight_payload = load_article_highlights_response(conn, url)
 
             detail_out = dict(detail) if detail else None
             if detail_out and (_is_twitter_url(url) or item["source_type"] == "twitter"):
@@ -7471,6 +7605,7 @@ def api_news_detail(item_id: str):
             "highlight_body_ready": highlight_payload["body_ready"],
             "highlight_body_kind": highlight_payload["body_kind"],
             "highlight_content_hash": highlight_payload["content_hash"],
+            "highlight_surfaces": highlight_payload["highlight_surfaces"],
             "market_tags": market_tags,
             "has_market_tags": 1 if market_tags else 0,
             "market_tag_choices": market_tag_choices,
@@ -7493,6 +7628,9 @@ def api_news_detail(item_id: str):
 
 @app.get("/api/news/<item_id>/highlights")
 def api_news_highlights_list(item_id: str):
+    body_kind = request.args.get("body_kind", ARTICLE_HIGHLIGHT_BODY_KIND)
+    if not isinstance(body_kind, str) or body_kind not in ARTICLE_HIGHLIGHT_BODY_KINDS:
+        return jsonify({"ok": False, "error": "invalid_body_kind"}), 400
     conn = db_conn()
     try:
         item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
@@ -7501,7 +7639,7 @@ def api_news_highlights_list(item_id: str):
         url = (item["url"] or "").strip()
         if not url:
             return jsonify({"ok": False, "error": "missing_url"}), 400
-        payload = load_article_highlights_payload(conn, url)
+        payload = load_article_highlights_response(conn, url, body_kind)
     finally:
         conn.close()
     return jsonify({"ok": True, "item_id": item_id, **payload})
@@ -7513,8 +7651,11 @@ def api_news_highlight_create(item_id: str):
     if not isinstance(body, dict):
         return jsonify({"ok": False, "error": "invalid_payload"}), 400
     body_kind = body.get("body_kind", ARTICLE_HIGHLIGHT_BODY_KIND)
-    if body_kind != ARTICLE_HIGHLIGHT_BODY_KIND:
+    if not isinstance(body_kind, str) or body_kind not in ARTICLE_HIGHLIGHT_BODY_KINDS:
         return jsonify({"ok": False, "error": "invalid_body_kind"}), 400
+    color = body.get("color", "yellow")
+    if not isinstance(color, str) or color not in ARTICLE_HIGHLIGHT_COLORS:
+        return jsonify({"ok": False, "error": "invalid_color"}), 400
     selected_text = body.get("selected_text")
     if not isinstance(selected_text, str) or not selected_text.strip():
         return jsonify({"ok": False, "error": "empty_selected_text"}), 400
@@ -7538,7 +7679,7 @@ def api_news_highlight_create(item_id: str):
         url = (item["url"] or "").strip()
         if not url:
             return jsonify({"ok": False, "error": "missing_url"}), 400
-        article_body, body_error = load_article_highlight_body(conn, url)
+        article_body, body_error = load_article_highlight_body(conn, url, body_kind)
         if article_body is None:
             return jsonify({"ok": False, "error": body_error or "body_not_ready"}), 409
         if end_offset > len(article_body):
@@ -7546,7 +7687,7 @@ def api_news_highlight_create(item_id: str):
         if article_body[start_offset:end_offset] != selected_text:
             return jsonify({"ok": False, "error": "selected_text_mismatch"}), 400
 
-        current_payload = load_article_highlights_payload(conn, url)
+        current_payload = load_article_highlights_payload(conn, url, body_kind)
         for existing in current_payload["highlights"]:
             if existing["status"] != "active":
                 continue
@@ -7564,16 +7705,17 @@ def api_news_highlight_create(item_id: str):
                     """
                     INSERT INTO article_highlights(
                       url, body_kind, content_hash, start_offset, end_offset,
-                      selected_text, prefix, suffix, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      selected_text, color, prefix, suffix, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         url,
-                        ARTICLE_HIGHLIGHT_BODY_KIND,
+                        body_kind,
                         content_hash,
                         start_offset,
                         end_offset,
                         selected_text,
+                        color,
                         prefix,
                         suffix,
                         ts,
@@ -7584,7 +7726,7 @@ def api_news_highlight_create(item_id: str):
         except sqlite3.IntegrityError:
             return jsonify({"ok": False, "error": "highlight_exists"}), 409
 
-        payload = load_article_highlights_payload(conn, url)
+        payload = load_article_highlights_response(conn, url, body_kind)
         saved = next(
             (highlight for highlight in payload["highlights"] if highlight["id"] == highlight_id),
             None,
@@ -7605,6 +7747,51 @@ def api_news_highlight_create(item_id: str):
     )
 
 
+@app.patch("/api/news/<item_id>/highlights/<int:highlight_id>")
+def api_news_highlight_update(item_id: str, highlight_id: int):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "invalid_payload"}), 400
+    color = body.get("color")
+    if not isinstance(color, str) or color not in ARTICLE_HIGHLIGHT_COLORS:
+        return jsonify({"ok": False, "error": "invalid_color"}), 400
+
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        existing = conn.execute(
+            "SELECT id, body_kind FROM article_highlights WHERE id=? AND url=?",
+            (highlight_id, url),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "highlight_not_found"}), 404
+        with conn:
+            conn.execute(
+                "UPDATE article_highlights SET color=?, updated_at=? WHERE id=? AND url=?",
+                (color, now_ts(), highlight_id, url),
+            )
+        payload = load_article_highlights_response(conn, url, existing["body_kind"])
+        updated = next(
+            (highlight for highlight in payload["highlights"] if highlight["id"] == highlight_id),
+            None,
+        )
+    finally:
+        conn.close()
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "highlight": updated,
+            **payload,
+        }
+    )
+
+
 @app.delete("/api/news/<item_id>/highlights/<int:highlight_id>")
 def api_news_highlight_delete(item_id: str, highlight_id: int):
     conn = db_conn()
@@ -7616,14 +7803,14 @@ def api_news_highlight_delete(item_id: str, highlight_id: int):
         if not url:
             return jsonify({"ok": False, "error": "missing_url"}), 400
         existing = conn.execute(
-            "SELECT id FROM article_highlights WHERE id=? AND url=? AND body_kind=?",
-            (highlight_id, url, ARTICLE_HIGHLIGHT_BODY_KIND),
+            "SELECT id, body_kind FROM article_highlights WHERE id=? AND url=?",
+            (highlight_id, url),
         ).fetchone()
         if not existing:
             return jsonify({"ok": False, "error": "highlight_not_found"}), 404
         with conn:
             conn.execute("DELETE FROM article_highlights WHERE id=? AND url=?", (highlight_id, url))
-        payload = load_article_highlights_payload(conn, url)
+        payload = load_article_highlights_response(conn, url, existing["body_kind"])
     finally:
         conn.close()
     return jsonify(

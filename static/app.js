@@ -82,6 +82,13 @@ let state = {
   detailHighlightEligible: false,
   detailHighlightBody: "",
   detailHighlightRows: [],
+  detailHighlightPointsEligible: false,
+  detailHighlightPointsBody: "",
+  detailHighlightPointsRows: [],
+  detailHighlightConclusionEligible: false,
+  detailHighlightConclusionBody: "",
+  detailHighlightConclusionRows: [],
+  detailHighlightSelectedColor: null,
   detailHighlightAction: null,
   detailHighlightBusy: false,
   settingsOpen: false,
@@ -107,6 +114,9 @@ let state = {
 const TITLE_CHAR_LIMIT = 100;
 const FEED_KEYBOARD_NAV_MIN_WIDTH = 1181;
 const FEED_KEYBOARD_DETAIL_DELAY_MS = 120;
+const DETAIL_HIGHLIGHT_BODY_KIND = "ai_zh";
+const DETAIL_HIGHLIGHT_POINTS_BODY_KIND = "ai_points_zh";
+const DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND = "ai_conclusion_zh";
 const sourceIconMap = {
   reuters: "/static/source-icons/reuters.ico",
   bloomberg: "/static/source-icons/bloomberg.png",
@@ -480,7 +490,10 @@ const detailContent = document.getElementById("detailContent");
 const detailHighlightStatus = document.getElementById("detailHighlightStatus");
 const detailHighlightPopover = document.getElementById("detailHighlightPopover");
 const detailHighlightPopoverMessage = document.getElementById("detailHighlightPopoverMessage");
-const detailHighlightActionBtn = document.getElementById("detailHighlightActionBtn");
+const detailHighlightColorButtons = document.getElementById("detailHighlightColorButtons");
+const detailHighlightColorOptions = Array.from(
+  detailHighlightColorButtons?.querySelectorAll("[data-highlight-color]") || [],
+);
 
 let readObserver = null;
 let loadObserver = null;
@@ -3365,7 +3378,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.2.0";
+  version.textContent = "News Reader v2.1.2.1";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -6170,8 +6183,58 @@ function detailHighlightStringIndex(text, codePointOffset) {
   return stringIndex;
 }
 
-function activeDetailHighlightRows() {
-  return (Array.isArray(state.detailHighlightRows) ? state.detailHighlightRows : [])
+function parseDetailHighlightPoints(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.filter((point) => typeof point === "string" && point.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function detailHighlightSurfaceState(bodyKind = DETAIL_HIGHLIGHT_BODY_KIND) {
+  if (bodyKind === DETAIL_HIGHLIGHT_POINTS_BODY_KIND) {
+    return {
+      eligible: state.detailHighlightPointsEligible,
+      body: state.detailHighlightPointsBody,
+      rows: state.detailHighlightPointsRows,
+    };
+  }
+  if (bodyKind === DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND) {
+    return {
+      eligible: state.detailHighlightConclusionEligible,
+      body: state.detailHighlightConclusionBody,
+      rows: state.detailHighlightConclusionRows,
+    };
+  }
+  return {
+    eligible: state.detailHighlightEligible,
+    body: state.detailHighlightBody,
+    rows: state.detailHighlightRows,
+  };
+}
+
+function setDetailHighlightSurfaceState(bodyKind, { eligible, body, rows }) {
+  if (bodyKind === DETAIL_HIGHLIGHT_POINTS_BODY_KIND) {
+    state.detailHighlightPointsEligible = !!eligible;
+    state.detailHighlightPointsBody = state.detailHighlightPointsEligible ? body : "";
+    state.detailHighlightPointsRows = Array.isArray(rows) ? rows : [];
+  } else if (bodyKind === DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND) {
+    state.detailHighlightConclusionEligible = !!eligible;
+    state.detailHighlightConclusionBody = state.detailHighlightConclusionEligible ? body : "";
+    state.detailHighlightConclusionRows = Array.isArray(rows) ? rows : [];
+  } else {
+    state.detailHighlightEligible = !!eligible;
+    state.detailHighlightBody = state.detailHighlightEligible ? body : "";
+    state.detailHighlightRows = Array.isArray(rows) ? rows : [];
+  }
+  state.detailHighlightEligible = state.detailHighlightEligible || state.detailHighlightPointsEligible;
+}
+
+function activeDetailHighlightRows(bodyKind = DETAIL_HIGHLIGHT_BODY_KIND) {
+  return (Array.isArray(detailHighlightSurfaceState(bodyKind).rows)
+    ? detailHighlightSurfaceState(bodyKind).rows
+    : [])
     .filter((highlight) => (
       highlight && highlight.status === "active" &&
       Number.isInteger(highlight.resolved_start_offset) &&
@@ -6180,27 +6243,54 @@ function activeDetailHighlightRows() {
     ));
 }
 
+function updateDetailHighlightStatus() {
+  const orphanCount = [
+    ...state.detailHighlightRows,
+    ...state.detailHighlightPointsRows,
+    ...state.detailHighlightConclusionRows,
+  ].filter((highlight) => highlight?.status === "orphan").length;
+  if (detailHighlightStatus) {
+    detailHighlightStatus.textContent = orphanCount > 0 ? `有 ${orphanCount} 条高亮待重新定位` : "";
+    detailHighlightStatus.classList.toggle("hidden", orphanCount === 0);
+  }
+}
+
 function hideDetailHighlightPopover() {
   state.detailHighlightAction = null;
+  state.detailHighlightSelectedColor = null;
   if (!detailHighlightPopover) return;
   detailHighlightPopover.classList.add("hidden");
-  if (detailHighlightPopoverMessage) detailHighlightPopoverMessage.textContent = "";
-  if (detailHighlightActionBtn) {
-    detailHighlightActionBtn.textContent = "";
-    detailHighlightActionBtn.classList.remove("hidden");
-    detailHighlightActionBtn.disabled = false;
+  if (detailHighlightPopoverMessage) {
+    detailHighlightPopoverMessage.textContent = "";
+    detailHighlightPopoverMessage.classList.add("hidden");
   }
+  setDetailHighlightColorControls(false, null);
+}
+
+function setDetailHighlightColorControls(visible, selectedColor = null) {
+  if (!detailHighlightColorButtons) return;
+  const selected = selectedColor || "";
+  detailHighlightColorButtons.classList.toggle("hidden", !visible);
+  detailHighlightColorOptions.forEach((button) => {
+    const isSelected = button.dataset.highlightColor === selected;
+    button.classList.toggle("selected", isSelected);
+    button.setAttribute("aria-pressed", String(isSelected));
+    button.disabled = !!state.detailHighlightBusy;
+  });
 }
 
 function resetDetailHighlightState() {
   state.detailHighlightEligible = false;
   state.detailHighlightBody = "";
   state.detailHighlightRows = [];
+  state.detailHighlightPointsEligible = false;
+  state.detailHighlightPointsBody = "";
+  state.detailHighlightPointsRows = [];
+  state.detailHighlightConclusionEligible = false;
+  state.detailHighlightConclusionBody = "";
+  state.detailHighlightConclusionRows = [];
   hideDetailHighlightPopover();
-  if (detailHighlightStatus) {
-    detailHighlightStatus.textContent = "";
-    detailHighlightStatus.classList.add("hidden");
-  }
+  updateDetailHighlightStatus();
 }
 
 function positionDetailHighlightPopover(rect) {
@@ -6214,45 +6304,82 @@ function positionDetailHighlightPopover(rect) {
   detailHighlightPopover.style.top = `${Math.max(8, Math.min(top, window.innerHeight - height - 8))}px`;
 }
 
-function showDetailHighlightPopover({ rect, action, message, actionLabel = "" }) {
-  if (!detailHighlightPopover || !detailHighlightPopoverMessage || !detailHighlightActionBtn) return;
+function showDetailHighlightPopover({ rect, action, message }) {
+  if (!detailHighlightPopover || !detailHighlightPopoverMessage || !detailHighlightColorButtons) return;
   state.detailHighlightAction = action || null;
+  if (action?.type === "create") {
+    state.detailHighlightSelectedColor = action.color || null;
+  } else if (action?.type === "remove") {
+    state.detailHighlightSelectedColor = action.color || null;
+  }
   detailHighlightPopoverMessage.textContent = message || "";
-  detailHighlightActionBtn.textContent = actionLabel;
-  detailHighlightActionBtn.classList.toggle("hidden", !action);
-  detailHighlightActionBtn.disabled = false;
+  detailHighlightPopoverMessage.classList.toggle("hidden", !message);
+  setDetailHighlightColorControls(
+    action?.type === "create" || action?.type === "remove",
+    state.detailHighlightSelectedColor,
+  );
   detailHighlightPopover.classList.remove("hidden");
+  positionDetailHighlightPopover(rect);
   const schedule = window.requestAnimationFrame || ((callback) => window.setTimeout(callback, 0));
   schedule(() => positionDetailHighlightPopover(rect));
 }
 
-function renderDetailHighlightText(contentEl, body, highlights) {
-  if (!contentEl) return;
-  contentEl.replaceChildren();
-  const ordered = activeDetailHighlightRows()
+function appendDetailHighlightSegments(container, body, highlights, segmentStart = 0, segmentEnd = detailHighlightCodePointLength(body)) {
+  const ordered = (Array.isArray(highlights) ? highlights : [])
+    .filter((highlight) => (
+      highlight && highlight.status === "active" &&
+      Number.isInteger(highlight.resolved_start_offset) &&
+      Number.isInteger(highlight.resolved_end_offset) &&
+      highlight.resolved_end_offset > segmentStart &&
+      highlight.resolved_start_offset < segmentEnd
+    ))
     .sort((left, right) => left.resolved_start_offset - right.resolved_start_offset || left.id - right.id);
-  let cursor = 0;
+  let cursor = segmentStart;
   for (const highlight of ordered) {
-    const start = detailHighlightStringIndex(body, highlight.resolved_start_offset);
-    const end = detailHighlightStringIndex(body, highlight.resolved_end_offset);
-    if (start < cursor || end <= start || end > body.length) continue;
-    if (start > cursor) contentEl.appendChild(document.createTextNode(body.slice(cursor, start)));
+    const startOffset = Math.max(segmentStart, highlight.resolved_start_offset);
+    const endOffset = Math.min(segmentEnd, highlight.resolved_end_offset);
+    if (startOffset < cursor || endOffset <= startOffset) continue;
+    const cursorIndex = detailHighlightStringIndex(body, cursor);
+    const startIndex = detailHighlightStringIndex(body, startOffset);
+    const endIndex = detailHighlightStringIndex(body, endOffset);
+    if (startIndex > cursorIndex) container.appendChild(document.createTextNode(body.slice(cursorIndex, startIndex)));
     const mark = document.createElement("mark");
     mark.className = "article-highlight";
     mark.dataset.highlightId = String(highlight.id);
-    mark.setAttribute("title", "点击后取消高亮");
-    mark.appendChild(document.createTextNode(body.slice(start, end)));
-    contentEl.appendChild(mark);
-    cursor = end;
+    mark.dataset.highlightBodyKind = highlight.body_kind || DETAIL_HIGHLIGHT_BODY_KIND;
+    mark.dataset.highlightColor = highlight.color || "yellow";
+    mark.setAttribute("title", "点击打开高亮操作");
+    mark.appendChild(document.createTextNode(body.slice(startIndex, endIndex)));
+    container.appendChild(mark);
+    cursor = endOffset;
   }
-  if (cursor < body.length) contentEl.appendChild(document.createTextNode(body.slice(cursor)));
+  const cursorIndex = detailHighlightStringIndex(body, cursor);
+  const segmentEndIndex = detailHighlightStringIndex(body, segmentEnd);
+  if (cursorIndex < segmentEndIndex) container.appendChild(document.createTextNode(body.slice(cursorIndex, segmentEndIndex)));
+}
+
+function renderDetailHighlightText(contentEl, body, highlights, bodyKind = DETAIL_HIGHLIGHT_BODY_KIND) {
+  if (!contentEl) return;
+  contentEl.replaceChildren();
+  appendDetailHighlightSegments(contentEl, body, highlights, 0, detailHighlightCodePointLength(body));
   contentEl.classList.remove("hidden");
-  const orphanCount = (Array.isArray(highlights) ? highlights : [])
-    .filter((highlight) => highlight?.status === "orphan").length;
-  if (detailHighlightStatus) {
-    detailHighlightStatus.textContent = orphanCount > 0 ? `有 ${orphanCount} 条高亮待重新定位` : "";
-    detailHighlightStatus.classList.toggle("hidden", orphanCount === 0);
+  updateDetailHighlightStatus();
+}
+
+function renderDetailHighlightPoints(pointsEl, points, body, highlights) {
+  if (!pointsEl) return;
+  pointsEl.replaceChildren();
+  let pointOffset = 0;
+  for (const point of Array.isArray(points) ? points : []) {
+    if (typeof point !== "string") continue;
+    const pointLength = detailHighlightCodePointLength(point);
+    const li = document.createElement("li");
+    appendDetailHighlightSegments(li, body, highlights, pointOffset, pointOffset + pointLength);
+    pointsEl.appendChild(li);
+    pointOffset += pointLength;
   }
+  pointsEl.classList.remove("hidden");
+  updateDetailHighlightStatus();
 }
 
 function detailHighlightRowsKey(highlights) {
@@ -6261,53 +6388,87 @@ function detailHighlightRowsKey(highlights) {
     status: highlight?.status,
     start: highlight?.resolved_start_offset,
     end: highlight?.resolved_end_offset,
+    color: highlight?.color,
   })));
 }
 
-function activateDetailHighlightBody(contentEl, body, highlights) {
-  const wasEligible = state.detailHighlightEligible;
-  const previousBody = state.detailHighlightBody;
-  const previousRows = state.detailHighlightRows;
-  state.detailHighlightEligible = typeof body === "string" && !!body.trim();
-  state.detailHighlightBody = state.detailHighlightEligible ? body : "";
+function activateDetailHighlightSurface(rootEl, body, highlights, bodyKind, renderSurface) {
+  const previous = detailHighlightSurfaceState(bodyKind);
   const nextRows = Array.isArray(highlights) ? highlights : [];
-  if (!state.detailHighlightEligible) {
-    state.detailHighlightRows = nextRows;
-    resetDetailHighlightState();
-    contentEl.textContent = body || "";
-    contentEl.classList.toggle("hidden", !body);
+  const eligible = typeof body === "string" && !!body.trim();
+  setDetailHighlightSurfaceState(bodyKind, { eligible, body, rows: nextRows });
+  if (!eligible) {
+    if (rootEl) {
+      rootEl.replaceChildren();
+      rootEl.classList.add("hidden");
+    }
+    updateDetailHighlightStatus();
     return;
   }
   const keepRenderedBody = (
-    wasEligible &&
-    previousBody === body &&
-    contentEl.textContent === body &&
-    detailHighlightRowsKey(previousRows) === detailHighlightRowsKey(nextRows)
+    previous.eligible &&
+    previous.body === body &&
+    rootEl?.textContent === body &&
+    detailHighlightRowsKey(previous.rows) === detailHighlightRowsKey(nextRows)
   );
-  state.detailHighlightRows = nextRows;
   if (keepRenderedBody) {
-    const orphanCount = nextRows.filter((highlight) => highlight?.status === "orphan").length;
-    if (detailHighlightStatus) {
-      detailHighlightStatus.textContent = orphanCount > 0 ? `有 ${orphanCount} 条高亮待重新定位` : "";
-      detailHighlightStatus.classList.toggle("hidden", orphanCount === 0);
-    }
-    contentEl.classList.remove("hidden");
+    rootEl?.classList.remove("hidden");
+    updateDetailHighlightStatus();
     return;
   }
-  renderDetailHighlightText(contentEl, body, state.detailHighlightRows);
+  renderSurface(rootEl, body, nextRows);
+}
+
+function activateDetailHighlightBody(contentEl, body, highlights) {
+  activateDetailHighlightSurface(
+    contentEl,
+    body,
+    highlights,
+    DETAIL_HIGHLIGHT_BODY_KIND,
+    (root, nextBody, nextRows) => renderDetailHighlightText(root, nextBody, nextRows, DETAIL_HIGHLIGHT_BODY_KIND),
+  );
+}
+
+function activateDetailHighlightPoints(pointsEl, points, body, highlights) {
+  activateDetailHighlightSurface(
+    pointsEl,
+    body,
+    highlights,
+    DETAIL_HIGHLIGHT_POINTS_BODY_KIND,
+    (root, nextBody, nextRows) => renderDetailHighlightPoints(root, points, nextBody, nextRows),
+  );
+}
+
+function activateDetailHighlightConclusion(conclusionEl, body, highlights) {
+  activateDetailHighlightSurface(
+    conclusionEl,
+    body,
+    highlights,
+    DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND,
+    (root, nextBody, nextRows) => renderDetailHighlightText(
+      root,
+      nextBody,
+      nextRows,
+      DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND,
+    ),
+  );
 }
 
 function renderPlainDetailBody(contentEl, body) {
   resetDetailHighlightState();
   contentEl.textContent = body || "";
   contentEl.classList.toggle("hidden", !body);
+  detailAiPoints?.replaceChildren?.();
+  detailAiPoints?.classList.add("hidden");
+  detailAiConclusion?.replaceChildren?.();
+  detailAiConclusion?.classList.add("hidden");
 }
 
-function detailHighlightSelectionOffsets(range) {
-  if (!detailContent || !range || range.collapsed) return null;
-  if (!detailContent.contains(range.startContainer) || !detailContent.contains(range.endContainer)) return null;
+function detailHighlightSelectionOffsets(range, rootEl, body) {
+  if (!rootEl || !range || range.collapsed) return null;
+  if (!rootEl.contains(range.startContainer) || !rootEl.contains(range.endContainer)) return null;
   const before = document.createRange();
-  before.selectNodeContents(detailContent);
+  before.selectNodeContents(rootEl);
   before.setEnd(range.startContainer, range.startOffset);
   const selectedText = range.toString();
   if (!selectedText || !selectedText.trim()) return null;
@@ -6319,27 +6480,57 @@ function detailHighlightSelectionOffsets(range) {
   };
 }
 
-function detailHighlightSelectionOverlaps(selection) {
-  return activeDetailHighlightRows().some((highlight) => (
+function detailHighlightSelectionOverlaps(selection, bodyKind) {
+  return activeDetailHighlightRows(bodyKind).some((highlight) => (
     selection.startOffset < highlight.resolved_end_offset &&
     selection.endOffset > highlight.resolved_start_offset
   ));
 }
 
+function detailHighlightRangeSurface(range) {
+  const candidates = [
+    {
+      bodyKind: DETAIL_HIGHLIGHT_BODY_KIND,
+      root: detailContent,
+      body: state.detailHighlightBody,
+    },
+    {
+      bodyKind: DETAIL_HIGHLIGHT_POINTS_BODY_KIND,
+      root: detailAiPoints,
+      body: state.detailHighlightPointsBody,
+    },
+    {
+      bodyKind: DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND,
+      root: detailAiConclusion,
+      body: state.detailHighlightConclusionBody,
+    },
+  ].filter((surface) => (
+    surface.root &&
+    surface.root.contains(range.startContainer) &&
+    surface.root.contains(range.endContainer) &&
+    detailHighlightSurfaceState(surface.bodyKind).eligible
+  ));
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 function updateDetailHighlightSelection() {
-  if (!state.detailHighlightEligible || !detailContent || detailContent.classList.contains("hidden")) return;
   const selection = window.getSelection?.();
   const range = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
   if (!range || range.collapsed) {
     if (state.detailHighlightAction?.type !== "remove") hideDetailHighlightPopover();
     return;
   }
-  const offsets = detailHighlightSelectionOffsets(range);
+  const surface = detailHighlightRangeSurface(range);
+  if (!surface) {
+    hideDetailHighlightPopover();
+    return;
+  }
+  const offsets = detailHighlightSelectionOffsets(range, surface.root, surface.body);
   if (!offsets) {
     hideDetailHighlightPopover();
     return;
   }
-  if (detailHighlightSelectionOverlaps(offsets)) {
+  if (detailHighlightSelectionOverlaps(offsets, surface.bodyKind)) {
     showDetailHighlightPopover({
       rect: range.getBoundingClientRect(),
       message: "选区与已有高亮重叠，请先取消旧高亮。",
@@ -6348,9 +6539,8 @@ function updateDetailHighlightSelection() {
   }
   showDetailHighlightPopover({
     rect: range.getBoundingClientRect(),
-    action: { type: "create", ...offsets },
-    message: "为选中文本添加高亮？",
-    actionLabel: "高亮",
+    action: { type: "create", bodyKind: surface.bodyKind, ...offsets },
+    message: "",
   });
 }
 
@@ -6361,11 +6551,22 @@ function scheduleDetailHighlightSelectionUpdate() {
 function applyDetailHighlightPayload(item, payload) {
   if (!item?.url) return;
   const cached = state.detailCacheByUrl.get(item.url) || {};
-  cached.highlights = Array.isArray(payload.highlights) ? payload.highlights : [];
-  cached.highlight_summary = payload.highlight_summary || { total: 0, active: 0, orphan: 0 };
-  cached.highlight_body_ready = payload.body_ready !== false;
-  cached.highlight_body_kind = payload.body_kind || "ai_zh";
-  cached.highlight_content_hash = payload.content_hash || null;
+  const fallbackSurface = {
+    body_ready: payload.body_ready !== false,
+    body_kind: payload.body_kind || DETAIL_HIGHLIGHT_BODY_KIND,
+    content_hash: payload.content_hash || null,
+    highlights: Array.isArray(payload.highlights) ? payload.highlights : [],
+    highlight_summary: payload.highlight_summary || { total: 0, active: 0, orphan: 0 },
+  };
+  cached.highlight_surfaces = payload.highlight_surfaces || {
+    [fallbackSurface.body_kind]: fallbackSurface,
+  };
+  const bodySurface = cached.highlight_surfaces[DETAIL_HIGHLIGHT_BODY_KIND] || fallbackSurface;
+  cached.highlights = Array.isArray(bodySurface.highlights) ? bodySurface.highlights : [];
+  cached.highlight_summary = bodySurface.highlight_summary || { total: 0, active: 0, orphan: 0 };
+  cached.highlight_body_ready = bodySurface.body_ready !== false;
+  cached.highlight_body_kind = bodySurface.body_kind || DETAIL_HIGHLIGHT_BODY_KIND;
+  cached.highlight_content_hash = bodySurface.content_hash || null;
   state.detailCacheByUrl.set(item.url, cached);
 }
 
@@ -6378,6 +6579,7 @@ function detailHighlightErrorLabel(error) {
     highlight_overlap: "选区与已有高亮重叠，请先取消旧高亮",
     highlight_exists: "这段文字已经高亮",
     highlight_not_found: "高亮已不存在，请刷新正文",
+    invalid_color: "高亮颜色无效",
   };
   return labels[code] || "请稍后重试";
 }
@@ -6387,7 +6589,10 @@ async function runDetailHighlightAction() {
   const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
   if (!action || !item?.id || !item.url || state.detailHighlightBusy) return;
   state.detailHighlightBusy = true;
-  if (detailHighlightActionBtn) detailHighlightActionBtn.disabled = true;
+  setDetailHighlightColorControls(
+    action.type === "create" || action.type === "remove",
+    action.type === "remove" ? action.color : state.detailHighlightSelectedColor,
+  );
   try {
     let res;
     if (action.type === "create") {
@@ -6395,7 +6600,8 @@ async function runDetailHighlightAction() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          body_kind: "ai_zh",
+          body_kind: action.bodyKind || DETAIL_HIGHLIGHT_BODY_KIND,
+          color: state.detailHighlightSelectedColor || "yellow",
           start_offset: action.startOffset,
           end_offset: action.endOffset,
           selected_text: action.selectedText,
@@ -6418,11 +6624,55 @@ async function runDetailHighlightAction() {
       rect: detailHighlightPopover?.getBoundingClientRect?.() || { left: 8, top: 8, bottom: 42 },
       action,
       message: `高亮操作失败：${detailHighlightErrorLabel(error)}`,
-      actionLabel: action.type === "remove" ? "取消高亮" : "高亮",
     });
   } finally {
     state.detailHighlightBusy = false;
-    if (detailHighlightActionBtn) detailHighlightActionBtn.disabled = false;
+    setDetailHighlightColorControls(
+      state.detailHighlightAction?.type === "create" || state.detailHighlightAction?.type === "remove",
+      state.detailHighlightAction?.type === "remove"
+        ? state.detailHighlightAction.color
+        : state.detailHighlightSelectedColor,
+    );
+  }
+}
+
+async function runDetailHighlightColorChange(color) {
+  const action = state.detailHighlightAction;
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  if (
+    !action || action.type !== "remove" || !item?.id || !item.url ||
+    state.detailHighlightBusy
+  ) return;
+  state.detailHighlightBusy = true;
+  setDetailHighlightColorControls(true, color);
+  try {
+    const res = await fetch(
+      `/api/news/${encodeURIComponent(item.id)}/highlights/${encodeURIComponent(action.highlightId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ color }),
+      },
+    );
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || !payload.ok) throw new Error(payload.error || "highlight_color_update_failed");
+    applyDetailHighlightPayload(item, payload);
+    state.detailHighlightSelectedColor = color;
+    state.detailHighlightAction = { ...action, color };
+    rerenderOne(item.id, { preserveDetailTransientUi: true });
+    setDetailHighlightColorControls(true, color);
+  } catch (error) {
+    showDetailHighlightPopover({
+      rect: detailHighlightPopover?.getBoundingClientRect?.() || { left: 8, top: 8, bottom: 42 },
+      action,
+      message: `高亮颜色更新失败：${detailHighlightErrorLabel(error)}`,
+    });
+  } finally {
+    state.detailHighlightBusy = false;
+    setDetailHighlightColorControls(
+      state.detailHighlightAction?.type === "create" || state.detailHighlightAction?.type === "remove",
+      state.detailHighlightSelectedColor,
+    );
   }
 }
 
@@ -6500,22 +6750,41 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   const fallbackProvider = fallbackProviderFromAi(ai);
   const isCodexFallback = isCodexFallbackAi(ai);
   const isCodexFallbackBodyOnly = fallbackProvider === "codex-fallback-body-only";
+  const stableHighlightPoints = (
+    !isTwitterDetail && aiStatus === "success" && ai
+  ) ? parseDetailHighlightPoints(ai.key_points_zh) : [];
+  const stableHighlightPointsBody = stableHighlightPoints.join("");
+  const stableHighlightConclusionBody = (
+    !isTwitterDetail && aiStatus === "success" && ai &&
+    typeof ai.conclusion_zh === "string" && ai.conclusion_zh.trim()
+  ) ? ai.conclusion_zh : "";
   const stableHighlightBody = (
     detail && detail.content && aiStatus === "success" && ai &&
     typeof ai.body_zh === "string" && ai.body_zh.trim()
   ) ? ai.body_zh : "";
+  const hasStableHighlightSurface = !!(
+    stableHighlightBody || stableHighlightPointsBody || stableHighlightConclusionBody
+  );
   const preserveHighlightPopover = (
-    !!stableHighlightBody &&
+    hasStableHighlightSurface &&
     preserveTransientUi &&
     isSameSelectedDetailItem(item.id) &&
-    state.detailHighlightEligible &&
-    state.detailHighlightBody === stableHighlightBody
+    (
+      (state.detailHighlightEligible && state.detailHighlightBody === stableHighlightBody) ||
+      (state.detailHighlightPointsEligible && state.detailHighlightPointsBody === stableHighlightPointsBody) ||
+      (
+        state.detailHighlightConclusionEligible &&
+        state.detailHighlightConclusionBody === stableHighlightConclusionBody
+      )
+    )
   );
   if (!preserveHighlightPopover) resetDetailHighlightState();
 
   detailAiBox.classList.add("hidden");
-  detailAiPoints.innerHTML = "";
+  detailAiPoints.textContent = "";
+  detailAiPoints.classList.add("hidden");
   detailAiConclusion.textContent = "";
+  detailAiConclusion.classList.add("hidden");
   detailOriginalWrap.classList.add("hidden");
   detailOriginalContent.textContent = "";
   retryBtn.textContent = "重试详情抓取";
@@ -6571,21 +6840,8 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
         retranslateBtn.disabled = true;
       }
     } else if (ai && ai.body_zh && aiStatus === "success") {
-      let keyPoints = [];
-      try {
-        keyPoints = JSON.parse(ai.key_points_zh || "[]");
-      } catch {
-        keyPoints = [];
-      }
-      if (!isTwitterDetail && Array.isArray(keyPoints) && keyPoints.length) {
-        keyPoints.forEach((point) => {
-          const li = document.createElement("li");
-          li.textContent = point;
-          detailAiPoints.appendChild(li);
-        });
-      }
-      if (!isTwitterDetail && ((Array.isArray(keyPoints) && keyPoints.length) || (ai.conclusion_zh || "").trim())) {
-        detailAiConclusion.textContent = ai.conclusion_zh || "";
+      const keyPoints = stableHighlightPoints;
+      if (!isTwitterDetail && (keyPoints.length || (ai.conclusion_zh || "").trim())) {
         detailAiBox.classList.remove("hidden");
       }
 
@@ -6598,6 +6854,17 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
             : "中文摘要与翻译已生成";
       statusEl.className = isTwitterDetail ? "detail-status ready" : (isCodexFallbackBodyOnly ? "detail-status pending" : "detail-status ready");
       activateDetailHighlightBody(contentEl, ai.body_zh, cached?.highlights || []);
+      activateDetailHighlightPoints(
+        detailAiPoints,
+        keyPoints,
+        stableHighlightPointsBody,
+        cached?.highlight_surfaces?.[DETAIL_HIGHLIGHT_POINTS_BODY_KIND]?.highlights || [],
+      );
+      activateDetailHighlightConclusion(
+        detailAiConclusion,
+        stableHighlightConclusionBody,
+        cached?.highlight_surfaces?.[DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND]?.highlights || [],
+      );
       stopDetailPolling();
     } else if (aiStatus === "failed") {
       const err = cached?.ai_job?.last_error || item.ai_error || "中文生成失败";
@@ -9709,36 +9976,65 @@ detailPanel.addEventListener("touchmove", handleDetailTouchMove, { passive: fals
 detailPanel.addEventListener("touchend", handleDetailTouchEnd, { passive: true });
 detailPanel.addEventListener("touchcancel", handleDetailTouchEnd, { passive: true });
 
-if (detailContent) {
-  detailContent.addEventListener("mouseup", scheduleDetailHighlightSelectionUpdate);
-  detailContent.addEventListener("keyup", scheduleDetailHighlightSelectionUpdate);
-  detailContent.addEventListener("click", (event) => {
-    const target = event.target;
-    const mark = target && typeof target.closest === "function"
-      ? target.closest("mark.article-highlight")
-      : null;
-    if (!mark || !detailContent.contains(mark)) return;
-    const highlightId = Number(mark.dataset.highlightId);
-    if (!Number.isInteger(highlightId)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    showDetailHighlightPopover({
-      rect: mark.getBoundingClientRect(),
-      action: { type: "remove", highlightId },
-      message: "取消这段高亮？",
-      actionLabel: "取消高亮",
-    });
+function handleDetailHighlightMarkClick(event, root) {
+  const target = event.target;
+  const mark = target && typeof target.closest === "function"
+    ? target.closest("mark.article-highlight")
+    : null;
+  if (!mark || !root.contains(mark)) return;
+  const highlightId = Number(mark.dataset.highlightId);
+  if (!Number.isInteger(highlightId)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  showDetailHighlightPopover({
+    rect: mark.getBoundingClientRect(),
+    action: {
+      type: "remove",
+      highlightId,
+      bodyKind: mark.dataset.highlightBodyKind || DETAIL_HIGHLIGHT_BODY_KIND,
+      color: mark.dataset.highlightColor || "yellow",
+    },
+    message: "",
   });
 }
-if (detailHighlightActionBtn) {
-  detailHighlightActionBtn.addEventListener("click", runDetailHighlightAction);
-}
+
+[detailContent, detailAiPoints, detailAiConclusion].forEach((root) => {
+  if (!root) return;
+  root.addEventListener("mouseup", scheduleDetailHighlightSelectionUpdate);
+  root.addEventListener("keyup", scheduleDetailHighlightSelectionUpdate);
+  root.addEventListener("click", (event) => handleDetailHighlightMarkClick(event, root));
+});
+detailHighlightColorOptions.forEach((button) => {
+  button.addEventListener("click", () => {
+    const color = button.dataset.highlightColor;
+    if (!color || state.detailHighlightBusy || !state.detailHighlightAction) return;
+    if (state.detailHighlightAction.type === "create") {
+      state.detailHighlightSelectedColor = color;
+      state.detailHighlightAction = { ...state.detailHighlightAction, color };
+      setDetailHighlightColorControls(true, color);
+      runDetailHighlightAction();
+      return;
+    }
+    if (state.detailHighlightAction.type === "remove") {
+      if (state.detailHighlightAction.color === color) {
+        runDetailHighlightAction();
+      } else {
+        runDetailHighlightColorChange(color);
+      }
+    }
+  });
+});
 document.addEventListener("selectionchange", () => {
-  if (state.detailHighlightEligible) scheduleDetailHighlightSelectionUpdate();
+  if (state.detailHighlightEligible || state.detailHighlightPointsEligible) scheduleDetailHighlightSelectionUpdate();
 });
 document.addEventListener("click", (event) => {
   const target = event.target;
-  if (detailHighlightPopover?.contains(target) || detailContent?.contains(target)) return;
+  if (
+    detailHighlightPopover?.contains(target) ||
+    detailContent?.contains(target) ||
+    detailAiPoints?.contains(target) ||
+    detailAiConclusion?.contains(target)
+  ) return;
   if (state.detailHighlightAction) hideDetailHighlightPopover();
 });
 if (detailScrollArea) detailScrollArea.addEventListener("scroll", hideDetailHighlightPopover, { passive: true });

@@ -4940,10 +4940,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.2.0" in app_source
-    assert "News Reader v2.1.2.0" in index_source
-    assert "/static/style.css?v=2.1.2.0" in index_source
-    assert "/static/app.js?v=2.1.2.0" in index_source
+    assert "News Reader v2.1.2.1" in app_source
+    assert "News Reader v2.1.2.1" in index_source
+    assert "/static/style.css?v=2.1.2.1" in index_source
+    assert "/static/app.js?v=2.1.2.1" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -9434,9 +9434,9 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
             INSERT INTO article_ai(
               url, model, key_points_zh, conclusion_zh, body_zh, raw_json,
               generated_at, updated_at
-            ) VALUES (?, 'test', '[]', '', ?, '{}', ?, ?)
+            ) VALUES (?, 'test', ?, '最后总结段', ?, '{}', ?, ?)
             """,
-            (first_url, body, ts, ts),
+            (first_url, json.dumps(["要点一内容", "第二个要点"], ensure_ascii=False), body, ts, ts),
         )
         conn.execute(
             """
@@ -9465,11 +9465,107 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     created_payload = created.get_json()
     assert created_payload["highlight"]["status"] == "active"
     highlight_id = created_payload["highlight"]["id"]
+    assert created_payload["highlight"]["color"] == "yellow"
     assert created_payload["highlight"]["content_hash"] == app_module.article_highlight_content_hash(body)
+
+    recolored = client.patch(
+        f"/api/news/{first['id']}/highlights/{highlight_id}",
+        json={"color": "green"},
+    )
+    assert recolored.status_code == 200
+    assert recolored.get_json()["highlight"]["color"] == "green"
 
     same_hash = client.get(f"/api/news/{first['id']}/highlights").get_json()
     assert same_hash["highlights"][0]["resolved_start_offset"] == start
     assert same_hash["highlights"][0]["resolved_end_offset"] == end
+    assert same_hash["highlights"][0]["color"] == "green"
+
+    points_body = "要点一内容第二个要点"
+    points_start = points_body.index("第二个要点")
+    points_end = points_start + len("第二个要点")
+    points_created = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={
+            "body_kind": "ai_points_zh",
+            "color": "blue",
+            "start_offset": points_start,
+            "end_offset": points_end,
+            "selected_text": "第二个要点",
+        },
+    )
+    assert points_created.status_code == 201
+    points_payload = points_created.get_json()
+    assert points_payload["highlight"]["body_kind"] == "ai_points_zh"
+    assert points_payload["highlight"]["color"] == "blue"
+    assert points_payload["highlight_surfaces"]["ai_points_zh"]["highlights"][0]["status"] == "active"
+    points_list = client.get(f"/api/news/{first['id']}/highlights?body_kind=ai_points_zh").get_json()
+    assert points_list["body_kind"] == "ai_points_zh"
+    assert points_list["highlights"][0]["color"] == "blue"
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE article_ai SET key_points_zh=?, updated_at=? WHERE url=?",
+            (json.dumps(["前置要点", "要点一内容", "第二个要点"], ensure_ascii=False), app_module.now_ts(), first_url),
+        )
+        conn.commit()
+    points_reanchored = client.get(f"/api/news/{first['id']}/highlights?body_kind=ai_points_zh").get_json()
+    assert points_reanchored["highlight_summary"] == {"active": 1, "orphan": 0, "total": 1}
+    assert points_reanchored["highlights"][0]["resolved_start_offset"] == len("前置要点要点一内容")
+
+    conclusion_body = "最后总结段"
+    conclusion_start = 0
+    conclusion_end = len(conclusion_body)
+    conclusion_created = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={
+            "body_kind": "ai_conclusion_zh",
+            "color": "pink",
+            "start_offset": conclusion_start,
+            "end_offset": conclusion_end,
+            "selected_text": conclusion_body,
+        },
+    )
+    assert conclusion_created.status_code == 201
+    conclusion_payload = conclusion_created.get_json()
+    assert conclusion_payload["highlight"]["body_kind"] == "ai_conclusion_zh"
+    assert conclusion_payload["highlight"]["color"] == "pink"
+    assert conclusion_payload["highlight_surfaces"]["ai_conclusion_zh"]["highlights"][0]["status"] == "active"
+    conclusion_list = client.get(
+        f"/api/news/{first['id']}/highlights?body_kind=ai_conclusion_zh"
+    ).get_json()
+    assert conclusion_list["body_kind"] == "ai_conclusion_zh"
+    assert conclusion_list["highlights"][0]["selected_text"] == conclusion_body
+
+    invalid_color = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={
+            "body_kind": "ai_points_zh",
+            "color": "rainbow",
+            "start_offset": 0,
+            "end_offset": 2,
+            "selected_text": "要点",
+        },
+    )
+    assert invalid_color.status_code == 400
+    assert invalid_color.get_json()["error"] == "invalid_color"
+
+    invalid_recolor = client.patch(
+        f"/api/news/{first['id']}/highlights/{highlight_id}",
+        json={"color": "rainbow"},
+    )
+    assert invalid_recolor.status_code == 400
+    assert invalid_recolor.get_json()["error"] == "invalid_color"
+
+    invalid_body_kind = client.post(
+        f"/api/news/{first['id']}/highlights",
+        json={
+            "body_kind": ["ai_zh"],
+            "start_offset": 0,
+            "end_offset": 2,
+            "selected_text": "要点",
+        },
+    )
+    assert invalid_body_kind.status_code == 400
+    assert invalid_body_kind.get_json()["error"] == "invalid_body_kind"
 
     invalid_offset = client.post(
         f"/api/news/{first['id']}/highlights",
@@ -9504,6 +9600,12 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     cross_news_delete = client.delete(f"/api/news/{second['id']}/highlights/{highlight_id}")
     assert cross_news_delete.status_code == 404
     assert cross_news_delete.get_json()["error"] == "highlight_not_found"
+    cross_news_recolor = client.patch(
+        f"/api/news/{second['id']}/highlights/{highlight_id}",
+        json={"color": "pink"},
+    )
+    assert cross_news_recolor.status_code == 404
+    assert cross_news_recolor.get_json()["error"] == "highlight_not_found"
 
     with app_module.db_conn() as conn:
         conn.execute("SELECT body_zh FROM article_ai WHERE url=?", (first_url,)).fetchone()
@@ -9575,18 +9677,79 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     assert pending["highlights"] == []
 
 
+def test_article_highlights_schema_migrates_legacy_body_kind_and_color(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "legacy-highlights.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE article_highlights (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              url TEXT NOT NULL,
+              body_kind TEXT NOT NULL DEFAULT 'ai_zh' CHECK (body_kind = 'ai_zh'),
+              content_hash TEXT NOT NULL,
+              start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
+              end_offset INTEGER NOT NULL CHECK (end_offset > start_offset),
+              selected_text TEXT NOT NULL CHECK (length(selected_text) > 0),
+              prefix TEXT NOT NULL DEFAULT '',
+              suffix TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE (url, body_kind, content_hash, start_offset, end_offset)
+            );
+            INSERT INTO article_highlights(
+              url, body_kind, content_hash, start_offset, end_offset,
+              selected_text, prefix, suffix, created_at, updated_at
+            ) VALUES ('https://example.com/legacy', 'ai_zh', 'hash', 0, 2, '旧', '', '', 'now', 'now');
+            """
+        )
+
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    with app_module.db_conn() as conn:
+        table_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='article_highlights'"
+        ).fetchone()[0]
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(article_highlights)").fetchall()}
+        row = conn.execute("SELECT body_kind, color FROM article_highlights").fetchone()
+    assert "ai_points_zh" in table_sql
+    assert "ai_conclusion_zh" in table_sql
+    assert "color" in columns
+    assert tuple(row) == ("ai_zh", "yellow")
+
+
 def test_frontend_article_highlight_contract_and_version():
     app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
     index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.2.0" in app_source
-    assert "News Reader v2.1.2.0" in index_source
-    assert "/static/style.css?v=2.1.2.0" in index_source
-    assert "/static/app.js?v=2.1.2.0" in index_source
+    assert "News Reader v2.1.2.1" in app_source
+    assert "News Reader v2.1.2.1" in index_source
+    assert "/static/style.css?v=2.1.2.1" in index_source
+    assert "/static/app.js?v=2.1.2.1" in index_source
     assert 'id="detailHighlightPopover"' in index_source
-    assert 'id="detailHighlightActionBtn"' in index_source
+    assert 'id="detailHighlightActionBtn"' not in index_source
+    assert 'id="detailHighlightColorButtons"' in index_source
+    assert 'data-highlight-color="yellow"' in index_source
+    assert 'data-highlight-color="green"' in index_source
+    assert 'data-highlight-color="blue"' in index_source
+    assert 'data-highlight-color="pink"' in index_source
+    assert index_source.count('class="detail-highlight-color-button"') == 4
+    assert 'aria-pressed="false"' in index_source
+    assert "detailHighlightSelectedColor: null" in app_source
+    assert 'type="color"' not in index_source
+    assert 'id="detailHighlightColorSelect"' not in index_source
+    assert "ai_points_zh" in app_source
+    assert "ai_conclusion_zh" in app_source
+    assert "runDetailHighlightColorChange" in app_source
+    assert "detailHighlightColorButtons" in app_source
+    assert 'method: "PATCH"' in app_source
+    assert "runDetailHighlightAction();" in app_source
+    assert "为选中文本添加高亮？" not in app_source
+    assert "取消这段高亮？" not in app_source
     assert "article-highlight" in app_source
     assert "createElement(\"mark\")" in app_source
     assert "contentEl.replaceChildren()" in app_source

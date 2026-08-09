@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.2.0</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.2.0" />
+    <title>News Reader v2.1.2.1</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.1.2.1" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.2.0</span>
+          <span class="topbar-version">v2.1.2.1</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -757,7 +757,12 @@
 
     <div id="detailHighlightPopover" class="detail-highlight-popover hidden" role="dialog" aria-live="polite">
       <span id="detailHighlightPopoverMessage" class="detail-highlight-popover-message"></span>
-      <button id="detailHighlightActionBtn" class="detail-highlight-action" type="button"></button>
+      <div id="detailHighlightColorButtons" class="detail-highlight-colors hidden" role="group" aria-label="选择高亮颜色">
+        <button class="detail-highlight-color-button" type="button" data-highlight-color="yellow" aria-label="黄色" title="黄色" aria-pressed="false"></button>
+        <button class="detail-highlight-color-button" type="button" data-highlight-color="green" aria-label="绿色" title="绿色" aria-pressed="false"></button>
+        <button class="detail-highlight-color-button" type="button" data-highlight-color="blue" aria-label="蓝色" title="蓝色" aria-pressed="false"></button>
+        <button class="detail-highlight-color-button" type="button" data-highlight-color="pink" aria-label="粉色" title="粉色" aria-pressed="false"></button>
+      </div>
     </div>
 
     <div id="settingsOverlay" class="settings-overlay hidden" aria-hidden="true">
@@ -900,6 +905,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.2.0"></script>
+    <script src="/static/app.js?v=2.1.2.1"></script>
   </body>
 </html>

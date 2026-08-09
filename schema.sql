@@ -98,11 +98,12 @@ CREATE TABLE IF NOT EXISTS article_ai (
 CREATE TABLE IF NOT EXISTS article_highlights (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   url TEXT NOT NULL,
-  body_kind TEXT NOT NULL DEFAULT 'ai_zh' CHECK (body_kind = 'ai_zh'),
+  body_kind TEXT NOT NULL DEFAULT 'ai_zh' CHECK (body_kind IN ('ai_zh', 'ai_points_zh', 'ai_conclusion_zh')),
   content_hash TEXT NOT NULL,
   start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
   end_offset INTEGER NOT NULL CHECK (end_offset > start_offset),
   selected_text TEXT NOT NULL CHECK (length(selected_text) > 0),
+  color TEXT NOT NULL DEFAULT 'yellow' CHECK (color IN ('yellow', 'green', 'blue', 'pink')),
   prefix TEXT NOT NULL DEFAULT '',
   suffix TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
