@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS article_highlights (
   end_offset INTEGER NOT NULL CHECK (end_offset > start_offset),
   selected_text TEXT NOT NULL CHECK (length(selected_text) > 0),
   color TEXT NOT NULL DEFAULT 'yellow' CHECK (color IN ('yellow', 'green', 'blue', 'pink')),
+  annotation_text TEXT NOT NULL DEFAULT '' CHECK (length(annotation_text) <= 2000),
   prefix TEXT NOT NULL DEFAULT '',
   suffix TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,

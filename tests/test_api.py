@@ -4940,10 +4940,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.2.1" in app_source
-    assert "News Reader v2.1.2.1" in index_source
-    assert "/static/style.css?v=2.1.2.1" in index_source
-    assert "/static/app.js?v=2.1.2.1" in index_source
+    assert "News Reader v2.1.2.2" in app_source
+    assert "News Reader v2.1.2.2" in index_source
+    assert "/static/style.css?v=2.1.2.2" in index_source
+    assert "/static/app.js?v=2.1.2.2" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -9466,7 +9466,45 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     assert created_payload["highlight"]["status"] == "active"
     highlight_id = created_payload["highlight"]["id"]
     assert created_payload["highlight"]["color"] == "yellow"
+    assert created_payload["highlight"]["annotation_text"] == ""
     assert created_payload["highlight"]["content_hash"] == app_module.article_highlight_content_hash(body)
+
+    annotation_get = client.get(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation"
+    )
+    assert annotation_get.status_code == 200
+    assert annotation_get.get_json()["annotation_text"] == ""
+    annotation_saved = client.put(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation",
+        json={"annotation_text": "  先记录这段判断  "},
+    )
+    assert annotation_saved.status_code == 200
+    assert annotation_saved.get_json()["highlight"]["annotation_text"] == "先记录这段判断"
+    assert annotation_saved.get_json()["highlight"]["updated_at"]
+    annotation_edited = client.put(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation",
+        json={"annotation_text": "修改后的纯文本批注"},
+    )
+    assert annotation_edited.status_code == 200
+    assert annotation_edited.get_json()["highlight"]["annotation_text"] == "修改后的纯文本批注"
+    invalid_annotation_type = client.put(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation",
+        json={"annotation_text": ["不允许"]},
+    )
+    assert invalid_annotation_type.status_code == 400
+    assert invalid_annotation_type.get_json()["error"] == "invalid_annotation_type"
+    empty_annotation = client.put(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation",
+        json={"annotation_text": "  \n  "},
+    )
+    assert empty_annotation.status_code == 400
+    assert empty_annotation.get_json()["error"] == "empty_annotation"
+    too_long_annotation = client.put(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation",
+        json={"annotation_text": "字" * 2001},
+    )
+    assert too_long_annotation.status_code == 400
+    assert too_long_annotation.get_json()["error"] == "annotation_too_long"
 
     recolored = client.patch(
         f"/api/news/{first['id']}/highlights/{highlight_id}",
@@ -9479,6 +9517,17 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     assert same_hash["highlights"][0]["resolved_start_offset"] == start
     assert same_hash["highlights"][0]["resolved_end_offset"] == end
     assert same_hash["highlights"][0]["color"] == "green"
+    assert same_hash["highlights"][0]["annotation_text"] == "修改后的纯文本批注"
+
+    annotation_cleared = client.delete(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation"
+    )
+    assert annotation_cleared.status_code == 200
+    assert annotation_cleared.get_json()["highlight"]["id"] == highlight_id
+    assert annotation_cleared.get_json()["highlight"]["annotation_text"] == ""
+    assert client.get(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation"
+    ).get_json()["annotation_text"] == ""
 
     points_body = "要点一内容第二个要点"
     points_start = points_body.index("第二个要点")
@@ -9497,7 +9546,14 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     points_payload = points_created.get_json()
     assert points_payload["highlight"]["body_kind"] == "ai_points_zh"
     assert points_payload["highlight"]["color"] == "blue"
+    points_id = points_payload["highlight"]["id"]
     assert points_payload["highlight_surfaces"]["ai_points_zh"]["highlights"][0]["status"] == "active"
+    points_annotation = client.put(
+        f"/api/news/{first['id']}/highlights/{points_id}/annotation",
+        json={"annotation_text": "要点批注"},
+    )
+    assert points_annotation.status_code == 200
+    assert points_annotation.get_json()["highlight"]["annotation_text"] == "要点批注"
     points_list = client.get(f"/api/news/{first['id']}/highlights?body_kind=ai_points_zh").get_json()
     assert points_list["body_kind"] == "ai_points_zh"
     assert points_list["highlights"][0]["color"] == "blue"
@@ -9528,12 +9584,26 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     conclusion_payload = conclusion_created.get_json()
     assert conclusion_payload["highlight"]["body_kind"] == "ai_conclusion_zh"
     assert conclusion_payload["highlight"]["color"] == "pink"
+    conclusion_id = conclusion_payload["highlight"]["id"]
     assert conclusion_payload["highlight_surfaces"]["ai_conclusion_zh"]["highlights"][0]["status"] == "active"
+    conclusion_annotation = client.put(
+        f"/api/news/{first['id']}/highlights/{conclusion_id}/annotation",
+        json={"annotation_text": "总结批注"},
+    )
+    assert conclusion_annotation.status_code == 200
+    assert conclusion_annotation.get_json()["highlight"]["annotation_text"] == "总结批注"
     conclusion_list = client.get(
         f"/api/news/{first['id']}/highlights?body_kind=ai_conclusion_zh"
     ).get_json()
     assert conclusion_list["body_kind"] == "ai_conclusion_zh"
     assert conclusion_list["highlights"][0]["selected_text"] == conclusion_body
+    deleted_annotated_highlight = client.delete(
+        f"/api/news/{first['id']}/highlights/{conclusion_id}"
+    )
+    assert deleted_annotated_highlight.status_code == 200
+    assert client.get(
+        f"/api/news/{first['id']}/highlights/{conclusion_id}/annotation"
+    ).status_code == 404
 
     invalid_color = client.post(
         f"/api/news/{first['id']}/highlights",
@@ -9600,6 +9670,12 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     cross_news_delete = client.delete(f"/api/news/{second['id']}/highlights/{highlight_id}")
     assert cross_news_delete.status_code == 404
     assert cross_news_delete.get_json()["error"] == "highlight_not_found"
+    cross_news_annotation = client.put(
+        f"/api/news/{second['id']}/highlights/{highlight_id}/annotation",
+        json={"annotation_text": "越权"},
+    )
+    assert cross_news_annotation.status_code == 404
+    assert cross_news_annotation.get_json()["error"] == "highlight_not_found"
     cross_news_recolor = client.patch(
         f"/api/news/{second['id']}/highlights/{highlight_id}",
         json={"color": "pink"},
@@ -9617,6 +9693,10 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     deleted = client.delete(f"/api/news/{first['id']}/highlights/{highlight_id}")
     assert deleted.status_code == 200
     assert deleted.get_json()["highlights"] == []
+    deleted_annotation = client.get(
+        f"/api/news/{first['id']}/highlights/{highlight_id}/annotation"
+    )
+    assert deleted_annotation.status_code == 404
 
     reanchor_body = "甲乙丙丁\n唯一句子\n收尾"
     reanchor_start = reanchor_body.index("唯一句子")
@@ -9641,6 +9721,11 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     )
     assert created.status_code == 201
     reanchor_id = created.get_json()["highlight"]["id"]
+    reanchor_annotation = client.put(
+        f"/api/news/{first['id']}/highlights/{reanchor_id}/annotation",
+        json={"annotation_text": "重定位后仍应保留"},
+    )
+    assert reanchor_annotation.status_code == 200
     with app_module.db_conn() as conn:
         conn.execute(
             "UPDATE article_ai SET body_zh=?, updated_at=? WHERE url=?",
@@ -9651,6 +9736,7 @@ def test_article_highlights_api_persists_validates_and_reanchors(tmp_path: Path,
     assert reanchored["highlight_summary"] == {"active": 1, "orphan": 0, "total": 1}
     assert reanchored["highlights"][0]["id"] == reanchor_id
     assert reanchored["highlights"][0]["resolved_start_offset"] == len("前缀\n甲乙丙丁\n")
+    assert reanchored["highlights"][0]["annotation_text"] == "重定位后仍应保留"
 
     with app_module.db_conn() as conn:
         conn.execute(
@@ -9717,7 +9803,9 @@ def test_article_highlights_schema_migrates_legacy_body_kind_and_color(tmp_path:
     assert "ai_points_zh" in table_sql
     assert "ai_conclusion_zh" in table_sql
     assert "color" in columns
-    assert tuple(row) == ("ai_zh", "yellow")
+    assert "annotation_text" in columns
+    row = conn.execute("SELECT body_kind, color, annotation_text FROM article_highlights").fetchone()
+    assert tuple(row) == ("ai_zh", "yellow", "")
 
 
 def test_frontend_article_highlight_contract_and_version():
@@ -9726,10 +9814,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.2.1" in app_source
-    assert "News Reader v2.1.2.1" in index_source
-    assert "/static/style.css?v=2.1.2.1" in index_source
-    assert "/static/app.js?v=2.1.2.1" in index_source
+    assert "News Reader v2.1.2.2" in app_source
+    assert "News Reader v2.1.2.2" in index_source
+    assert "/static/style.css?v=2.1.2.2" in index_source
+    assert "/static/app.js?v=2.1.2.2" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -9743,6 +9831,18 @@ def test_frontend_article_highlight_contract_and_version():
     assert 'type="color"' not in index_source
     assert 'id="detailHighlightColorSelect"' not in index_source
     assert "ai_points_zh" in app_source
+    assert "annotation_text" in app_source
+    assert 'id="detailHighlightAnnotationPopover"' in index_source
+    assert 'id="detailHighlightAnnotationInput"' in index_source
+    assert 'id="detailHighlightAnnotationView"' in index_source
+    assert 'id="detailHighlightAnnotationEditBtn"' in index_source
+    assert 'id="detailHighlightAnnotationActionBtn"' in index_source
+    assert "article-highlight-annotation-button" in app_source
+    assert 'state.detailHighlightAnnotationMode = annotation.trim() ? "view" : "edit"' in app_source
+    assert 'annotationButton.setAttribute("aria-label", "查看高亮批注")' in app_source
+    assert "if (hasAnnotation) {" in app_source
+    assert 'action?.type === "remove"' in app_source
+    assert "preserveHighlightAnnotationEditor" in render_source
     assert "ai_conclusion_zh" in app_source
     assert "runDetailHighlightColorChange" in app_source
     assert "detailHighlightColorButtons" in app_source
@@ -9757,6 +9857,103 @@ def test_frontend_article_highlight_contract_and_version():
     assert "contenteditable" not in index_source.lower()
     assert ".detail-content mark.article-highlight" in style_source
     assert ".detail-highlight-popover" in style_source
+
+
+def test_frontend_highlight_annotation_save_failure_preserves_edit_state():
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by annotation failure regression test");
+source = source.replace("let state = {", "var state = {");
+
+const noop = () => {};
+const element = new Proxy(noop, {
+  get(target, prop) {
+    if (["addEventListener", "removeEventListener", "appendChild", "removeChild", "replaceChildren", "setAttribute", "removeAttribute", "focus", "blur", "click", "scrollTo"].includes(prop)) return noop;
+    if (["querySelectorAll", "getElementsByTagName"].includes(prop)) return () => [];
+    if (prop === "querySelector" || prop === "closest") return () => element;
+    if (prop === "contains") return () => false;
+    if (prop === "classList") return { add: noop, remove: noop, toggle: noop, contains: () => false };
+    if (prop === "style" || prop === "dataset") return element;
+    if (prop === "children" || prop === "options") return [];
+    if (prop === "length" || prop === "scrollTop" || prop === "scrollHeight" || prop === "clientHeight") return 0;
+    if (["value", "textContent", "innerHTML", "className"].includes(prop)) return "";
+    if (prop === "checked" || prop === "disabled" || prop === "open") return false;
+    if (prop === Symbol.iterator) return function* () {};
+    return element;
+  },
+  set() { return true; },
+  apply() { return undefined; },
+});
+let focusCount = 0;
+const annotationInput = {
+  value: "失败后必须保留的草稿",
+  disabled: false,
+  classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+  addEventListener: noop,
+  focus: () => { focusCount += 1; },
+};
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const document = {
+  getElementById: (id) => id === "detailHighlightAnnotationInput" ? annotationInput : element,
+  querySelector: () => element,
+  querySelectorAll: () => [],
+  createElement: () => element,
+  createTextNode: () => element,
+  addEventListener: noop,
+  body: element,
+  documentElement: element,
+};
+const fetch = async () => ({
+  ok: false,
+  json: async () => ({ ok: false, error: "annotation_save_failed" }),
+});
+const localStorage = { getItem: () => null, setItem: noop };
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  innerHeight: 800,
+  localStorage,
+  getSelection: () => ({ removeAllRanges: noop }),
+};
+const context = {
+  console, document, window, localStorage, IntersectionObserver, fetch,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+(async () => {
+  context.state.selectedId = "news-1";
+  context.state.itemsById.set("news-1", { id: "news-1", url: "https://example.com/news-1" });
+  context.state.detailHighlightAnnotationOpen = true;
+  context.state.detailHighlightAnnotationMode = "edit";
+  context.state.detailHighlightAnnotationHighlightId = 7;
+  context.state.detailHighlightAnnotationBodyKind = "ai_zh";
+  context.state.detailHighlightAnnotationDraft = "原草稿";
+  context.state.detailHighlightAnnotationOriginal = "原批注";
+  annotationInput.value = "失败后必须保留的草稿";
+  await context.runDetailHighlightAnnotationSave();
+  if (!context.state.detailHighlightAnnotationOpen) throw new Error("failure closed the annotation surface");
+  if (context.state.detailHighlightAnnotationMode !== "edit") throw new Error("failure left edit mode");
+  if (context.state.detailHighlightAnnotationOriginal !== "原批注") throw new Error("failure replaced the saved annotation");
+  if (context.state.detailHighlightAnnotationDraft !== "失败后必须保留的草稿") throw new Error("failure lost the draft");
+  if (context.state.detailHighlightAnnotationBusy) throw new Error("failure left the editor busy");
+  if (focusCount < 1) throw new Error("failure did not restore textarea focus");
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
 
 def test_review_timeline_criteria_empty_not_rendered():
     """Criteria must not render an empty '成立标准：' tag when criteria is blank."""

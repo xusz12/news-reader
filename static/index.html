@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.2.1</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.2.1" />
+    <title>News Reader v2.1.2.2</title>
+    <link rel="stylesheet" href="/static/style.css?v=2.1.2.2" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.2.1</span>
+          <span class="topbar-version">v2.1.2.2</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -763,6 +763,20 @@
         <button class="detail-highlight-color-button" type="button" data-highlight-color="blue" aria-label="蓝色" title="蓝色" aria-pressed="false"></button>
         <button class="detail-highlight-color-button" type="button" data-highlight-color="pink" aria-label="粉色" title="粉色" aria-pressed="false"></button>
       </div>
+      <button id="detailHighlightAnnotationActionBtn" class="detail-highlight-action hidden" type="button">标注</button>
+    </div>
+
+    <div id="detailHighlightAnnotationPopover" class="detail-highlight-annotation-popover hidden" role="dialog" aria-label="高亮批注">
+      <div id="detailHighlightAnnotationTitle" class="detail-highlight-annotation-title">添加高亮批注</div>
+      <div id="detailHighlightAnnotationView" class="detail-highlight-annotation-view hidden"></div>
+      <textarea id="detailHighlightAnnotationInput" class="detail-highlight-annotation-input hidden" rows="4" maxlength="2000" placeholder="写下这段高亮的批注…"></textarea>
+      <div id="detailHighlightAnnotationStatus" class="detail-highlight-annotation-status" role="status"></div>
+      <div class="detail-highlight-annotation-actions">
+        <button id="detailHighlightAnnotationClearBtn" class="detail-retry-btn hidden" type="button">清除</button>
+        <button id="detailHighlightAnnotationEditBtn" class="detail-retry-btn hidden" type="button">编辑</button>
+        <button id="detailHighlightAnnotationCancelBtn" class="detail-retry-btn hidden" type="button">取消</button>
+        <button id="detailHighlightAnnotationSaveBtn" class="detail-retry-btn hidden" type="button">保存</button>
+      </div>
     </div>
 
     <div id="settingsOverlay" class="settings-overlay hidden" aria-hidden="true">
@@ -905,6 +919,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.2.1"></script>
+    <script src="/static/app.js?v=2.1.2.2"></script>
   </body>
 </html>

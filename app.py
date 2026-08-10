@@ -148,6 +148,7 @@ ARTICLE_HIGHLIGHT_BODY_KINDS = {
 }
 ARTICLE_HIGHLIGHT_COLORS = {"yellow", "green", "blue", "pink"}
 ARTICLE_HIGHLIGHT_CONTEXT_CHARS = 48
+ARTICLE_HIGHLIGHT_ANNOTATION_MAX_LENGTH = 2000
 ARTICLE_HIGHLIGHT_UNAVAILABLE_AI_STATUSES = {"pending", "running", "failed"}
 TRACKED_RULE_FIELD_SCORES = {
     "title": {"strong": 8, "core": 4, "context": 2},
@@ -707,6 +708,8 @@ def migrate_article_highlights_schema(conn: sqlite3.Connection) -> None:
               selected_text TEXT NOT NULL CHECK (length(selected_text) > 0),
               color TEXT NOT NULL DEFAULT 'yellow'
                 CHECK (color IN ('yellow', 'green', 'blue', 'pink')),
+              annotation_text TEXT NOT NULL DEFAULT ''
+                CHECK (length(annotation_text) <= 2000),
               prefix TEXT NOT NULL DEFAULT '',
               suffix TEXT NOT NULL DEFAULT '',
               created_at TEXT NOT NULL,
@@ -717,14 +720,15 @@ def migrate_article_highlights_schema(conn: sqlite3.Connection) -> None:
         )
         legacy_columns = {row[1] for row in conn.execute("PRAGMA table_info(article_highlights_legacy)").fetchall()}
         color_sql = "color" if "color" in legacy_columns else "'yellow'"
+        annotation_sql = "COALESCE(annotation_text, '')" if "annotation_text" in legacy_columns else "''"
         conn.execute(
             f"""
             INSERT INTO article_highlights(
               id, url, body_kind, content_hash, start_offset, end_offset,
-              selected_text, color, prefix, suffix, created_at, updated_at
+              selected_text, color, annotation_text, prefix, suffix, created_at, updated_at
             )
             SELECT id, url, body_kind, content_hash, start_offset, end_offset,
-                   selected_text, {color_sql}, prefix, suffix, created_at, updated_at
+                   selected_text, {color_sql}, {annotation_sql}, prefix, suffix, created_at, updated_at
             FROM article_highlights_legacy
             """
         )
@@ -734,6 +738,14 @@ def migrate_article_highlights_schema(conn: sqlite3.Connection) -> None:
     if "color" not in columns:
         conn.execute(
             "ALTER TABLE article_highlights ADD COLUMN color TEXT NOT NULL DEFAULT 'yellow'"
+        )
+    if "annotation_text" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE article_highlights
+            ADD COLUMN annotation_text TEXT NOT NULL DEFAULT ''
+              CHECK (length(annotation_text) <= 2000)
+            """
         )
     conn.execute(
         """
@@ -932,7 +944,7 @@ def load_article_highlights_payload(
     rows = conn.execute(
         """
         SELECT id, url, body_kind, content_hash, start_offset, end_offset,
-               selected_text, color, prefix, suffix, created_at, updated_at
+               selected_text, color, annotation_text, prefix, suffix, created_at, updated_at
         FROM article_highlights
         WHERE url=? AND body_kind=?
         ORDER BY start_offset ASC, id ASC
@@ -982,6 +994,17 @@ def load_article_highlights_response(
     response = dict(surfaces[primary_body_kind])
     response["highlight_surfaces"] = surfaces
     return response
+
+
+def normalize_article_highlight_annotation(value: object) -> tuple[str | None, str | None]:
+    if not isinstance(value, str):
+        return None, "invalid_annotation_type"
+    annotation_text = value.strip()
+    if not annotation_text:
+        return None, "empty_annotation"
+    if len(annotation_text) > ARTICLE_HIGHLIGHT_ANNOTATION_MAX_LENGTH:
+        return None, "annotation_too_long"
+    return annotation_text, None
 
 
 def normalize_keyword_list(value: object) -> list[str]:
@@ -7774,6 +7797,133 @@ def api_news_highlight_update(item_id: str, highlight_id: int):
             conn.execute(
                 "UPDATE article_highlights SET color=?, updated_at=? WHERE id=? AND url=?",
                 (color, now_ts(), highlight_id, url),
+            )
+        payload = load_article_highlights_response(conn, url, existing["body_kind"])
+        updated = next(
+            (highlight for highlight in payload["highlights"] if highlight["id"] == highlight_id),
+            None,
+        )
+    finally:
+        conn.close()
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "highlight": updated,
+            **payload,
+        }
+    )
+
+
+@app.get("/api/news/<item_id>/highlights/<int:highlight_id>/annotation")
+def api_news_highlight_annotation_get(item_id: str, highlight_id: int):
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        highlight = conn.execute(
+            """
+            SELECT id, url, body_kind, annotation_text, updated_at
+            FROM article_highlights
+            WHERE id=? AND url=?
+            """,
+            (highlight_id, url),
+        ).fetchone()
+        if not highlight:
+            return jsonify({"ok": False, "error": "highlight_not_found"}), 404
+    finally:
+        conn.close()
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "highlight_id": highlight_id,
+            "annotation_text": highlight["annotation_text"] or "",
+            "updated_at": highlight["updated_at"],
+        }
+    )
+
+
+@app.put("/api/news/<item_id>/highlights/<int:highlight_id>/annotation")
+@app.patch("/api/news/<item_id>/highlights/<int:highlight_id>/annotation")
+def api_news_highlight_annotation_save(item_id: str, highlight_id: int):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "invalid_payload"}), 400
+    annotation_text, annotation_error = normalize_article_highlight_annotation(
+        body.get("annotation_text")
+    )
+    if annotation_error:
+        return jsonify({"ok": False, "error": annotation_error}), 400
+
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        existing = conn.execute(
+            "SELECT id, body_kind FROM article_highlights WHERE id=? AND url=?",
+            (highlight_id, url),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "highlight_not_found"}), 404
+        with conn:
+            conn.execute(
+                """
+                UPDATE article_highlights
+                SET annotation_text=?, updated_at=?
+                WHERE id=? AND url=?
+                """,
+                (annotation_text, now_ts(), highlight_id, url),
+            )
+        payload = load_article_highlights_response(conn, url, existing["body_kind"])
+        updated = next(
+            (highlight for highlight in payload["highlights"] if highlight["id"] == highlight_id),
+            None,
+        )
+    finally:
+        conn.close()
+    return jsonify(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "highlight": updated,
+            **payload,
+        }
+    )
+
+
+@app.delete("/api/news/<item_id>/highlights/<int:highlight_id>/annotation")
+def api_news_highlight_annotation_clear(item_id: str, highlight_id: int):
+    conn = db_conn()
+    try:
+        item = conn.execute("SELECT id, url FROM items WHERE id=?", (item_id,)).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "item_not_found"}), 404
+        url = (item["url"] or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "missing_url"}), 400
+        existing = conn.execute(
+            "SELECT id, body_kind FROM article_highlights WHERE id=? AND url=?",
+            (highlight_id, url),
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "highlight_not_found"}), 404
+        with conn:
+            conn.execute(
+                """
+                UPDATE article_highlights
+                SET annotation_text='', updated_at=?
+                WHERE id=? AND url=?
+                """,
+                (now_ts(), highlight_id, url),
             )
         payload = load_article_highlights_response(conn, url, existing["body_kind"])
         updated = next(

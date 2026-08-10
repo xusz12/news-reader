@@ -91,6 +91,13 @@ let state = {
   detailHighlightSelectedColor: null,
   detailHighlightAction: null,
   detailHighlightBusy: false,
+  detailHighlightAnnotationOpen: false,
+  detailHighlightAnnotationMode: "",
+  detailHighlightAnnotationHighlightId: null,
+  detailHighlightAnnotationBodyKind: "",
+  detailHighlightAnnotationDraft: "",
+  detailHighlightAnnotationOriginal: "",
+  detailHighlightAnnotationBusy: false,
   settingsOpen: false,
   settingsLoading: false,
   settingsSaving: false,
@@ -494,6 +501,16 @@ const detailHighlightColorButtons = document.getElementById("detailHighlightColo
 const detailHighlightColorOptions = Array.from(
   detailHighlightColorButtons?.querySelectorAll("[data-highlight-color]") || [],
 );
+const detailHighlightAnnotationActionBtn = document.getElementById("detailHighlightAnnotationActionBtn");
+const detailHighlightAnnotationPopover = document.getElementById("detailHighlightAnnotationPopover");
+const detailHighlightAnnotationTitle = document.getElementById("detailHighlightAnnotationTitle");
+const detailHighlightAnnotationView = document.getElementById("detailHighlightAnnotationView");
+const detailHighlightAnnotationInput = document.getElementById("detailHighlightAnnotationInput");
+const detailHighlightAnnotationStatus = document.getElementById("detailHighlightAnnotationStatus");
+const detailHighlightAnnotationClearBtn = document.getElementById("detailHighlightAnnotationClearBtn");
+const detailHighlightAnnotationEditBtn = document.getElementById("detailHighlightAnnotationEditBtn");
+const detailHighlightAnnotationCancelBtn = document.getElementById("detailHighlightAnnotationCancelBtn");
+const detailHighlightAnnotationSaveBtn = document.getElementById("detailHighlightAnnotationSaveBtn");
 
 let readObserver = null;
 let loadObserver = null;
@@ -3378,7 +3395,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.2.1";
+  version.textContent = "News Reader v2.1.2.2";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -6228,7 +6245,11 @@ function setDetailHighlightSurfaceState(bodyKind, { eligible, body, rows }) {
     state.detailHighlightBody = state.detailHighlightEligible ? body : "";
     state.detailHighlightRows = Array.isArray(rows) ? rows : [];
   }
-  state.detailHighlightEligible = state.detailHighlightEligible || state.detailHighlightPointsEligible;
+  state.detailHighlightEligible = (
+    state.detailHighlightEligible ||
+    state.detailHighlightPointsEligible ||
+    state.detailHighlightConclusionEligible
+  );
 }
 
 function activeDetailHighlightRows(bodyKind = DETAIL_HIGHLIGHT_BODY_KIND) {
@@ -6265,6 +6286,10 @@ function hideDetailHighlightPopover() {
     detailHighlightPopoverMessage.classList.add("hidden");
   }
   setDetailHighlightColorControls(false, null);
+  if (detailHighlightAnnotationActionBtn) {
+    detailHighlightAnnotationActionBtn.classList.add("hidden");
+    detailHighlightAnnotationActionBtn.disabled = false;
+  }
 }
 
 function setDetailHighlightColorControls(visible, selectedColor = null) {
@@ -6277,9 +6302,181 @@ function setDetailHighlightColorControls(visible, selectedColor = null) {
     button.setAttribute("aria-pressed", String(isSelected));
     button.disabled = !!state.detailHighlightBusy;
   });
+  if (detailHighlightAnnotationActionBtn) {
+    detailHighlightAnnotationActionBtn.disabled = !!state.detailHighlightBusy;
+  }
 }
 
-function resetDetailHighlightState() {
+function detailHighlightAnnotationRow() {
+  const bodyKind = state.detailHighlightAnnotationBodyKind;
+  const surfaces = bodyKind
+    ? [detailHighlightSurfaceState(bodyKind)]
+    : [
+        detailHighlightSurfaceState(DETAIL_HIGHLIGHT_BODY_KIND),
+        detailHighlightSurfaceState(DETAIL_HIGHLIGHT_POINTS_BODY_KIND),
+        detailHighlightSurfaceState(DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND),
+      ];
+  for (const surface of surfaces) {
+    const row = (Array.isArray(surface.rows) ? surface.rows : []).find(
+      (highlight) => Number(highlight?.id) === Number(state.detailHighlightAnnotationHighlightId),
+    );
+    if (row) return row;
+  }
+  return null;
+}
+
+function detailHighlightAnnotationMark() {
+  const highlightId = Number(state.detailHighlightAnnotationHighlightId);
+  if (!Number.isInteger(highlightId)) return null;
+  const roots = [detailContent, detailAiPoints, detailAiConclusion].filter(Boolean);
+  for (const root of roots) {
+    const mark = Array.from(root.querySelectorAll("mark.article-highlight")).find(
+      (candidate) => Number(candidate.dataset.highlightId) === highlightId,
+    );
+    if (mark) return mark;
+  }
+  return null;
+}
+
+function positionDetailHighlightAnnotationPopover(rect) {
+  if (
+    !detailHighlightAnnotationPopover ||
+    detailHighlightAnnotationPopover.classList.contains("hidden") ||
+    !rect
+  ) return;
+  const width = detailHighlightAnnotationPopover.offsetWidth || 260;
+  const height = detailHighlightAnnotationPopover.offsetHeight || 170;
+  const maxLeft = Math.max(8, window.innerWidth - width - 8);
+  const left = Math.min(Math.max(8, rect.left), maxLeft);
+  const above = rect.top - height - 8;
+  const below = rect.bottom + 8;
+  const top = above >= 8 ? above : below;
+  detailHighlightAnnotationPopover.style.left = `${left}px`;
+  detailHighlightAnnotationPopover.style.top = `${Math.max(8, Math.min(top, window.innerHeight - height - 8))}px`;
+}
+
+function setDetailHighlightAnnotationFeedback(message = "", tone = "") {
+  if (!detailHighlightAnnotationStatus) return;
+  detailHighlightAnnotationStatus.textContent = message;
+  detailHighlightAnnotationStatus.className = "detail-highlight-annotation-status";
+  if (tone) detailHighlightAnnotationStatus.classList.add(tone);
+}
+
+function setDetailHighlightAnnotationBusy(busy) {
+  state.detailHighlightAnnotationBusy = !!busy;
+  if (detailHighlightAnnotationInput) detailHighlightAnnotationInput.disabled = !!busy;
+  if (detailHighlightAnnotationSaveBtn) detailHighlightAnnotationSaveBtn.disabled = !!busy;
+  if (detailHighlightAnnotationClearBtn) detailHighlightAnnotationClearBtn.disabled = !!busy;
+  if (detailHighlightAnnotationEditBtn) detailHighlightAnnotationEditBtn.disabled = !!busy;
+  if (detailHighlightAnnotationCancelBtn) detailHighlightAnnotationCancelBtn.disabled = !!busy;
+}
+
+function closeDetailHighlightAnnotationEditor() {
+  state.detailHighlightAnnotationOpen = false;
+  state.detailHighlightAnnotationMode = "";
+  state.detailHighlightAnnotationHighlightId = null;
+  state.detailHighlightAnnotationBodyKind = "";
+  state.detailHighlightAnnotationDraft = "";
+  state.detailHighlightAnnotationOriginal = "";
+  state.detailHighlightAnnotationBusy = false;
+  if (detailHighlightAnnotationPopover) detailHighlightAnnotationPopover.classList.add("hidden");
+  if (detailHighlightAnnotationInput) {
+    detailHighlightAnnotationInput.value = "";
+    detailHighlightAnnotationInput.disabled = false;
+    detailHighlightAnnotationInput.classList.add("hidden");
+  }
+  if (detailHighlightAnnotationView) {
+    detailHighlightAnnotationView.textContent = "";
+    detailHighlightAnnotationView.classList.add("hidden");
+  }
+  setDetailHighlightAnnotationFeedback();
+  if (detailHighlightAnnotationSaveBtn) detailHighlightAnnotationSaveBtn.disabled = false;
+  if (detailHighlightAnnotationClearBtn) detailHighlightAnnotationClearBtn.disabled = false;
+  if (detailHighlightAnnotationEditBtn) detailHighlightAnnotationEditBtn.disabled = false;
+  if (detailHighlightAnnotationCancelBtn) detailHighlightAnnotationCancelBtn.disabled = false;
+}
+
+function refreshDetailHighlightAnnotationEditor() {
+  if (!state.detailHighlightAnnotationOpen || !detailHighlightAnnotationPopover) return;
+  const row = detailHighlightAnnotationRow();
+  if (!row) {
+    closeDetailHighlightAnnotationEditor();
+    return;
+  }
+  const hasAnnotation = !!state.detailHighlightAnnotationOriginal.trim();
+  const isViewMode = state.detailHighlightAnnotationMode === "view" && hasAnnotation;
+  const isEditMode = !isViewMode;
+  if (detailHighlightAnnotationTitle) {
+    detailHighlightAnnotationTitle.textContent = isViewMode
+      ? "高亮批注"
+      : (hasAnnotation ? "编辑高亮批注" : "添加高亮批注");
+  }
+  if (detailHighlightAnnotationInput && detailHighlightAnnotationInput.value !== state.detailHighlightAnnotationDraft) {
+    detailHighlightAnnotationInput.value = state.detailHighlightAnnotationDraft;
+  }
+  detailHighlightAnnotationInput?.classList.toggle("hidden", !isEditMode);
+  if (detailHighlightAnnotationView) {
+    detailHighlightAnnotationView.textContent = isViewMode ? state.detailHighlightAnnotationOriginal : "";
+    detailHighlightAnnotationView.classList.toggle("hidden", !isViewMode);
+  }
+  if (detailHighlightAnnotationClearBtn) {
+    detailHighlightAnnotationClearBtn.classList.toggle("hidden", !isEditMode || !hasAnnotation);
+  }
+  detailHighlightAnnotationEditBtn?.classList.toggle("hidden", !isViewMode);
+  detailHighlightAnnotationCancelBtn?.classList.toggle("hidden", !isEditMode);
+  detailHighlightAnnotationSaveBtn?.classList.toggle("hidden", !isEditMode);
+  detailHighlightAnnotationPopover.classList.remove("hidden");
+  const mark = detailHighlightAnnotationMark();
+  if (mark) {
+    positionDetailHighlightAnnotationPopover(mark.getBoundingClientRect());
+    const schedule = window.requestAnimationFrame || ((callback) => window.setTimeout(callback, 0));
+    schedule(() => positionDetailHighlightAnnotationPopover(mark.getBoundingClientRect()));
+  }
+  setDetailHighlightAnnotationBusy(state.detailHighlightAnnotationBusy);
+}
+
+function openDetailHighlightAnnotationEditor(mark, { mode = "auto" } = {}) {
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  const highlightId = Number(mark?.dataset?.highlightId);
+  const bodyKind = mark?.dataset?.highlightBodyKind || DETAIL_HIGHLIGHT_BODY_KIND;
+  if (!item?.id || !item.url || !Number.isInteger(highlightId)) return;
+  const sameEditor = (
+    state.detailHighlightAnnotationOpen &&
+    Number(state.detailHighlightAnnotationHighlightId) === highlightId &&
+    state.detailHighlightAnnotationBodyKind === bodyKind
+  );
+  hideDetailHighlightPopover();
+  window.getSelection?.()?.removeAllRanges?.();
+  if (!sameEditor) {
+    const rows = detailHighlightSurfaceState(bodyKind).rows;
+    const row = (Array.isArray(rows) ? rows : []).find((highlight) => Number(highlight?.id) === highlightId);
+    if (!row) return;
+    const annotation = typeof row.annotation_text === "string" ? row.annotation_text : "";
+    state.detailHighlightAnnotationOpen = true;
+    state.detailHighlightAnnotationMode = annotation.trim() ? "view" : "edit";
+    state.detailHighlightAnnotationHighlightId = highlightId;
+    state.detailHighlightAnnotationBodyKind = bodyKind;
+    state.detailHighlightAnnotationDraft = annotation;
+    state.detailHighlightAnnotationOriginal = annotation;
+    setDetailHighlightAnnotationFeedback();
+  }
+  const hasAnnotation = !!state.detailHighlightAnnotationOriginal.trim();
+  if (mode === "view" && hasAnnotation) {
+    state.detailHighlightAnnotationMode = "view";
+    state.detailHighlightAnnotationDraft = state.detailHighlightAnnotationOriginal;
+    setDetailHighlightAnnotationFeedback();
+  } else if (mode === "edit" || !hasAnnotation) {
+    state.detailHighlightAnnotationMode = "edit";
+  } else if (!state.detailHighlightAnnotationMode) {
+    state.detailHighlightAnnotationMode = "view";
+  }
+  refreshDetailHighlightAnnotationEditor();
+  if (state.detailHighlightAnnotationMode === "edit") {
+    detailHighlightAnnotationInput?.focus({ preventScroll: true });
+  }
+}
+
+function resetDetailHighlightState({ preserveAnnotationEditor = false } = {}) {
   state.detailHighlightEligible = false;
   state.detailHighlightBody = "";
   state.detailHighlightRows = [];
@@ -6290,6 +6487,7 @@ function resetDetailHighlightState() {
   state.detailHighlightConclusionBody = "";
   state.detailHighlightConclusionRows = [];
   hideDetailHighlightPopover();
+  if (!preserveAnnotationEditor) closeDetailHighlightAnnotationEditor();
   updateDetailHighlightStatus();
 }
 
@@ -6306,6 +6504,7 @@ function positionDetailHighlightPopover(rect) {
 
 function showDetailHighlightPopover({ rect, action, message }) {
   if (!detailHighlightPopover || !detailHighlightPopoverMessage || !detailHighlightColorButtons) return;
+  if (state.detailHighlightAnnotationOpen) closeDetailHighlightAnnotationEditor();
   state.detailHighlightAction = action || null;
   if (action?.type === "create") {
     state.detailHighlightSelectedColor = action.color || null;
@@ -6318,6 +6517,11 @@ function showDetailHighlightPopover({ rect, action, message }) {
     action?.type === "create" || action?.type === "remove",
     state.detailHighlightSelectedColor,
   );
+  if (detailHighlightAnnotationActionBtn) {
+    const showAnnotationAction = action?.type === "remove";
+    detailHighlightAnnotationActionBtn.classList.toggle("hidden", !showAnnotationAction);
+    detailHighlightAnnotationActionBtn.disabled = !!state.detailHighlightBusy;
+  }
   detailHighlightPopover.classList.remove("hidden");
   positionDetailHighlightPopover(rect);
   const schedule = window.requestAnimationFrame || ((callback) => window.setTimeout(callback, 0));
@@ -6350,6 +6554,22 @@ function appendDetailHighlightSegments(container, body, highlights, segmentStart
     mark.dataset.highlightColor = highlight.color || "yellow";
     mark.setAttribute("title", "点击打开高亮操作");
     mark.appendChild(document.createTextNode(body.slice(startIndex, endIndex)));
+    const hasAnnotation = typeof highlight.annotation_text === "string" && !!highlight.annotation_text.trim();
+    if (hasAnnotation) {
+      const annotationButton = document.createElement("button");
+      annotationButton.type = "button";
+      annotationButton.className = "article-highlight-annotation-button has-annotation";
+      annotationButton.dataset.highlightId = String(highlight.id);
+      annotationButton.dataset.highlightBodyKind = highlight.body_kind || DETAIL_HIGHLIGHT_BODY_KIND;
+      annotationButton.setAttribute("aria-label", "查看高亮批注");
+      annotationButton.setAttribute("title", "查看高亮批注");
+      annotationButton.setAttribute("aria-haspopup", "dialog");
+      const annotationGlyph = document.createElement("span");
+      annotationGlyph.className = "article-highlight-annotation-glyph";
+      annotationGlyph.setAttribute("aria-hidden", "true");
+      annotationButton.appendChild(annotationGlyph);
+      mark.appendChild(annotationButton);
+    }
     container.appendChild(mark);
     cursor = endOffset;
   }
@@ -6389,6 +6609,7 @@ function detailHighlightRowsKey(highlights) {
     start: highlight?.resolved_start_offset,
     end: highlight?.resolved_end_offset,
     color: highlight?.color,
+    annotation: highlight?.annotation_text || "",
   })));
 }
 
@@ -6580,8 +6801,96 @@ function detailHighlightErrorLabel(error) {
     highlight_exists: "这段文字已经高亮",
     highlight_not_found: "高亮已不存在，请刷新正文",
     invalid_color: "高亮颜色无效",
+    invalid_annotation_type: "批注必须是纯文本",
+    empty_annotation: "批注不能为空",
+    annotation_too_long: "批注不能超过 2000 个字符",
   };
   return labels[code] || "请稍后重试";
+}
+
+async function runDetailHighlightAnnotationSave() {
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  const highlightId = Number(state.detailHighlightAnnotationHighlightId);
+  if (
+    !state.detailHighlightAnnotationOpen ||
+    state.detailHighlightAnnotationMode !== "edit" ||
+    !item?.id ||
+    !item.url ||
+    !Number.isInteger(highlightId) ||
+    state.detailHighlightAnnotationBusy
+  ) return;
+  const rawText = detailHighlightAnnotationInput?.value || "";
+  const annotationText = rawText.trim();
+  state.detailHighlightAnnotationDraft = rawText;
+  if (!annotationText) {
+    setDetailHighlightAnnotationFeedback("批注不能为空。", "failed");
+    detailHighlightAnnotationInput?.focus({ preventScroll: true });
+    return;
+  }
+  if (annotationText.length > 2000) {
+    setDetailHighlightAnnotationFeedback("批注不能超过 2000 个字符。", "failed");
+    detailHighlightAnnotationInput?.focus({ preventScroll: true });
+    return;
+  }
+  setDetailHighlightAnnotationBusy(true);
+  setDetailHighlightAnnotationFeedback("正在保存批注…", "pending");
+  try {
+    const res = await fetch(
+      `/api/news/${encodeURIComponent(item.id)}/highlights/${encodeURIComponent(highlightId)}/annotation`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ annotation_text: annotationText }),
+      },
+    );
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || !payload.ok) throw new Error(payload.error || "annotation_save_failed");
+    applyDetailHighlightPayload(item, payload);
+    state.detailHighlightAnnotationDraft = annotationText;
+    state.detailHighlightAnnotationOriginal = annotationText;
+    closeDetailHighlightAnnotationEditor();
+    rerenderOne(item.id, { preserveDetailTransientUi: true });
+  } catch (error) {
+    setDetailHighlightAnnotationFeedback(
+      `保存批注失败：${detailHighlightErrorLabel(error)}。当前输入已保留。`,
+      "failed",
+    );
+    setDetailHighlightAnnotationBusy(false);
+    detailHighlightAnnotationInput?.focus({ preventScroll: true });
+  }
+}
+
+async function runDetailHighlightAnnotationClear() {
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  const highlightId = Number(state.detailHighlightAnnotationHighlightId);
+  if (
+    !state.detailHighlightAnnotationOpen ||
+    state.detailHighlightAnnotationMode !== "edit" ||
+    !item?.id ||
+    !item.url ||
+    !Number.isInteger(highlightId) ||
+    state.detailHighlightAnnotationBusy
+  ) return;
+  setDetailHighlightAnnotationBusy(true);
+  setDetailHighlightAnnotationFeedback("正在清除批注…", "pending");
+  try {
+    const res = await fetch(
+      `/api/news/${encodeURIComponent(item.id)}/highlights/${encodeURIComponent(highlightId)}/annotation`,
+      { method: "DELETE" },
+    );
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || !payload.ok) throw new Error(payload.error || "annotation_clear_failed");
+    applyDetailHighlightPayload(item, payload);
+    closeDetailHighlightAnnotationEditor();
+    rerenderOne(item.id, { preserveDetailTransientUi: true });
+  } catch (error) {
+    setDetailHighlightAnnotationFeedback(
+      `清除批注失败：${detailHighlightErrorLabel(error)}。原批注与当前输入已保留。`,
+      "failed",
+    );
+    setDetailHighlightAnnotationBusy(false);
+    detailHighlightAnnotationInput?.focus({ preventScroll: true });
+  }
 }
 
 async function runDetailHighlightAction() {
@@ -6765,7 +7074,7 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   const hasStableHighlightSurface = !!(
     stableHighlightBody || stableHighlightPointsBody || stableHighlightConclusionBody
   );
-  const preserveHighlightPopover = (
+  const preserveHighlightSurface = (
     hasStableHighlightSurface &&
     preserveTransientUi &&
     isSameSelectedDetailItem(item.id) &&
@@ -6778,7 +7087,13 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
       )
     )
   );
-  if (!preserveHighlightPopover) resetDetailHighlightState();
+  const preserveHighlightPopover = preserveHighlightSurface;
+  const preserveHighlightAnnotationEditor = (
+    preserveHighlightSurface && state.detailHighlightAnnotationOpen
+  );
+  if (!preserveHighlightPopover) {
+    resetDetailHighlightState({ preserveAnnotationEditor: preserveHighlightAnnotationEditor });
+  }
 
   detailAiBox.classList.add("hidden");
   detailAiPoints.textContent = "";
@@ -6978,6 +7293,7 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   refreshDetailNoteUI(item, { preserveEditorDraft: preserveSupportedTransientUi });
   refreshDetailMarketTagsUI(item);
   refreshDetailReminderUI(item);
+  refreshDetailHighlightAnnotationEditor();
   updateWorkspaceLayout();
 }
 
@@ -9978,6 +10294,18 @@ detailPanel.addEventListener("touchcancel", handleDetailTouchEnd, { passive: tru
 
 function handleDetailHighlightMarkClick(event, root) {
   const target = event.target;
+  const annotationButton = target && typeof target.closest === "function"
+    ? target.closest("button.article-highlight-annotation-button")
+    : null;
+  if (annotationButton && root.contains(annotationButton)) {
+    event.preventDefault();
+    event.stopPropagation();
+    openDetailHighlightAnnotationEditor(
+      annotationButton.closest("mark.article-highlight"),
+      { mode: "view" },
+    );
+    return;
+  }
   const mark = target && typeof target.closest === "function"
     ? target.closest("mark.article-highlight")
     : null;
@@ -10024,13 +10352,78 @@ detailHighlightColorOptions.forEach((button) => {
     }
   });
 });
+if (detailHighlightAnnotationActionBtn) {
+  detailHighlightAnnotationActionBtn.addEventListener("click", () => {
+    const action = state.detailHighlightAction;
+    const highlightId = Number(action?.highlightId);
+    if (action?.type !== "remove" || !Number.isInteger(highlightId) || state.detailHighlightBusy) return;
+    const bodyKind = action.bodyKind || DETAIL_HIGHLIGHT_BODY_KIND;
+    const roots = [detailContent, detailAiPoints, detailAiConclusion].filter(Boolean);
+    let mark = null;
+    for (const root of roots) {
+      mark = Array.from(root.querySelectorAll("mark.article-highlight")).find((candidate) => (
+        Number(candidate.dataset.highlightId) === highlightId &&
+        (candidate.dataset.highlightBodyKind || DETAIL_HIGHLIGHT_BODY_KIND) === bodyKind
+      ));
+      if (mark) break;
+    }
+    if (!mark) return;
+    openDetailHighlightAnnotationEditor(mark, { mode: "auto" });
+  });
+}
+if (detailHighlightAnnotationInput) {
+  detailHighlightAnnotationInput.addEventListener("input", () => {
+    state.detailHighlightAnnotationDraft = detailHighlightAnnotationInput.value;
+    if (detailHighlightAnnotationStatus?.classList.contains("failed")) {
+      setDetailHighlightAnnotationFeedback();
+    }
+  });
+}
+if (detailHighlightAnnotationSaveBtn) {
+  detailHighlightAnnotationSaveBtn.addEventListener("click", () => {
+    runDetailHighlightAnnotationSave();
+  });
+}
+if (detailHighlightAnnotationClearBtn) {
+  detailHighlightAnnotationClearBtn.addEventListener("click", () => {
+    runDetailHighlightAnnotationClear();
+  });
+}
+if (detailHighlightAnnotationEditBtn) {
+  detailHighlightAnnotationEditBtn.addEventListener("click", () => {
+    if (!state.detailHighlightAnnotationOpen || state.detailHighlightAnnotationBusy) return;
+    state.detailHighlightAnnotationMode = "edit";
+    state.detailHighlightAnnotationDraft = state.detailHighlightAnnotationOriginal;
+    setDetailHighlightAnnotationFeedback();
+    refreshDetailHighlightAnnotationEditor();
+    detailHighlightAnnotationInput?.focus({ preventScroll: true });
+  });
+}
+if (detailHighlightAnnotationCancelBtn) {
+  detailHighlightAnnotationCancelBtn.addEventListener("click", () => {
+    if (state.detailHighlightAnnotationBusy) return;
+    if (state.detailHighlightAnnotationOriginal.trim()) {
+      state.detailHighlightAnnotationMode = "view";
+      state.detailHighlightAnnotationDraft = state.detailHighlightAnnotationOriginal;
+      setDetailHighlightAnnotationFeedback();
+      refreshDetailHighlightAnnotationEditor();
+      return;
+    }
+    closeDetailHighlightAnnotationEditor();
+  });
+}
 document.addEventListener("selectionchange", () => {
-  if (state.detailHighlightEligible || state.detailHighlightPointsEligible) scheduleDetailHighlightSelectionUpdate();
+  if (
+    state.detailHighlightEligible ||
+    state.detailHighlightPointsEligible ||
+    state.detailHighlightConclusionEligible
+  ) scheduleDetailHighlightSelectionUpdate();
 });
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (
     detailHighlightPopover?.contains(target) ||
+    detailHighlightAnnotationPopover?.contains(target) ||
     detailContent?.contains(target) ||
     detailAiPoints?.contains(target) ||
     detailAiConclusion?.contains(target)
@@ -10987,6 +11380,7 @@ window.addEventListener("resize", () => {
   syncSearchPageControls();
   scheduleFeedControlsOverflowSync();
   scheduleDetailToolbarOverflowSync();
+  refreshDetailHighlightAnnotationEditor();
   if ((feedKeyboardMode || feedKeyboardDetailFocusMode) && !isFeedKeyboardDesktopEnabled()) exitFeedKeyboardMode();
 });
 
