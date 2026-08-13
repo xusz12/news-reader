@@ -4940,10 +4940,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.2.2" in app_source
-    assert "News Reader v2.1.2.2" in index_source
-    assert "/static/style.css?v=2.1.2.2" in index_source
-    assert "/static/app.js?v=2.1.2.2" in index_source
+    assert "News Reader v2.1.2.3" in app_source
+    assert "News Reader v2.1.2.3" in index_source
+    assert "/static/style.css?v=2.1.2.3" in index_source
+    assert "/static/app.js?v=2.1.2.3" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -9802,10 +9802,166 @@ def test_article_highlights_schema_migrates_legacy_body_kind_and_color(tmp_path:
         row = conn.execute("SELECT body_kind, color FROM article_highlights").fetchone()
     assert "ai_points_zh" in table_sql
     assert "ai_conclusion_zh" in table_sql
+    assert "twitter_detail" in table_sql
     assert "color" in columns
     assert "annotation_text" in columns
     row = conn.execute("SELECT body_kind, color, annotation_text FROM article_highlights").fetchone()
     assert tuple(row) == ("ai_zh", "yellow", "")
+
+
+def test_twitter_detail_highlights_use_stable_article_detail_and_gate_ordinary_news(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "twitter-highlights.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    ts = app_module.now_ts()
+    twitter_id = "twitter-highlight-item"
+    twitter_url = "https://x.com/example/status/123"
+    missing_id = "twitter-highlight-missing"
+    missing_url = "https://x.com/example/status/456"
+    ordinary_id = "ordinary-highlight-item"
+    ordinary_url = "https://example.com/ordinary-highlight"
+    body = "推文开头\n唯一推文片段\n推文结尾"
+    selected = "唯一推文片段"
+    start = body.index(selected)
+    end = start + len(selected)
+
+    with app_module.db_conn() as conn:
+        for item_id, url, source_type, title in (
+            (twitter_id, twitter_url, "twitter", "推文高亮"),
+            (missing_id, missing_url, "twitter", "无正文推文"),
+            (ordinary_id, ordinary_url, "rss", "普通新闻"),
+        ):
+            conn.execute(
+                """
+                INSERT INTO items(
+                  id, source_file, item_order, published_at, date, time,
+                  source, source_type, source_name, title, summary, url,
+                  created_at, updated_at
+                ) VALUES (?, 'test.md', 1, '2026-08-10 10:00', '2026-08-10', '10:00',
+                          'test', ?, 'test', ?, '', ?, ?, ?)
+                """,
+                (item_id, source_type, title, url, ts, ts),
+            )
+        for url, title, content in (
+            (twitter_url, "推文高亮", body),
+            (ordinary_url, "普通新闻", "Ordinary source body"),
+        ):
+            conn.execute(
+                """
+                INSERT INTO article_details(
+                  url, source, title, author, published_at, content, content_length,
+                  raw_json, fetched_at, updated_at
+                ) VALUES (?, 'test', ?, '', '2026-08-10', ?, ?, '{}', ?, ?)
+                """,
+                (url, title, content, len(content), ts, ts),
+            )
+        conn.commit()
+
+    missing = client.post(
+        f"/api/news/{missing_id}/highlights",
+        json={
+            "body_kind": "twitter_detail",
+            "start_offset": 0,
+            "end_offset": 1,
+            "selected_text": "缺",
+        },
+    )
+    assert missing.status_code == 409
+    assert missing.get_json()["error"] == "body_not_ready"
+
+    ordinary = client.post(
+        f"/api/news/{ordinary_id}/highlights",
+        json={
+            "body_kind": "twitter_detail",
+            "start_offset": 0,
+            "end_offset": 8,
+            "selected_text": "Ordinary",
+        },
+    )
+    assert ordinary.status_code == 409
+    assert ordinary.get_json()["error"] == "body_not_ready"
+
+    created = client.post(
+        f"/api/news/{twitter_id}/highlights",
+        json={
+            "body_kind": "twitter_detail",
+            "color": "blue",
+            "start_offset": start,
+            "end_offset": end,
+            "selected_text": selected,
+        },
+    )
+    assert created.status_code == 201
+    payload = created.get_json()
+    highlight_id = payload["highlight"]["id"]
+    assert payload["highlight"]["body_kind"] == "twitter_detail"
+    assert payload["highlight"]["color"] == "blue"
+    assert payload["highlight_surfaces"]["twitter_detail"]["body_ready"] is True
+
+    overlap = client.post(
+        f"/api/news/{twitter_id}/highlights",
+        json={
+            "body_kind": "twitter_detail",
+            "start_offset": start + 1,
+            "end_offset": end,
+            "selected_text": selected[1:],
+        },
+    )
+    assert overlap.status_code == 409
+    assert overlap.get_json()["error"] == "highlight_overlap"
+
+    recolored = client.patch(
+        f"/api/news/{twitter_id}/highlights/{highlight_id}",
+        json={"color": "pink"},
+    )
+    assert recolored.status_code == 200
+    assert recolored.get_json()["highlight"]["color"] == "pink"
+
+    annotated = client.put(
+        f"/api/news/{twitter_id}/highlights/{highlight_id}/annotation",
+        json={"annotation_text": "推文批注"},
+    )
+    assert annotated.status_code == 200
+    assert annotated.get_json()["highlight"]["annotation_text"] == "推文批注"
+
+    listed = client.get(
+        f"/api/news/{twitter_id}/highlights?body_kind=twitter_detail"
+    ).get_json()
+    assert listed["body_kind"] == "twitter_detail"
+    assert listed["highlights"][0]["annotation_text"] == "推文批注"
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            "UPDATE article_details SET content=?, content_length=?, updated_at=? WHERE url=?",
+            ("新增前缀\n" + body, len("新增前缀\n" + body), app_module.now_ts(), twitter_url),
+        )
+        conn.commit()
+    reanchored = client.get(
+        f"/api/news/{twitter_id}/highlights?body_kind=twitter_detail"
+    ).get_json()
+    assert reanchored["highlights"][0]["status"] == "active"
+    assert reanchored["highlights"][0]["resolved_start_offset"] == len("新增前缀\n推文开头\n")
+
+    with app_module.db_conn() as conn:
+        ambiguous_body = body + "\n" + body
+        conn.execute(
+            "UPDATE article_details SET content=?, content_length=?, updated_at=? WHERE url=?",
+            (ambiguous_body, len(ambiguous_body), app_module.now_ts(), twitter_url),
+        )
+        conn.commit()
+    orphaned = client.get(
+        f"/api/news/{twitter_id}/highlights?body_kind=twitter_detail"
+    ).get_json()
+    assert orphaned["highlights"][0]["status"] == "orphan"
+
+    deleted = client.delete(f"/api/news/{twitter_id}/highlights/{highlight_id}")
+    assert deleted.status_code == 200
+    assert deleted.get_json()["highlight_surfaces"]["twitter_detail"]["highlights"] == []
 
 
 def test_frontend_article_highlight_contract_and_version():
@@ -9814,10 +9970,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.2.2" in app_source
-    assert "News Reader v2.1.2.2" in index_source
-    assert "/static/style.css?v=2.1.2.2" in index_source
-    assert "/static/app.js?v=2.1.2.2" in index_source
+    assert "News Reader v2.1.2.3" in app_source
+    assert "News Reader v2.1.2.3" in index_source
+    assert "/static/style.css?v=2.1.2.3" in index_source
+    assert "/static/app.js?v=2.1.2.3" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -9831,6 +9987,7 @@ def test_frontend_article_highlight_contract_and_version():
     assert 'type="color"' not in index_source
     assert 'id="detailHighlightColorSelect"' not in index_source
     assert "ai_points_zh" in app_source
+    assert "twitter_detail" in app_source
     assert "annotation_text" in app_source
     assert 'id="detailHighlightAnnotationPopover"' in index_source
     assert 'id="detailHighlightAnnotationInput"' in index_source
@@ -9843,6 +10000,11 @@ def test_frontend_article_highlight_contract_and_version():
     assert "if (hasAnnotation) {" in app_source
     assert 'action?.type === "remove"' in app_source
     assert "preserveHighlightAnnotationEditor" in render_source
+    assert 'document.addEventListener("pointerdown"' in app_source
+    assert 'document.addEventListener("scroll"' in app_source
+    assert 'document.addEventListener("touchmove"' in app_source
+    assert "dismissDetailHighlightTransientUi" in app_source
+    assert "detailHighlightAnnotationRequestToken" in app_source
     assert "ai_conclusion_zh" in app_source
     assert "runDetailHighlightColorChange" in app_source
     assert "detailHighlightColorButtons" in app_source
@@ -9948,6 +10110,14 @@ vm.runInContext(source, context, { filename: "static/app.js" });
   if (context.state.detailHighlightAnnotationDraft !== "失败后必须保留的草稿") throw new Error("failure lost the draft");
   if (context.state.detailHighlightAnnotationBusy) throw new Error("failure left the editor busy");
   if (focusCount < 1) throw new Error("failure did not restore textarea focus");
+  const requestToken = context.state.detailHighlightAnnotationRequestToken;
+  context.dismissDetailHighlightTransientUi();
+  if (context.state.detailHighlightAnnotationOpen) throw new Error("outside dismissal left the editor open");
+  if (context.state.detailHighlightAnnotationMode !== "") throw new Error("outside dismissal kept edit mode");
+  if (context.state.detailHighlightAnnotationDraft !== "") throw new Error("outside dismissal kept the unsaved draft");
+  if (context.state.detailHighlightAnnotationOriginal !== "") throw new Error("outside dismissal kept stale annotation state");
+  if (context.state.detailHighlightAnnotationHighlightId !== null) throw new Error("outside dismissal kept the highlight target");
+  if (context.state.detailHighlightAnnotationRequestToken !== requestToken + 1) throw new Error("outside dismissal did not invalidate late requests");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

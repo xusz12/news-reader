@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS article_ai (
 CREATE TABLE IF NOT EXISTS article_highlights (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   url TEXT NOT NULL,
-  body_kind TEXT NOT NULL DEFAULT 'ai_zh' CHECK (body_kind IN ('ai_zh', 'ai_points_zh', 'ai_conclusion_zh')),
+  body_kind TEXT NOT NULL DEFAULT 'ai_zh' CHECK (body_kind IN ('ai_zh', 'ai_points_zh', 'ai_conclusion_zh', 'twitter_detail')),
   content_hash TEXT NOT NULL,
   start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
   end_offset INTEGER NOT NULL CHECK (end_offset > start_offset),

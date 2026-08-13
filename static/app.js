@@ -88,6 +88,9 @@ let state = {
   detailHighlightConclusionEligible: false,
   detailHighlightConclusionBody: "",
   detailHighlightConclusionRows: [],
+  detailHighlightTwitterEligible: false,
+  detailHighlightTwitterBody: "",
+  detailHighlightTwitterRows: [],
   detailHighlightSelectedColor: null,
   detailHighlightAction: null,
   detailHighlightBusy: false,
@@ -98,6 +101,7 @@ let state = {
   detailHighlightAnnotationDraft: "",
   detailHighlightAnnotationOriginal: "",
   detailHighlightAnnotationBusy: false,
+  detailHighlightAnnotationRequestToken: 0,
   settingsOpen: false,
   settingsLoading: false,
   settingsSaving: false,
@@ -124,6 +128,7 @@ const FEED_KEYBOARD_DETAIL_DELAY_MS = 120;
 const DETAIL_HIGHLIGHT_BODY_KIND = "ai_zh";
 const DETAIL_HIGHLIGHT_POINTS_BODY_KIND = "ai_points_zh";
 const DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND = "ai_conclusion_zh";
+const DETAIL_HIGHLIGHT_TWITTER_BODY_KIND = "twitter_detail";
 const sourceIconMap = {
   reuters: "/static/source-icons/reuters.ico",
   bloomberg: "/static/source-icons/bloomberg.png",
@@ -3395,7 +3400,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.2.2";
+  version.textContent = "News Reader v2.1.2.3";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -6224,8 +6229,15 @@ function detailHighlightSurfaceState(bodyKind = DETAIL_HIGHLIGHT_BODY_KIND) {
       rows: state.detailHighlightConclusionRows,
     };
   }
+  if (bodyKind === DETAIL_HIGHLIGHT_TWITTER_BODY_KIND) {
+    return {
+      eligible: state.detailHighlightTwitterEligible,
+      body: state.detailHighlightTwitterBody,
+      rows: state.detailHighlightTwitterRows,
+    };
+  }
   return {
-    eligible: state.detailHighlightEligible,
+    eligible: !!state.detailHighlightBody,
     body: state.detailHighlightBody,
     rows: state.detailHighlightRows,
   };
@@ -6240,6 +6252,10 @@ function setDetailHighlightSurfaceState(bodyKind, { eligible, body, rows }) {
     state.detailHighlightConclusionEligible = !!eligible;
     state.detailHighlightConclusionBody = state.detailHighlightConclusionEligible ? body : "";
     state.detailHighlightConclusionRows = Array.isArray(rows) ? rows : [];
+  } else if (bodyKind === DETAIL_HIGHLIGHT_TWITTER_BODY_KIND) {
+    state.detailHighlightTwitterEligible = !!eligible;
+    state.detailHighlightTwitterBody = state.detailHighlightTwitterEligible ? body : "";
+    state.detailHighlightTwitterRows = Array.isArray(rows) ? rows : [];
   } else {
     state.detailHighlightEligible = !!eligible;
     state.detailHighlightBody = state.detailHighlightEligible ? body : "";
@@ -6248,7 +6264,8 @@ function setDetailHighlightSurfaceState(bodyKind, { eligible, body, rows }) {
   state.detailHighlightEligible = (
     state.detailHighlightEligible ||
     state.detailHighlightPointsEligible ||
-    state.detailHighlightConclusionEligible
+    state.detailHighlightConclusionEligible ||
+    state.detailHighlightTwitterEligible
   );
 }
 
@@ -6269,6 +6286,7 @@ function updateDetailHighlightStatus() {
     ...state.detailHighlightRows,
     ...state.detailHighlightPointsRows,
     ...state.detailHighlightConclusionRows,
+    ...state.detailHighlightTwitterRows,
   ].filter((highlight) => highlight?.status === "orphan").length;
   if (detailHighlightStatus) {
     detailHighlightStatus.textContent = orphanCount > 0 ? `有 ${orphanCount} 条高亮待重新定位` : "";
@@ -6315,6 +6333,7 @@ function detailHighlightAnnotationRow() {
         detailHighlightSurfaceState(DETAIL_HIGHLIGHT_BODY_KIND),
         detailHighlightSurfaceState(DETAIL_HIGHLIGHT_POINTS_BODY_KIND),
         detailHighlightSurfaceState(DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND),
+        detailHighlightSurfaceState(DETAIL_HIGHLIGHT_TWITTER_BODY_KIND),
       ];
   for (const surface of surfaces) {
     const row = (Array.isArray(surface.rows) ? surface.rows : []).find(
@@ -6372,6 +6391,7 @@ function setDetailHighlightAnnotationBusy(busy) {
 }
 
 function closeDetailHighlightAnnotationEditor() {
+  state.detailHighlightAnnotationRequestToken += 1;
   state.detailHighlightAnnotationOpen = false;
   state.detailHighlightAnnotationMode = "";
   state.detailHighlightAnnotationHighlightId = null;
@@ -6394,6 +6414,17 @@ function closeDetailHighlightAnnotationEditor() {
   if (detailHighlightAnnotationClearBtn) detailHighlightAnnotationClearBtn.disabled = false;
   if (detailHighlightAnnotationEditBtn) detailHighlightAnnotationEditBtn.disabled = false;
   if (detailHighlightAnnotationCancelBtn) detailHighlightAnnotationCancelBtn.disabled = false;
+}
+
+function dismissDetailHighlightTransientUi({ clearSelection = true } = {}) {
+  const hadHighlightPopover = !!state.detailHighlightAction;
+  const hadAnnotationPopover = !!state.detailHighlightAnnotationOpen;
+  if (hadHighlightPopover) hideDetailHighlightPopover();
+  if (hadAnnotationPopover) closeDetailHighlightAnnotationEditor();
+  if (clearSelection && (hadHighlightPopover || hadAnnotationPopover)) {
+    window.getSelection?.()?.removeAllRanges?.();
+  }
+  return hadHighlightPopover || hadAnnotationPopover;
 }
 
 function refreshDetailHighlightAnnotationEditor() {
@@ -6452,6 +6483,7 @@ function openDetailHighlightAnnotationEditor(mark, { mode = "auto" } = {}) {
     const row = (Array.isArray(rows) ? rows : []).find((highlight) => Number(highlight?.id) === highlightId);
     if (!row) return;
     const annotation = typeof row.annotation_text === "string" ? row.annotation_text : "";
+    state.detailHighlightAnnotationRequestToken += 1;
     state.detailHighlightAnnotationOpen = true;
     state.detailHighlightAnnotationMode = annotation.trim() ? "view" : "edit";
     state.detailHighlightAnnotationHighlightId = highlightId;
@@ -6486,6 +6518,9 @@ function resetDetailHighlightState({ preserveAnnotationEditor = false } = {}) {
   state.detailHighlightConclusionEligible = false;
   state.detailHighlightConclusionBody = "";
   state.detailHighlightConclusionRows = [];
+  state.detailHighlightTwitterEligible = false;
+  state.detailHighlightTwitterBody = "";
+  state.detailHighlightTwitterRows = [];
   hideDetailHighlightPopover();
   if (!preserveAnnotationEditor) closeDetailHighlightAnnotationEditor();
   updateDetailHighlightStatus();
@@ -6675,6 +6710,21 @@ function activateDetailHighlightConclusion(conclusionEl, body, highlights) {
   );
 }
 
+function activateDetailHighlightTwitterBody(contentEl, body, highlights) {
+  activateDetailHighlightSurface(
+    contentEl,
+    body,
+    highlights,
+    DETAIL_HIGHLIGHT_TWITTER_BODY_KIND,
+    (root, nextBody, nextRows) => renderDetailHighlightText(
+      root,
+      nextBody,
+      nextRows,
+      DETAIL_HIGHLIGHT_TWITTER_BODY_KIND,
+    ),
+  );
+}
+
 function renderPlainDetailBody(contentEl, body) {
   resetDetailHighlightState();
   contentEl.textContent = body || "";
@@ -6724,6 +6774,11 @@ function detailHighlightRangeSurface(range) {
       bodyKind: DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND,
       root: detailAiConclusion,
       body: state.detailHighlightConclusionBody,
+    },
+    {
+      bodyKind: DETAIL_HIGHLIGHT_TWITTER_BODY_KIND,
+      root: detailContent,
+      body: state.detailHighlightTwitterBody,
     },
   ].filter((surface) => (
     surface.root &&
@@ -6794,7 +6849,7 @@ function applyDetailHighlightPayload(item, payload) {
 function detailHighlightErrorLabel(error) {
   const code = String(error?.message || "");
   const labels = {
-    body_not_ready: "中文正文尚未稳定生成",
+    body_not_ready: "正文尚未稳定生成",
     invalid_offset: "选区位置无效",
     selected_text_mismatch: "选中文本已变化，请重新选择",
     highlight_overlap: "选区与已有高亮重叠，请先取消旧高亮",
@@ -6806,6 +6861,14 @@ function detailHighlightErrorLabel(error) {
     annotation_too_long: "批注不能超过 2000 个字符",
   };
   return labels[code] || "请稍后重试";
+}
+
+function isCurrentDetailHighlightAnnotationRequest(requestToken, itemId, highlightId) {
+  return (
+    state.detailHighlightAnnotationRequestToken === requestToken &&
+    String(state.selectedId || "") === String(itemId || "") &&
+    Number(state.detailHighlightAnnotationHighlightId) === Number(highlightId)
+  );
 }
 
 async function runDetailHighlightAnnotationSave() {
@@ -6832,6 +6895,7 @@ async function runDetailHighlightAnnotationSave() {
     detailHighlightAnnotationInput?.focus({ preventScroll: true });
     return;
   }
+  const requestToken = state.detailHighlightAnnotationRequestToken;
   setDetailHighlightAnnotationBusy(true);
   setDetailHighlightAnnotationFeedback("正在保存批注…", "pending");
   try {
@@ -6846,11 +6910,14 @@ async function runDetailHighlightAnnotationSave() {
     const payload = await res.json().catch(() => ({}));
     if (!res.ok || !payload.ok) throw new Error(payload.error || "annotation_save_failed");
     applyDetailHighlightPayload(item, payload);
-    state.detailHighlightAnnotationDraft = annotationText;
-    state.detailHighlightAnnotationOriginal = annotationText;
-    closeDetailHighlightAnnotationEditor();
+    if (isCurrentDetailHighlightAnnotationRequest(requestToken, item.id, highlightId)) {
+      state.detailHighlightAnnotationDraft = annotationText;
+      state.detailHighlightAnnotationOriginal = annotationText;
+      closeDetailHighlightAnnotationEditor();
+    }
     rerenderOne(item.id, { preserveDetailTransientUi: true });
   } catch (error) {
+    if (!isCurrentDetailHighlightAnnotationRequest(requestToken, item.id, highlightId)) return;
     setDetailHighlightAnnotationFeedback(
       `保存批注失败：${detailHighlightErrorLabel(error)}。当前输入已保留。`,
       "failed",
@@ -6871,6 +6938,7 @@ async function runDetailHighlightAnnotationClear() {
     !Number.isInteger(highlightId) ||
     state.detailHighlightAnnotationBusy
   ) return;
+  const requestToken = state.detailHighlightAnnotationRequestToken;
   setDetailHighlightAnnotationBusy(true);
   setDetailHighlightAnnotationFeedback("正在清除批注…", "pending");
   try {
@@ -6881,9 +6949,12 @@ async function runDetailHighlightAnnotationClear() {
     const payload = await res.json().catch(() => ({}));
     if (!res.ok || !payload.ok) throw new Error(payload.error || "annotation_clear_failed");
     applyDetailHighlightPayload(item, payload);
-    closeDetailHighlightAnnotationEditor();
+    if (isCurrentDetailHighlightAnnotationRequest(requestToken, item.id, highlightId)) {
+      closeDetailHighlightAnnotationEditor();
+    }
     rerenderOne(item.id, { preserveDetailTransientUi: true });
   } catch (error) {
+    if (!isCurrentDetailHighlightAnnotationRequest(requestToken, item.id, highlightId)) return;
     setDetailHighlightAnnotationFeedback(
       `清除批注失败：${detailHighlightErrorLabel(error)}。原批注与当前输入已保留。`,
       "failed",
@@ -7071,8 +7142,17 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
     detail && detail.content && aiStatus === "success" && ai &&
     typeof ai.body_zh === "string" && ai.body_zh.trim()
   ) ? ai.body_zh : "";
+  const twitterUsesGeneratedBody = !!(
+    isTwitterDetail && ai && typeof ai.body_zh === "string" && ai.body_zh.trim() &&
+    (aiStatus === "success" || aiStatus === "pending" || aiStatus === "running")
+  );
+  const stableHighlightTwitterBody = (
+    isTwitterDetail && detail && typeof detail.content === "string" && detail.content.trim() &&
+    !twitterUsesGeneratedBody
+  ) ? detail.content : "";
   const hasStableHighlightSurface = !!(
-    stableHighlightBody || stableHighlightPointsBody || stableHighlightConclusionBody
+    stableHighlightBody || stableHighlightPointsBody || stableHighlightConclusionBody ||
+    stableHighlightTwitterBody
   );
   const preserveHighlightSurface = (
     hasStableHighlightSurface &&
@@ -7084,6 +7164,10 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
       (
         state.detailHighlightConclusionEligible &&
         state.detailHighlightConclusionBody === stableHighlightConclusionBody
+      ) ||
+      (
+        state.detailHighlightTwitterEligible &&
+        state.detailHighlightTwitterBody === stableHighlightTwitterBody
       )
     )
   );
@@ -7145,12 +7229,24 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
       if (isTwitterDetail && aiStatus === "none") {
         statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
         statusEl.className = "detail-status ready";
-        renderPlainDetailBody(contentEl, original);
+        activateDetailHighlightTwitterBody(
+          contentEl,
+          original,
+          cached?.highlight_surfaces?.[DETAIL_HIGHLIGHT_TWITTER_BODY_KIND]?.highlights || [],
+        );
         stopDetailPolling();
       } else {
         statusEl.textContent = aiStatus === "pending" ? "排队生成中文内容" : "正在生成中文内容";
         statusEl.className = "detail-status pending";
-        renderPlainDetailBody(contentEl, ai && ai.body_zh ? ai.body_zh : original);
+        if (isTwitterDetail && !(ai && ai.body_zh)) {
+          activateDetailHighlightTwitterBody(
+            contentEl,
+            original,
+            cached?.highlight_surfaces?.[DETAIL_HIGHLIGHT_TWITTER_BODY_KIND]?.highlights || [],
+          );
+        } else {
+          renderPlainDetailBody(contentEl, ai && ai.body_zh ? ai.body_zh : original);
+        }
         retranslateBtn.textContent = isTwitterDetail ? "正在翻译正文..." : "正在重新翻译...";
         retranslateBtn.disabled = true;
       }
@@ -7187,12 +7283,28 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
         ? `DeepSeek 失败，Codex fallback 也失败：${err}`
         : `中文生成失败，可重试：${err}`;
       statusEl.className = "detail-status failed";
-      renderPlainDetailBody(contentEl, original);
+      if (isTwitterDetail) {
+        activateDetailHighlightTwitterBody(
+          contentEl,
+          original,
+          cached?.highlight_surfaces?.[DETAIL_HIGHLIGHT_TWITTER_BODY_KIND]?.highlights || [],
+        );
+      } else {
+        renderPlainDetailBody(contentEl, original);
+      }
       stopDetailPolling();
     } else {
       statusEl.textContent = `详情已完成 · 正文长度 ${detail.content_length || detail.content.length}`;
       statusEl.className = "detail-status ready";
-      renderPlainDetailBody(contentEl, original);
+      if (isTwitterDetail) {
+        activateDetailHighlightTwitterBody(
+          contentEl,
+          original,
+          cached?.highlight_surfaces?.[DETAIL_HIGHLIGHT_TWITTER_BODY_KIND]?.highlights || [],
+        );
+      } else {
+        renderPlainDetailBody(contentEl, original);
+      }
       stopDetailPolling();
     }
 
@@ -10419,18 +10531,28 @@ document.addEventListener("selectionchange", () => {
     state.detailHighlightConclusionEligible
   ) scheduleDetailHighlightSelectionUpdate();
 });
-document.addEventListener("click", (event) => {
+document.addEventListener("pointerdown", (event) => {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (detailHighlightPopover?.contains(target) || detailHighlightAnnotationPopover?.contains(target)) return;
+  dismissDetailHighlightTransientUi();
+});
+document.addEventListener("scroll", (event) => {
   const target = event.target;
   if (
-    detailHighlightPopover?.contains(target) ||
-    detailHighlightAnnotationPopover?.contains(target) ||
-    detailContent?.contains(target) ||
-    detailAiPoints?.contains(target) ||
-    detailAiConclusion?.contains(target)
+    target instanceof Node &&
+    (detailHighlightPopover?.contains(target) || detailHighlightAnnotationPopover?.contains(target))
   ) return;
-  if (state.detailHighlightAction) hideDetailHighlightPopover();
-});
-if (detailScrollArea) detailScrollArea.addEventListener("scroll", hideDetailHighlightPopover, { passive: true });
+  dismissDetailHighlightTransientUi();
+}, { capture: true, passive: true });
+document.addEventListener("touchmove", (event) => {
+  const target = event.target;
+  if (
+    target instanceof Node &&
+    (detailHighlightPopover?.contains(target) || detailHighlightAnnotationPopover?.contains(target))
+  ) return;
+  dismissDetailHighlightTransientUi();
+}, { passive: true });
 
 const detailImportantBtn = document.getElementById("detailImportantBtn");
 const detailLink = document.getElementById("detailLink");
@@ -11387,6 +11509,10 @@ window.addEventListener("resize", () => {
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.settingsOpen) {
     closeSettingsOverlay();
+    return;
+  }
+  if (event.key === "Escape") {
+    dismissDetailHighlightTransientUi();
   }
 });
 

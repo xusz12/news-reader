@@ -141,10 +141,12 @@ MARKET_TAG_SUMMARY_VERSION = "v1.9.8.9"
 ARTICLE_HIGHLIGHT_BODY_KIND = "ai_zh"
 ARTICLE_HIGHLIGHT_POINTS_BODY_KIND = "ai_points_zh"
 ARTICLE_HIGHLIGHT_CONCLUSION_BODY_KIND = "ai_conclusion_zh"
+ARTICLE_HIGHLIGHT_TWITTER_DETAIL_BODY_KIND = "twitter_detail"
 ARTICLE_HIGHLIGHT_BODY_KINDS = {
     ARTICLE_HIGHLIGHT_BODY_KIND,
     ARTICLE_HIGHLIGHT_POINTS_BODY_KIND,
     ARTICLE_HIGHLIGHT_CONCLUSION_BODY_KIND,
+    ARTICLE_HIGHLIGHT_TWITTER_DETAIL_BODY_KIND,
 }
 ARTICLE_HIGHLIGHT_COLORS = {"yellow", "green", "blue", "pink"}
 ARTICLE_HIGHLIGHT_CONTEXT_CHARS = 48
@@ -690,6 +692,7 @@ def migrate_article_highlights_schema(conn: sqlite3.Connection) -> None:
     needs_rebuild = not {
         "ai_points_zh",
         "ai_conclusion_zh",
+        "twitter_detail",
     }.issubset(table_sql)
     if needs_rebuild:
         conn.execute("DROP INDEX IF EXISTS idx_article_highlights_url")
@@ -701,7 +704,7 @@ def migrate_article_highlights_schema(conn: sqlite3.Connection) -> None:
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               url TEXT NOT NULL,
               body_kind TEXT NOT NULL DEFAULT 'ai_zh'
-                CHECK (body_kind IN ('ai_zh', 'ai_points_zh', 'ai_conclusion_zh')),
+                CHECK (body_kind IN ('ai_zh', 'ai_points_zh', 'ai_conclusion_zh', 'twitter_detail')),
               content_hash TEXT NOT NULL,
               start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
               end_offset INTEGER NOT NULL CHECK (end_offset > start_offset),
@@ -859,6 +862,21 @@ def load_article_highlight_body(
 ) -> tuple[str | None, str | None]:
     if not isinstance(body_kind, str) or body_kind not in ARTICLE_HIGHLIGHT_BODY_KINDS:
         return None, "invalid_body_kind"
+    if body_kind == ARTICLE_HIGHLIGHT_TWITTER_DETAIL_BODY_KIND:
+        item_row = conn.execute(
+            "SELECT source_type FROM items WHERE url=? ORDER BY id LIMIT 1",
+            (url,),
+        ).fetchone()
+        if not (_is_twitter_url(url) or (item_row and item_row["source_type"] == "twitter")):
+            return None, "body_not_ready"
+        detail_row = conn.execute(
+            "SELECT content FROM article_details WHERE url=?",
+            (url,),
+        ).fetchone()
+        detail_body = detail_row["content"] if detail_row else None
+        if not isinstance(detail_body, str) or not detail_body.strip():
+            return None, "body_not_ready"
+        return detail_body, None
     row = conn.execute(
         """
         SELECT aa.body_zh, aa.key_points_zh, aa.conclusion_zh, aj.status
