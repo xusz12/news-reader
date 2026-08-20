@@ -351,6 +351,23 @@ def derive_source_key(url: str | None, source_type: str | None, source: str | No
     return "unknown"
 
 
+def is_bloomberg_video_url(url: str | None) -> bool:
+    """Identify Bloomberg's dedicated video pages without title/slug guessing."""
+    if not url:
+        return False
+    try:
+        parsed = urlparse(str(url).strip())
+    except (TypeError, ValueError):
+        return False
+    host = (parsed.hostname or "").rstrip(".").lower()
+    path = (parsed.path or "").lower()
+    return (host == "bloomberg.com" or host.endswith(".bloomberg.com")) and path.startswith("/news/videos/")
+
+
+def visible_news_sql(alias: str = "items") -> str:
+    return f"is_bloomberg_video_url({alias}.url) = 0"
+
+
 def source_label_for_key(key: str, source: str | None = None) -> str:
     if key in SOURCE_LABELS:
         return SOURCE_LABELS[key]
@@ -608,7 +625,7 @@ def _build_news_where_clause(
     collection: str,
     source_filter: str,
 ) -> tuple[str, list]:
-    where = []
+    where = [visible_news_sql()]
     args: list = []
     if q:
         where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")
@@ -677,6 +694,10 @@ def db_conn() -> sqlite3.Connection:
         conn.create_function("feed_source_subkey", 4, feed_source_subkey_sql, deterministic=True)
     except TypeError:  # pragma: no cover - older sqlite/python fallback
         conn.create_function("feed_source_subkey", 4, feed_source_subkey_sql)
+    try:
+        conn.create_function("is_bloomberg_video_url", 1, lambda url: int(is_bloomberg_video_url(url)), deterministic=True)
+    except TypeError:  # pragma: no cover - older sqlite/python fallback
+        conn.create_function("is_bloomberg_video_url", 1, lambda url: int(is_bloomberg_video_url(url)))
     return conn
 
 
@@ -2065,10 +2086,11 @@ def build_feed_source_settings_snapshot(hidden_keys: list[str]) -> dict:
     conn = db_conn()
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT items.url, items.source_type, items.source, items.source_name, st.read_at
             FROM items
             LEFT JOIN item_state st ON st.item_id = items.id
+            WHERE {visible_news_sql()}
             """
         ).fetchall()
     finally:
@@ -2882,6 +2904,7 @@ def load_news_item_map(conn: sqlite3.Connection, item_ids: list[str]) -> dict[st
         LEFT JOIN ai_jobs aj ON aj.url = items.url
         LEFT JOIN article_ai aa ON aa.url = items.url
         WHERE items.id IN ({placeholders})
+          AND {visible_news_sql()}
         """,
         ordered_ids,
     ).fetchall()
@@ -2936,6 +2959,7 @@ def load_idea_rows(conn: sqlite3.Connection, idea_type: str, sort_order: str) ->
             LEFT JOIN article_details ad ON ad.url = items.url
             LEFT JOIN ai_jobs aj ON aj.url = items.url
             LEFT JOIN article_ai aa ON aa.url = items.url
+            WHERE {visible_news_sql()}
             """
         ).fetchall()
         article_items = [dict(row) for row in article_rows]
@@ -3085,6 +3109,11 @@ def load_tracked_topics(conn: sqlite3.Connection) -> list[dict]:
                  WHERE tti.topic_id = tt.id
                    AND tti.hidden_at IS NULL
                    AND tti.item_id NOT LIKE 'trend_note:%'
+                   AND EXISTS (
+                     SELECT 1 FROM items visible_item
+                     WHERE visible_item.id = tti.item_id
+                       AND is_bloomberg_video_url(visible_item.url) = 0
+                   )
                ) AS visible_item_count,
                (
                  SELECT COUNT(*)
@@ -3092,18 +3121,29 @@ def load_tracked_topics(conn: sqlite3.Connection) -> list[dict]:
                  WHERE tti.topic_id = tt.id
                    AND tti.hidden_at IS NOT NULL
                    AND tti.item_id NOT LIKE 'trend_note:%'
+                   AND EXISTS (
+                     SELECT 1 FROM items visible_item
+                     WHERE visible_item.id = tti.item_id
+                       AND is_bloomberg_video_url(visible_item.url) = 0
+                   )
                ) AS hidden_item_count,
                (
                  SELECT MAX(items.published_at)
                  FROM tracked_topic_items tti
                  JOIN items ON items.id = tti.item_id
                  WHERE tti.topic_id = tt.id AND tti.hidden_at IS NULL
+                   AND is_bloomberg_video_url(items.url) = 0
                ) AS latest_published_at,
                (
                  SELECT MAX(tti.updated_at)
                  FROM tracked_topic_items tti
                  WHERE tti.topic_id = tt.id
                    AND tti.item_id NOT LIKE 'trend_note:%'
+                   AND EXISTS (
+                     SELECT 1 FROM items visible_item
+                     WHERE visible_item.id = tti.item_id
+                       AND is_bloomberg_video_url(visible_item.url) = 0
+                   )
                ) AS latest_matched_at
         FROM tracked_topics tt
         ORDER BY tt.updated_at DESC, tt.id DESC
@@ -3122,6 +3162,11 @@ def load_tracked_topic(conn: sqlite3.Connection, topic_id: int) -> dict | None:
                  WHERE tti.topic_id = tt.id
                    AND tti.hidden_at IS NULL
                    AND tti.item_id NOT LIKE 'trend_note:%'
+                   AND EXISTS (
+                     SELECT 1 FROM items visible_item
+                     WHERE visible_item.id = tti.item_id
+                       AND is_bloomberg_video_url(visible_item.url) = 0
+                   )
                ) AS visible_item_count,
                (
                  SELECT COUNT(*)
@@ -3129,18 +3174,29 @@ def load_tracked_topic(conn: sqlite3.Connection, topic_id: int) -> dict | None:
                  WHERE tti.topic_id = tt.id
                    AND tti.hidden_at IS NOT NULL
                    AND tti.item_id NOT LIKE 'trend_note:%'
+                   AND EXISTS (
+                     SELECT 1 FROM items visible_item
+                     WHERE visible_item.id = tti.item_id
+                       AND is_bloomberg_video_url(visible_item.url) = 0
+                   )
                ) AS hidden_item_count,
                (
                  SELECT MAX(items.published_at)
                  FROM tracked_topic_items tti
                  JOIN items ON items.id = tti.item_id
                  WHERE tti.topic_id = tt.id AND tti.hidden_at IS NULL
+                   AND is_bloomberg_video_url(items.url) = 0
                ) AS latest_published_at,
                (
                  SELECT MAX(tti.updated_at)
                  FROM tracked_topic_items tti
                  WHERE tti.topic_id = tt.id
                    AND tti.item_id NOT LIKE 'trend_note:%'
+                   AND EXISTS (
+                     SELECT 1 FROM items visible_item
+                     WHERE visible_item.id = tti.item_id
+                       AND is_bloomberg_video_url(visible_item.url) = 0
+                   )
                ) AS latest_matched_at
         FROM tracked_topics tt
         WHERE tt.id = ?
@@ -3170,7 +3226,7 @@ def tracked_topic_candidate_rows(
     created_after: str | None = None,
     date_after: str | None = None,
 ) -> list[dict]:
-    where = []
+    where = [visible_news_sql()]
     args: list[object] = []
     if scope == "important":
         where.append("st.important_at IS NOT NULL")
@@ -3392,6 +3448,7 @@ def tracked_topic_timeline_items(conn: sqlite3.Connection, topic_id: int) -> lis
             LEFT JOIN ai_jobs aj ON aj.url = items.url
             LEFT JOIN article_ai aa ON aa.url = items.url
             WHERE items.id IN ({placeholders})
+              AND {visible_news_sql()}
             """,
             news_ids,
         ).fetchall()
@@ -3469,6 +3526,7 @@ def tracked_daily_summary_source_rows(conn: sqlite3.Connection, topic_id: int, *
             LEFT JOIN article_ai aa ON aa.url = items.url
             LEFT JOIN article_details ad ON ad.url = items.url
             WHERE items.id IN ({placeholders})
+              AND {visible_news_sql()}
             """,
             news_ids,
         ).fetchall()
@@ -4011,8 +4069,9 @@ def load_market_workbench_overview(conn: sqlite3.Connection, content_filter: str
         LEFT JOIN (
           SELECT mt.tag, COUNT(*) AS total
           FROM article_market_tags mt
+          JOIN items ON items.url = mt.url
           LEFT JOIN article_notes an ON an.url = mt.url
-          WHERE 1=1 {item_filter_sql}
+          WHERE {visible_news_sql()} {item_filter_sql}
           GROUP BY mt.tag
         ) total_items ON total_items.tag = mtd.key
         LEFT JOIN (
@@ -4025,6 +4084,7 @@ def load_market_workbench_overview(conn: sqlite3.Connection, content_filter: str
           JOIN items ON items.url = mt.url
           LEFT JOIN article_notes an ON an.url = mt.url
           WHERE items.published_at >= datetime('now', '-30 days')
+            AND {visible_news_sql()}
             {item_filter_sql}
           GROUP BY mt.tag
         ) recent_items ON recent_items.tag = mtd.key
@@ -4095,6 +4155,7 @@ def load_market_tag_feed(
         JOIN article_market_tags mt ON mt.url = items.url
         LEFT JOIN article_notes an ON an.url = items.url
         WHERE mt.tag = ?
+          AND {visible_news_sql()}
           {item_filter_sql}
         UNION ALL
         SELECT
@@ -4117,7 +4178,7 @@ def load_market_tag_feed(
         FROM items
         JOIN article_market_tags mt ON mt.url = items.url
         LEFT JOIN article_notes an ON an.url = items.url
-        WHERE 1=1
+        WHERE {visible_news_sql()}
           {item_filter_sql}
         GROUP BY items.id
         UNION ALL
@@ -4188,6 +4249,7 @@ def load_market_tag_feed(
             LEFT JOIN ai_jobs aj ON aj.url = items.url
             LEFT JOIN article_ai aa ON aa.url = items.url
             WHERE items.id IN ({placeholders})
+              AND {visible_news_sql()}
             """,
             news_ids,
         ).fetchall()
@@ -4309,6 +4371,7 @@ def load_market_tag_summary_sources(
         LEFT JOIN article_details ad ON ad.url = items.url
         WHERE mt.tag = ?
           AND items.published_at >= datetime('now', ?)
+          AND {visible_news_sql()}
         ORDER BY items.published_at DESC, items.id DESC
         LIMIT ?
         """,
@@ -5123,8 +5186,7 @@ def run_opencli_detail(url: str) -> tuple[bool, dict, str]:
     if source == "Twitter/X":
         return run_opencli_twitter_detail(url)
 
-    parsed_url = urlparse(url)
-    if source == "Bloomberg" and "/news/videos/" in parsed_url.path:
+    if source == "Bloomberg" and is_bloomberg_video_url(url):
         return False, {}, "SKIPPED_SOURCE: BLOOMBERG_VIDEO"
 
     cmd = [*command, url, "-f", "json"]
@@ -5722,6 +5784,7 @@ def api_news_status():
             LEFT JOIN article_details ad ON ad.url = items.url
             LEFT JOIN ai_jobs aj ON aj.url = items.url
             WHERE items.id IN ({placeholders})
+              AND {visible_news_sql()}
             """,
             ids,
         ).fetchall()
@@ -6198,6 +6261,7 @@ def api_search():
           AND (mt.tag LIKE ? OR COALESCE(mtd.display_name, '') LIKE ?)
       )
     )
+    AND is_bloomberg_video_url(items.url) = 0
     """
     filter_sql, filter_args = _build_search_filter_clause(range_value, time_value)
     all_args = [*search_args, *filter_args]
@@ -6261,7 +6325,7 @@ def api_sources():
     read_filter = (request.args.get("read_filter") or "all").strip().lower()
     collection = (request.args.get("collection") or "feed").strip().lower()
 
-    where = []
+    where = [visible_news_sql()]
     args: list = []
     join_sql = """
         LEFT JOIN item_state st ON st.item_id = items.id
@@ -6412,6 +6476,7 @@ def api_market_trends():
               SELECT DISTINCT {ITEM_DATE_SQL} AS date_key
               FROM items
               WHERE EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)
+                AND {visible_news_sql()}
                 AND {ITEM_DATE_SQL} IS NOT NULL
                 AND {ITEM_DATE_SQL} != ''
               UNION
@@ -6447,6 +6512,7 @@ def api_market_trends():
             JOIN article_market_tags mt ON mt.url = items.url
             LEFT JOIN article_notes an ON an.url = items.url
             WHERE {ITEM_DATE_SQL} IN ({placeholders})
+              AND {visible_news_sql()}
             GROUP BY date_key, mt.tag, mt.direction
             ORDER BY date_key ASC, mt.tag ASC, mt.direction ASC
             """,
@@ -6467,6 +6533,7 @@ def api_market_trends():
             SELECT COUNT(*)
             FROM items
             WHERE EXISTS (SELECT 1 FROM article_market_tags mt WHERE mt.url = items.url)
+              AND {visible_news_sql()}
               AND {ITEM_DATE_SQL} IN ({placeholders})
             """,
             latest_dates_desc,
@@ -6576,6 +6643,7 @@ def api_market_trends_detail():
             WHERE {ITEM_DATE_SQL} = ?
               AND mt.tag = ?
               AND mt.direction = ?
+              AND {visible_news_sql()}
             ORDER BY items.published_at ASC, items.id ASC
             """,
             (date_key, tag, direction),
@@ -6645,6 +6713,7 @@ def api_market_trends_tag_detail():
             LEFT JOIN item_state st ON st.item_id = items.id
             LEFT JOIN article_notes an ON an.url = items.url
             WHERE amt.tag = ?
+              AND {visible_news_sql()}
             ORDER BY {ITEM_DATE_SQL} DESC, items.published_at DESC, items.id DESC
             """,
             (tag,),
@@ -7251,7 +7320,13 @@ def api_get_reading_checkpoint():
     conn = db_conn()
     try:
         row = conn.execute(
-            "SELECT scope, item_id, url, title, updated_at FROM reading_checkpoints WHERE scope=?",
+            f"""
+            SELECT rc.scope, rc.item_id, rc.url, rc.title, rc.updated_at
+            FROM reading_checkpoints rc
+            JOIN items ON items.url = rc.url
+            WHERE rc.scope = ?
+              AND {visible_news_sql()}
+            """,
             (scope,),
         ).fetchone()
     finally:
@@ -7272,6 +7347,8 @@ def api_put_reading_checkpoint():
     url = (body.get("url") or "").strip()
     if not url:
         return jsonify({"ok": False, "error": "missing_url"}), 400
+    if is_bloomberg_video_url(url):
+        return jsonify({"ok": False, "error": "item_not_found"}), 404
     item_id = (body.get("item_id") or "").strip() or None
     title = (body.get("title") or "").strip() or None
     ts = now_ts()
@@ -7314,6 +7391,8 @@ def api_locate_reading_checkpoint():
             (scope,),
         ).fetchone()
         if not cp or not cp["url"]:
+            return jsonify({"ok": True, "found": False, "reason": "no_checkpoint"})
+        if is_bloomberg_video_url(cp["url"]):
             return jsonify({"ok": True, "found": False, "reason": "no_checkpoint"})
 
         where_sql, args = _build_news_where_clause(q, read_filter, "feed", source_filter)
@@ -7511,7 +7590,7 @@ def api_news_detail(item_id: str):
     conn = db_conn()
     try:
         item = conn.execute(
-            """
+            f"""
             SELECT
               items.id,
               items.title,
@@ -7526,6 +7605,7 @@ def api_news_detail(item_id: str):
             FROM items
             LEFT JOIN source_files ON source_files.path = items.source_file
             WHERE items.id=?
+              AND {visible_news_sql()}
             """,
             (item_id,),
         ).fetchone()
@@ -8951,7 +9031,7 @@ def api_mark_all_read():
     collection = (body.get("collection") or "feed").strip().lower()
     source_filter = (body.get("source_filter") or "all").strip().lower()
 
-    where = []
+    where = [visible_news_sql()]
     args: list = []
     if q:
         where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")
@@ -9056,7 +9136,7 @@ def api_clear_read_later():
     read_filter = (body.get("read_filter") or "all").strip().lower()
     source_filter = (body.get("source_filter") or "all").strip().lower()
 
-    where = []
+    where = [visible_news_sql()]
     args: list = []
     if q:
         where.append("(items.title LIKE ? OR items.summary LIKE ? OR items.source LIKE ?)")

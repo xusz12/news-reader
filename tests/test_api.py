@@ -2647,6 +2647,163 @@ def test_sources_and_source_filter(tmp_path: Path, monkeypatch):
     assert u_items[0]["url"].startswith("https://example.org/")
 
 
+def test_bloomberg_video_pages_are_hidden_server_side_without_deleting_history(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年8月"
+    daily_dir.mkdir(parents=True)
+    normal_rows = []
+    for idx in range(11):
+        normal_rows.extend(
+            [
+                f"### [Bloomberg Filter Normal {idx + 1}](https://www.bloomberg.com/news/articles/2026-08-20/normal-{idx + 1})",
+                f"- 发布时间：2026-08-20 09:{idx:02d}:00",
+            ]
+        )
+    normal_rows.extend(
+        [
+            "### [Bloomberg Filter Ordinary Video Topic](https://www.bloomberg.com/news/articles/2026-08-20/meta-removes-a-video)",
+            "- 发布时间：2026-08-20 10:00:00",
+        ]
+    )
+    video_urls = [
+        "https://www.bloomberg.com/news/videos/2026-08-20/hidden-one-video",
+        "https://bloomberg.com/news/videos/2026-08-20/hidden-two-video?leadSource=uverify",
+        "https://markets.bloomberg.com/news/videos/2026-08-20/hidden-three-video",
+    ]
+    video_rows = []
+    for idx, url in enumerate(video_urls):
+        video_rows.extend(
+            [
+                f"### [Bloomberg Filter Hidden {idx + 1}]({url})",
+                f"- 发布时间：2026-08-20 11:{idx:02d}:00",
+            ]
+        )
+    (daily_dir / "dailyFreshNews_2026-08-20.md").write_text(
+        "## Bloomberg · Markets（15条）\n" + "\n".join([*normal_rows, *video_rows]) + "\n",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+
+    with app_module.db_conn() as conn:
+        rows = conn.execute("SELECT id, url FROM items ORDER BY url").fetchall()
+        assert len(rows) == 15  # Filtering is non-destructive.
+        ids_by_url = {row["url"]: row["id"] for row in rows}
+        normal_url = "https://www.bloomberg.com/news/articles/2026-08-20/meta-removes-a-video"
+        now = "2026-08-20 12:00:00"
+        tagged_urls = [normal_url, *video_urls]
+        conn.execute(
+            "INSERT OR REPLACE INTO market_tag_definitions(key, display_name, active, sort_order, created_at, updated_at) VALUES (?, ?, 1, 0, ?, ?)",
+            ("video-filter-test", "Video Filter Test", now, now),
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO article_market_tags(url, tag, direction, created_at, updated_at) VALUES (?, ?, 'bullish', ?, ?)",
+            [(url, "video-filter-test", now, now) for url in tagged_urls],
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO article_notes(url, note, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            [(url, "Bloomberg Filter Note", now, now) for url in tagged_urls],
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO item_state(item_id, favorite_at, important_at, updated_at) VALUES (?, ?, ?, ?)",
+            [(ids_by_url[url], now, now, now) for url in tagged_urls],
+        )
+        conn.commit()
+
+    feed_page_1 = client.get("/api/news?q=Bloomberg+Filter&read_filter=all&page=1&per=10").get_json()
+    feed_page_2 = client.get("/api/news?q=Bloomberg+Filter&read_filter=all&page=2&per=10").get_json()
+    assert feed_page_1["total"] == 12
+    assert feed_page_1["pages"] == 2
+    assert len(feed_page_1["items"]) == 10
+    assert len(feed_page_2["items"]) == 2
+    assert all("/news/videos/" not in item["url"] for item in [*feed_page_1["items"], *feed_page_2["items"]])
+    assert normal_url in {item["url"] for item in [*feed_page_1["items"], *feed_page_2["items"]]}
+
+    search = client.get("/api/search?q=Bloomberg+Filter&range=all&time=all&page=1&per=20").get_json()
+    assert search["total"] == 12
+    assert all("/news/videos/" not in item["url"] for item in search["items"])
+
+    for collection in ("favorites", "important", "notes", "market_tags"):
+        payload = client.get(f"/api/news?collection={collection}&read_filter=all&per=20").get_json()
+        assert payload["total"] == 1
+        assert payload["items"][0]["url"] == normal_url
+
+    sources = client.get("/api/sources?collection=feed&read_filter=all").get_json()["sources"]
+    bloomberg = next(source for source in sources if source["key"] == "bloomberg")
+    assert bloomberg["count"] == 12
+    assert client.get("/api/nav-summary").get_json()["summary"]["feed_unread"] == 12
+
+    trend = client.get(
+        "/api/market-trends/detail?date=2026-08-20&tag=video-filter-test&direction=bullish"
+    ).get_json()
+    assert trend["total"] == 1
+    assert trend["items"][0]["url"] == normal_url
+    workbench = client.get("/api/market-workbench?tag=video-filter-test&per=20").get_json()
+    assert workbench["total"] == 1
+    assert workbench["items"][0]["url"] == normal_url
+
+    for url in video_urls:
+        assert client.get(f"/api/news/{ids_by_url[url]}/detail").status_code == 404
+    assert client.get(f"/api/news/{ids_by_url[normal_url]}/detail").status_code == 200
+
+    status = client.get(
+        "/api/news/status?ids=" + ",".join([ids_by_url[normal_url], *[ids_by_url[url] for url in video_urls]])
+    ).get_json()
+    assert [item["id"] for item in status["items"]] == [ids_by_url[normal_url]]
+
+    checkpoint = client.put(
+        "/api/reading-checkpoint",
+        json={"scope": "feed", "item_id": ids_by_url[video_urls[0]], "url": video_urls[0], "title": "hidden"},
+    )
+    assert checkpoint.status_code == 404
+    visible_checkpoint = client.put(
+        "/api/reading-checkpoint",
+        json={"scope": "feed", "item_id": ids_by_url[normal_url], "url": normal_url, "title": "visible"},
+    )
+    assert visible_checkpoint.status_code == 200
+    assert client.get("/api/reading-checkpoint?scope=feed").get_json()["checkpoint"]["url"] == normal_url
+
+    with app_module.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO reading_checkpoints(scope, item_id, url, title, updated_at)
+            VALUES ('feed', ?, ?, 'legacy hidden', '2026-08-20 12:30:00')
+            """,
+            (ids_by_url[video_urls[0]], video_urls[0]),
+        )
+        conn.commit()
+    assert client.get("/api/reading-checkpoint?scope=feed").get_json()["checkpoint"] is None
+    locate = client.get("/api/reading-checkpoint/locate?scope=feed&read_filter=all&per=20").get_json()
+    assert locate["found"] is False
+    assert locate["reason"] == "no_checkpoint"
+    assert "checkpoint" not in locate
+
+
+def test_v2124_title_clamps_and_version_contract():
+    css = Path("static/style.css").read_text(encoding="utf-8")
+    html = Path("static/index.html").read_text(encoding="utf-8")
+
+    title_rule = css.split(".title {", 1)[1].split("}", 1)[0]
+    selected_title_rule = css.split(".news-item.selected .title {", 1)[1].split("}", 1)[0]
+    detail_title_rule = css.split("#detailTitle {", 1)[1].split("}", 1)[0]
+    summary_rule = css.split("\n.summary {", 1)[1].split("}", 1)[0]
+    assert "-webkit-line-clamp: 5" in title_rule
+    assert "-webkit-line-clamp: 5" in selected_title_rule
+    assert "-webkit-line-clamp: 5" in detail_title_rule
+    assert "-webkit-line-clamp: 3" in summary_rule
+    assert "News Reader v2.1.2.4" in html
+    assert "/static/style.css?v=2.1.2.4" in html
+    assert "/static/app.js?v=2.1.2.4" in html
+
+
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年5月"
     daily_dir.mkdir(parents=True)
@@ -4940,10 +5097,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.2.3" in app_source
-    assert "News Reader v2.1.2.3" in index_source
-    assert "/static/style.css?v=2.1.2.3" in index_source
-    assert "/static/app.js?v=2.1.2.3" in index_source
+    assert "News Reader v2.1.2.4" in app_source
+    assert "News Reader v2.1.2.4" in index_source
+    assert "/static/style.css?v=2.1.2.4" in index_source
+    assert "/static/app.js?v=2.1.2.4" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -9970,10 +10127,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.2.3" in app_source
-    assert "News Reader v2.1.2.3" in index_source
-    assert "/static/style.css?v=2.1.2.3" in index_source
-    assert "/static/app.js?v=2.1.2.3" in index_source
+    assert "News Reader v2.1.2.4" in app_source
+    assert "News Reader v2.1.2.4" in index_source
+    assert "/static/style.css?v=2.1.2.4" in index_source
+    assert "/static/app.js?v=2.1.2.4" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source

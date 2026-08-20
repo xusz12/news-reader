@@ -2,12 +2,13 @@
 
 本地新闻阅读器（Web 版），数据源来自 `DailyNews`，用于新闻流扫读、稍后阅读、想法沉淀、提醒、跟踪主题与复盘。
 
-当前稳定版本：`v2.1.2.3`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前稳定版本：`v2.1.2.4`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 核心能力
 
 - **DailyNews 增量索引**：扫描 `dailyFreshNews_*.md` 作为输入锚点；同名 `.newsreader.json` sidecar 存在且合法时优先使用 JSON，缺失或解析失败时回退 Markdown。
 - **三栏工作台**：左侧集合/筛选，中栏新闻列表，右栏详情与工具区；移动端使用单栏与底部 Tab。
+- **新闻展示规则**：中栏与右栏新闻标题最多显示 5 行；Bloomberg 独立 Video 页面不进入新闻流、搜索、集合或趋势新闻入口。
 - **阅读状态管理**：支持已读/未读、重要、稍后再看、收藏、来源筛选、日期分组与阅读断点。
 - **新闻流二级信源开关**：可按 Reuters 栏目、X/Twitter 账号等二级来源关闭新闻流显示；不修改已读状态，恢复后未读新闻重新出现。
 - **稍后阅读正文抓取**：后台任务通过 opencli 适配器抓取 Reuters、Bloomberg、TechCrunch、Ars、Twitter/X 等正文，写入本地缓存；非 Twitter/X 正文可继续生成中文内容。

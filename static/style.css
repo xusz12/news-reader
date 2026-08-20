@@ -2113,7 +2113,7 @@ button.active {
   text-wrap: pretty;
   overflow-wrap: break-word;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -2164,7 +2164,7 @@ button.active {
 }
 
 .news-item.selected .title {
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 5;
 }
 
 .news-item.selected .summary {
@@ -2856,6 +2856,13 @@ html[data-detail-font="large"] {
   letter-spacing: -0.012em;
   text-wrap: pretty;
   overflow-wrap: break-word;
+}
+
+#detailTitle {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .detail-return-btn {
