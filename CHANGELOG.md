@@ -4,6 +4,10 @@
 
 ## What's Changed
 
+### 2026-08-20 — v2.1.2.5 fix: 关闭翻译生成链路推理
+- 普通新闻的中文要点、末段总结与正文翻译，以及 Twitter/X 正文翻译，继续使用 DeepSeek `deepseek-v4-flash`；真实请求保持官方 `thinking.type=disabled`，重试入口复用同一发送链路。
+- 同步版本号 v2.1.2.5（title、顶栏、CSS/JS cache-bust、移动端更多面板、README）。
+
 ### 2026-08-20 — v2.1.2.4 fix: 双栏标题五行与隐藏 Bloomberg Video
 - 中栏新闻标题与右栏新闻详情标题最多显示 5 行，第 6 行截断；摘要、正文与工具栏布局保持原有规则。
 - 依据 Bloomberg 主域及 `/news/videos/` 专用路径统一排除 Video 页面，新闻流、搜索、各集合与趋势新闻入口的分页和计数均在服务端过滤，普通 Bloomberg 文章不受影响，历史数据库记录不删除。

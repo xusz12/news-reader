@@ -188,6 +188,36 @@ def test_generate_article_ai_accepts_short_chinese_body(monkeypatch):
     assert out["body_zh"] == "该快讯较短，但中文翻译完整。"
 
 
+def test_generate_body_translation_only_disables_deepseek_thinking(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
+    arguments = json.dumps({"body_zh": "这是完整的推文正文翻译。"}, ensure_ascii=False)
+    called = {}
+
+    def create_impl(**kwargs):
+        called.update(kwargs)
+        tool_call = types.SimpleNamespace(
+            function=types.SimpleNamespace(arguments=arguments)
+        )
+        msg = types.SimpleNamespace(tool_calls=[tool_call])
+        choice = types.SimpleNamespace(message=msg)
+        return types.SimpleNamespace(model="deepseek-v4-flash", choices=[choice])
+
+    _install_fake_openai(monkeypatch, create_impl)
+    import llm_client
+
+    importlib.reload(llm_client)
+    out = llm_client.generate_body_translation_only(
+        title="Tweet",
+        source="Twitter/X",
+        content="English tweet body.",
+    )
+    assert out["body_zh"] == "这是完整的推文正文翻译。"
+    assert out["key_points_zh"] == []
+    assert out["conclusion_zh"] == ""
+    assert called["model"] == "deepseek-v4-flash"
+    assert called["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
 def test_generate_article_ai_rejects_non_chinese_body(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
     arguments = json.dumps(

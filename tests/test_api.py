@@ -2787,7 +2787,7 @@ def test_bloomberg_video_pages_are_hidden_server_side_without_deleting_history(t
     assert "checkpoint" not in locate
 
 
-def test_v2124_title_clamps_and_version_contract():
+def test_v2125_title_clamps_and_version_contract():
     css = Path("static/style.css").read_text(encoding="utf-8")
     html = Path("static/index.html").read_text(encoding="utf-8")
 
@@ -2799,9 +2799,9 @@ def test_v2124_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.2.4" in html
-    assert "/static/style.css?v=2.1.2.4" in html
-    assert "/static/app.js?v=2.1.2.4" in html
+    assert "News Reader v2.1.2.5" in html
+    assert "/static/style.css?v=2.1.2.5" in html
+    assert "/static/app.js?v=2.1.2.5" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -5097,10 +5097,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.2.4" in app_source
-    assert "News Reader v2.1.2.4" in index_source
-    assert "/static/style.css?v=2.1.2.4" in index_source
-    assert "/static/app.js?v=2.1.2.4" in index_source
+    assert "News Reader v2.1.2.5" in app_source
+    assert "News Reader v2.1.2.5" in index_source
+    assert "/static/style.css?v=2.1.2.5" in index_source
+    assert "/static/app.js?v=2.1.2.5" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -7356,6 +7356,19 @@ def test_detail_retry_twitter_with_detail_mode_ai_requeues_ai_job(tmp_path: Path
     finally:
         conn.close()
 
+    called = {}
+
+    def fake_generate_body_translation_only(**kwargs):
+        called.update(kwargs)
+        return {
+            "model": "deepseek-v4-flash",
+            "key_points_zh": [],
+            "conclusion_zh": "",
+            "body_zh": "重试后的推文中文翻译。",
+            "raw_json": "{}",
+        }
+
+    monkeypatch.setattr(app_module, "generate_body_translation_only", fake_generate_body_translation_only)
     retry = client.post(f"/api/news/{item['id']}/detail/retry", json={"mode": "ai"})
     assert retry.status_code == 200
     assert retry.get_json()["ok"] is True
@@ -7367,6 +7380,12 @@ def test_detail_retry_twitter_with_detail_mode_ai_requeues_ai_job(tmp_path: Path
         assert job["status"] == "pending"
     finally:
         conn.close()
+
+    assert app_module.process_pending_ai_once() is True
+    assert called["title"] == "Tweet Update"
+    assert called["source"] == "Twitter/X"
+    assert called["content"] == "content"
+    assert called["model"] == ""
 
 
 def test_detail_retry_non_twitter_with_detail_still_requeues_ai_job(tmp_path: Path, monkeypatch):
@@ -7406,6 +7425,19 @@ def test_detail_retry_non_twitter_with_detail_still_requeues_ai_job(tmp_path: Pa
     finally:
         conn.close()
 
+    called = {}
+
+    def fake_generate_article_ai(**kwargs):
+        called.update(kwargs)
+        return {
+            "model": "deepseek-v4-flash",
+            "key_points_zh": ["重试要点一", "重试要点二", "重试要点三"],
+            "conclusion_zh": "重试结论。",
+            "body_zh": "重试后的普通新闻中文翻译。",
+            "raw_json": "{}",
+        }
+
+    monkeypatch.setattr(app_module, "generate_article_ai", fake_generate_article_ai)
     retry = client.post(f"/api/news/{item['id']}/detail/retry")
     assert retry.status_code == 200
     assert retry.get_json()["ok"] is True
@@ -7417,6 +7449,12 @@ def test_detail_retry_non_twitter_with_detail_still_requeues_ai_job(tmp_path: Pa
         assert job["status"] == "pending"
     finally:
         conn.close()
+
+    assert app_module.process_pending_ai_once() is True
+    assert called["title"] == "T"
+    assert called["source"] == "Reuters"
+    assert called["content"] == ("English body " * 30).strip()
+    assert called["model"] == ""
 
 
 
@@ -10127,10 +10165,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.2.4" in app_source
-    assert "News Reader v2.1.2.4" in index_source
-    assert "/static/style.css?v=2.1.2.4" in index_source
-    assert "/static/app.js?v=2.1.2.4" in index_source
+    assert "News Reader v2.1.2.5" in app_source
+    assert "News Reader v2.1.2.5" in index_source
+    assert "/static/style.css?v=2.1.2.5" in index_source
+    assert "/static/app.js?v=2.1.2.5" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
