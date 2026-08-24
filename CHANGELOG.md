@@ -4,6 +4,11 @@
 
 ## What's Changed
 
+### 2026-08-24 — v2.1.2.6 fix: Pi Chat 真实模型目录与 provider 联动
+- 设置页 Pi Chat 模型下拉改为当前机器、当前登录态的真实 CLI 目录：复用单次 `pi --list-models` 调用完整解析 provider 与 model 两列，后端按 provider 分组返回真实候选；读取失败或空结果时才回退默认 `ollama / minimax-m3:cloud`。
+- 切换 Pi provider 时即时重建对应模型下拉：当前/已保存模型属于该 provider 则保留，否则自动选中该 provider 首个真实候选；已保存但目录缺失的 provider/model 只追加到其保存 provider，不污染其它分组；自定义输入始终可用。
+- Codex 的 `codex debug models` 动态目录、翻译模型与实际 Chat 调用链不变；不读取 `ollama list`，不遍历硬盘。同步版本号 v2.1.2.6（title、顶栏、CSS/JS cache-bust、移动端更多面板、README）。
+
 ### 2026-08-20 — v2.1.2.5 fix: 关闭翻译生成链路推理
 - 普通新闻的中文要点、末段总结与正文翻译，以及 Twitter/X 正文翻译，继续使用 DeepSeek `deepseek-v4-flash`；真实请求保持官方 `thinking.type=disabled`，重试入口复用同一发送链路。
 - 同步版本号 v2.1.2.5（title、顶栏、CSS/JS cache-bust、移动端更多面板、README）。

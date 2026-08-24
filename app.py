@@ -1984,20 +1984,37 @@ PI_CHAT_MODEL_FALLBACKS = [DEFAULT_PI_CHAT_MODEL]
 PI_CHAT_PROVIDER_FALLBACKS = [DEFAULT_PI_CHAT_PROVIDER]
 
 
-def parse_pi_providers(stdout: str) -> list[str]:
-    """解析 `pi --list-models` 表格第一列 provider，去重保序；跳过表头。"""
+def parse_pi_model_catalog(stdout: str) -> tuple[list[str], dict[str, list[str]]]:
+    """解析 `pi --list-models` 表格 provider/model 两列。
+
+    跳过表头、空行与不足两列的畸形行；provider 与 provider 内 model 均去重保序。
+    """
     providers: list[str] = []
-    seen: set[str] = set()
+    models_by_provider: dict[str, list[str]] = {}
+    seen_providers: set[str] = set()
+    seen_models: dict[str, set[str]] = {}
     for line in (stdout or "").splitlines():
         parts = line.split()
-        if not parts:
+        if len(parts) < 2:
             continue
-        name = parts[0].strip()
-        if not name or name.lower() == "provider":
+        provider = parts[0].strip()
+        model = parts[1].strip()
+        if not provider or not model or provider.lower() == "provider":
             continue
-        if name not in seen:
-            seen.add(name)
-            providers.append(name)
+        if provider not in seen_providers:
+            seen_providers.add(provider)
+            providers.append(provider)
+            models_by_provider[provider] = []
+            seen_models[provider] = set()
+        if model not in seen_models[provider]:
+            seen_models[provider].add(model)
+            models_by_provider[provider].append(model)
+    return providers, models_by_provider
+
+
+def parse_pi_providers(stdout: str) -> list[str]:
+    """解析 `pi --list-models` 表格第一列 provider，去重保序；跳过表头与畸形行。"""
+    providers, _ = parse_pi_model_catalog(stdout)
     return providers
 
 
@@ -2006,8 +2023,10 @@ def pi_chat_settings_snapshot(saved_model: str, saved_provider: str = "") -> dic
     exec_available = False
     last_error = ""
     status_bits: list[str] = []
+    catalog_detected = False
     provider_options = fallback_model_options(PI_CHAT_PROVIDER_FALLBACKS, source="fallback")
     provider_source = "fallback"
+    grouped_options: dict[str, list[dict]] = {}
 
     if not cli_available:
         status_bits.append("未发现 Pi CLI，使用默认候选。")
@@ -2029,7 +2048,7 @@ def pi_chat_settings_snapshot(saved_model: str, saved_provider: str = "") -> dic
             last_error = trim_settings_error(exc)
             status_bits.append("pi 检查失败。")
 
-        # 检测可用 provider：解析 `pi --list-models` 第一列。失败/空回退默认，不丢已保存 provider。
+        # 同一次 `pi --list-models` 调用解析 provider/model 两列；失败/空回退默认，不丢已保存值。
         if exec_available:
             try:
                 models_probe = subprocess.run(
@@ -2042,11 +2061,16 @@ def pi_chat_settings_snapshot(saved_model: str, saved_provider: str = "") -> dic
                     env=_pi_subprocess_env(),
                 )
                 if models_probe.returncode == 0:
-                    detected = parse_pi_providers(models_probe.stdout or "")
-                    if detected:
-                        provider_options = [build_model_option(name, source="pi-list-models") for name in detected]
+                    providers, models_by_provider = parse_pi_model_catalog(models_probe.stdout or "")
+                    if providers:
+                        catalog_detected = True
+                        provider_options = [build_model_option(name, source="pi-list-models") for name in providers]
                         provider_source = "pi-list-models"
-                        status_bits.append("pi --list-models 检测到 provider。")
+                        grouped_options = {
+                            provider: [build_model_option(model, source="pi-list-models") for model in models]
+                            for provider, models in models_by_provider.items()
+                        }
+                        status_bits.append("pi --list-models 检测到 provider 与模型目录。")
                     else:
                         status_bits.append("pi --list-models 返回空，使用默认候选。")
                 else:
@@ -2057,16 +2081,34 @@ def pi_chat_settings_snapshot(saved_model: str, saved_provider: str = "") -> dic
     saved_provider = (saved_provider or "").strip()
     provider_options = merge_model_options(provider_options, saved_provider)
 
+    # 真实目录可用时：按 provider 分组模型；已保存 provider/model 缺失时只追加到其保存 provider，不污染其它组。
+    saved_model_value = (saved_model or "").strip()
+    if catalog_detected:
+        grouped = {provider: list(options) for provider, options in grouped_options.items()}
+        effective_provider = saved_provider or DEFAULT_PI_CHAT_PROVIDER
+        grouped.setdefault(effective_provider, [])
+        group = grouped[effective_provider]
+        if saved_model_value and all(opt["value"] != saved_model_value for opt in group):
+            group.append(build_model_option(saved_model_value, description="当前已保存模型", source="saved"))
+        model_options: list[dict] = list(group)
+        used_fallback = False
+        catalog_source = "pi-list-models"
+    else:
+        grouped = {}
+        model_options = fallback_model_options(PI_CHAT_MODEL_FALLBACKS, source="fallback")
+        used_fallback = True
+        catalog_source = "fallback"
+
     return {
         "service": {
             "cli_available": cli_available,
             "exec_available": exec_available,
-            "used_fallback": True,
+            "used_fallback": used_fallback,
             "last_error": last_error,
             "status_text": " ".join(status_bits).strip(),
         },
         "catalog": {
-            "source": "fallback",
+            "source": catalog_source,
             "saved_model": (saved_model or "").strip(),
             "saved_provider": saved_provider,
             "resolved_default_model": DEFAULT_PI_CHAT_MODEL,
@@ -2074,8 +2116,9 @@ def pi_chat_settings_snapshot(saved_model: str, saved_provider: str = "") -> dic
             "provider_source": provider_source,
             "custom_allowed": True,
             "default_label": DEFAULT_PI_CHAT_MODEL,
-            "options": merge_model_options(fallback_model_options(PI_CHAT_MODEL_FALLBACKS, source="fallback"), saved_model),
+            "options": merge_model_options(model_options, saved_model),
             "provider_options": provider_options,
+            "model_options_by_provider": grouped,
         },
     }
 

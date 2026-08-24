@@ -1999,6 +1999,39 @@ function readModelSetting(select, customInput) {
   return (select.value || "").trim();
 }
 
+function syncPiChatModelSelectForProvider() {
+  const select = settingsPiChatModelSelect;
+  const customInput = settingsPiChatModelCustom;
+  if (!select || !customInput) return;
+  const provider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom).trim();
+  const catalog = state.runtimeSettings?.model_catalogs?.pi_chat || {};
+  const grouped = catalog.model_options_by_provider || {};
+  // 真实目录是否成功获取（后端失败/空时返回空对象）。
+  const hasRealCatalog = Object.keys(grouped).length > 0;
+  const hasGroup = Object.prototype.hasOwnProperty.call(grouped, provider);
+  const groupValues = hasGroup && Array.isArray(grouped[provider]) ? grouped[provider] : [];
+  const fallbackOptions = Array.isArray(catalog.options) ? catalog.options : [];
+  // 真实目录成功但当前 provider 无分组：显示空目录（仅默认占位 + 自定义输入），
+  // 绝不继承 catalog.options（那是已保存 provider 的分组），避免跨 provider 串组；
+  // 仅真实目录失败或为空时才回退 fallback options。
+  const options = hasGroup ? groupValues : (hasRealCatalog ? [] : fallbackOptions);
+  const currentModel = readModelSetting(select, customInput).trim();
+  // 当前/已保存模型属于该 provider 时保留，否则选该 provider 的首个真实候选；自定义输入始终可用。
+  const belongs = !!currentModel && options.some((opt) => (opt?.value || "").trim() === currentModel);
+  const nextValue = belongs ? currentModel : ((options[0]?.value || "").trim());
+  populateModelSelect(
+    select,
+    customInput,
+    {
+      options,
+      resolved_default_model: catalog.resolved_default_model || "",
+      default_label: catalog.default_label || "",
+    },
+    nextValue,
+  );
+  syncModelCustomVisibility(select, customInput);
+}
+
 function populateSettingsForm() {
   const llm = state.runtimeSettings?.llm;
   if (!llm) return;
@@ -3400,7 +3433,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.2.5";
+  version.textContent = "News Reader v2.1.2.6";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -10264,6 +10297,7 @@ if (settingsCodexChatModelSelect) {
 if (settingsPiChatProviderSelect) {
   settingsPiChatProviderSelect.addEventListener("change", () => {
     syncModelCustomVisibility(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
+    syncPiChatModelSelectForProvider();
   });
 }
 

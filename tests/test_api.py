@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.2.5" in html
-    assert "/static/style.css?v=2.1.2.5" in html
-    assert "/static/app.js?v=2.1.2.5" in html
+    assert "News Reader v2.1.2.6" in html
+    assert "/static/style.css?v=2.1.2.6" in html
+    assert "/static/app.js?v=2.1.2.6" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -5097,10 +5097,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.2.5" in app_source
-    assert "News Reader v2.1.2.5" in index_source
-    assert "/static/style.css?v=2.1.2.5" in index_source
-    assert "/static/app.js?v=2.1.2.5" in index_source
+    assert "News Reader v2.1.2.6" in app_source
+    assert "News Reader v2.1.2.6" in index_source
+    assert "/static/style.css?v=2.1.2.6" in index_source
+    assert "/static/app.js?v=2.1.2.6" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -6714,6 +6714,35 @@ def test_parse_pi_providers():
     assert app_module.parse_pi_providers("provider  model\n") == []
 
 
+def test_parse_pi_model_catalog():
+    import app as app_module
+
+    stdout = (
+        "provider  model              context  max-out  thinking  images\n"
+        "deepseek  deepseek-v4-flash  1M       384K     yes       no\n"
+        "deepseek  deepseek-v4-pro    1M       384K     yes       no\n"
+        "deepseek  deepseek-v4-flash  1M       384K     yes       no\n"
+        "\n"
+        "ollama    minimax-m3:cloud   524.3K   16.4K    yes       yes\n"
+        "ollama    minimax-m3:cloud   524.3K   16.4K    yes       yes\n"
+        "broken-row\n"
+        "ollama    qwen3.5:4b         262.1K   16.4K    yes       yes\n"
+    )
+    providers, grouped = app_module.parse_pi_model_catalog(stdout)
+    assert providers == ["deepseek", "ollama"]
+    assert grouped == {
+        "deepseek": ["deepseek-v4-flash", "deepseek-v4-pro"],
+        "ollama": ["minimax-m3:cloud", "qwen3.5:4b"],
+    }
+    # 表头/空行/畸形行（不足两列）/空输出都安全跳过；两列以上的行取前两列。
+    assert app_module.parse_pi_model_catalog("provider  model\n") == ([], {})
+    assert app_module.parse_pi_model_catalog("") == ([], {})
+    assert app_module.parse_pi_model_catalog("onlyprovider\n") == ([], {})
+    providers_two, grouped_two = app_module.parse_pi_model_catalog("deepseek  deepseek-v4-pro  1M  384K  yes  no\n")
+    assert providers_two == ["deepseek"]
+    assert grouped_two == {"deepseek": ["deepseek-v4-pro"]}
+
+
 def test_pi_chat_settings_snapshot_detects_providers(tmp_path: Path, monkeypatch):
     settings_path = tmp_path / "app_settings.json"
     settings_path.write_text("{}", encoding="utf-8")
@@ -6741,7 +6770,16 @@ def test_pi_chat_settings_snapshot_detects_providers(tmp_path: Path, monkeypatch
     assert "deepseek" in provider_values and "ollama" in provider_values
     # 默认模型选项仍保留
     assert catalog["resolved_default_model"] == "minimax-m3:cloud"
-    assert any(opt["value"] == "minimax-m3:cloud" for opt in catalog["options"])
+    # 真实目录成功：source/used_fallback 准确反映 pi-list-models。
+    assert catalog["source"] == "pi-list-models"
+    assert snapshot["service"]["used_fallback"] is False
+    grouped = catalog["model_options_by_provider"]
+    # 已保存模型不在其保存 provider 的真实目录内时，只追加到保存 provider 组。
+    assert [opt["value"] for opt in grouped["deepseek"]] == ["deepseek-v4-flash", "minimax-m3:cloud"]
+    assert [opt["value"] for opt in grouped["ollama"]] == ["minimax-m3:cloud"]
+    assert [opt["source"] for opt in grouped["deepseek"]][-1] == "saved"
+    # 顶层兼容 options 为保存 provider 的分组（含已保存追加）。
+    assert [opt["value"] for opt in catalog["options"]] == ["deepseek-v4-flash", "minimax-m3:cloud"]
 
 
 def test_pi_chat_settings_snapshot_falls_back_and_keeps_saved_provider(tmp_path: Path, monkeypatch):
@@ -6760,6 +6798,12 @@ def test_pi_chat_settings_snapshot_falls_back_and_keeps_saved_provider(tmp_path:
     assert "ollama" in provider_values
     assert "custom-provider" in provider_values
     assert snapshot["catalog"]["saved_provider"] == "custom-provider"
+    # 失败回退：source/used_fallback 准确，且无分组目录。
+    assert snapshot["catalog"]["source"] == "fallback"
+    assert snapshot["service"]["used_fallback"] is True
+    assert snapshot["catalog"]["model_options_by_provider"] == {}
+    option_values = [opt["value"] for opt in snapshot["catalog"]["options"]]
+    assert option_values[0] == "minimax-m3:cloud"
 
 
 def test_pi_chat_settings_snapshot_appends_saved_provider_not_detected(tmp_path: Path, monkeypatch):
@@ -6781,6 +6825,74 @@ def test_pi_chat_settings_snapshot_appends_saved_provider_not_detected(tmp_path:
     assert "ollama" in provider_values
     assert "deepseek" in provider_values  # saved 不在检测结果里，仍追加
     assert snapshot["catalog"]["saved_provider"] == "deepseek"
+    # 已保存 provider 缺失时补组，且已保存模型只进自己的组；ollama 组不被污染。
+    grouped = snapshot["catalog"]["model_options_by_provider"]
+    assert [opt["value"] for opt in grouped["deepseek"]] == ["minimax-m3:cloud"]
+    assert grouped["deepseek"][-1]["source"] == "saved"
+    assert [opt["value"] for opt in grouped["ollama"]] == ["minimax-m3:cloud"]
+
+
+def test_pi_chat_settings_snapshot_keeps_saved_model_in_real_group_without_duplicate(tmp_path: Path, monkeypatch):
+    # 已保存 provider/model 都在真实目录内：不重复追加，options 即真实分组。
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    import app as app_module
+
+    importlib.reload(app_module)
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/opt/homebrew/bin/pi")
+    monkeypatch.setattr(
+        app_module.subprocess,
+        "run",
+        _fake_pi_subprocess(
+            models_stdout=(
+                "provider  model              context  max-out  thinking  images\n"
+                "deepseek  deepseek-v4-flash  1M       384K     yes       no\n"
+                "deepseek  deepseek-v4-pro    1M       384K     yes       no\n"
+            )
+        ),
+    )
+    snapshot = app_module.pi_chat_settings_snapshot("deepseek-v4-pro", "deepseek")
+    catalog = snapshot["catalog"]
+    grouped = catalog["model_options_by_provider"]
+    values = [opt["value"] for opt in grouped["deepseek"]]
+    assert values == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert all(opt["source"] == "pi-list-models" for opt in grouped["deepseek"])
+    assert [opt["value"] for opt in catalog["options"]] == values
+
+
+def test_frontend_pi_chat_provider_model_linkage_contract():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+
+    # 切换 Pi provider 时即时重建模型下拉。
+    assert "function syncPiChatModelSelectForProvider()" in app_source
+    listener_block = app_source.split("if (settingsPiChatProviderSelect) {", 1)[1].split("}", 1)[0]
+    assert "syncPiChatModelSelectForProvider();" in listener_block
+    # 联动读取按 provider 分组的真实目录，并保留当前/已保存值或选首个候选；自定义输入入口保留。
+    assert "catalog.model_options_by_provider" in app_source
+    assert "const belongs = !!currentModel && options.some((opt) => (opt?.value || \"\").trim() === currentModel);" in app_source
+    assert "const nextValue = belongs ? currentModel : ((options[0]?.value || \"\").trim());" in app_source
+    assert "SETTINGS_CUSTOM_MODEL_VALUE" in app_source
+    # 回归：真实目录成功时未知/自定义 provider 不得回退到已保存 provider 的 catalog.options（跨组串组）。
+    assert "const hasRealCatalog = Object.keys(grouped).length > 0;" in app_source
+    assert "const options = hasGroup ? groupValues : (hasRealCatalog ? [] : fallbackOptions);" in app_source
+    assert "const options = hasGroup ? groupValues : fallbackOptions;" not in app_source
+    # 不混入 ollama list。
+    assert "ollama list" not in app_source
+
+
+def test_backend_pi_catalog_does_not_touch_codex_or_ollama_list():
+    import app as app_module
+    import inspect
+
+    src = inspect.getsource(app_module.pi_chat_settings_snapshot)
+    assert "ollama" not in src.lower().replace("default_pi_chat_provider", "").replace("minimax-m3:cloud", "")
+    assert "pi --list-models" in src
+    assert "codex" not in src.lower()
+    # Codex 目录逻辑保持独立且不变。
+    codex_src = inspect.getsource(app_module.codex_settings_snapshot)
+    assert "codex debug models" in codex_src
+    assert "pi" not in codex_src.lower()
 
 
 def test_parse_pi_stdout_success_text_delta():
@@ -10165,10 +10277,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.2.5" in app_source
-    assert "News Reader v2.1.2.5" in index_source
-    assert "/static/style.css?v=2.1.2.5" in index_source
-    assert "/static/app.js?v=2.1.2.5" in index_source
+    assert "News Reader v2.1.2.6" in app_source
+    assert "News Reader v2.1.2.6" in index_source
+    assert "/static/style.css?v=2.1.2.6" in index_source
+    assert "/static/app.js?v=2.1.2.6" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
