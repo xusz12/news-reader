@@ -1478,10 +1478,11 @@ function isMobileLayout() {
   return window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
 }
 
-function applyThemeMode(mode) {
-  const finalMode = ["system", "light", "dark"].includes(mode) ? mode : "system";
+function applyThemeMode(mode, { persist = true } = {}) {
+  const finalMode = ["system", "light", "dark", "eink"].includes(mode) ? mode : "system";
   document.documentElement.setAttribute("data-theme", finalMode);
   if (themeModeSelect) themeModeSelect.value = finalMode;
+  if (!persist) return;
   try {
     localStorage.setItem(THEME_KEY, finalMode);
   } catch {}
@@ -2666,6 +2667,7 @@ function syncRowUI(li, item) {
   li.dataset.favorite = item.favorite_at ? "1" : "0";
   li.dataset.important = item.important_at ? "1" : "0";
   li.dataset.readLater = item.read_later_at ? "1" : "0";
+  li.dataset.detailReady = Number(item.detail_ready || 0) === 1 ? "1" : "0";
   li.dataset.readLaterCompleted = Number(item.detail_ready || 0) === 1 && !item.read_later_at ? "1" : "0";
   li.dataset.readLaterDone = item.read_later_done_at ? "1" : "0";
   li.dataset.hasReminder = Number(item.active_reminder_count || 0) > 0 ? "1" : "0";
@@ -3401,6 +3403,7 @@ function renderMobileMoreOptions() {
       { value: "system", label: "跟随系统" },
       { value: "light", label: "浅色" },
       { value: "dark", label: "深色" },
+      { value: "eink", label: "墨水屏" },
     ],
     onChange: applyThemeMode,
   });
@@ -3433,7 +3436,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.2.6";
+  version.textContent = "News Reader v2.1.3.0";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -10235,6 +10238,11 @@ if (mobileCollectionCloseBtn) {
 
 if (themeModeSelect) {
   themeModeSelect.addEventListener("change", () => {
+    // 用户显式选择即长期偏好；清除 URL 会话覆盖标记。
+    try {
+      window.sessionStorage.removeItem("news_reader_theme_mode_url");
+      delete window.__newsReaderThemeMode;
+    } catch {}
     applyThemeMode(themeModeSelect.value);
   });
 }
@@ -11555,9 +11563,10 @@ setupFeedControlsOverflowCue();
 setupDetailToolbarOverflowCue();
 renderDetail(null);
 try {
-  applyThemeMode(localStorage.getItem(THEME_KEY) || "system");
+  // 首帧主题已在 head 内联脚本中恢复（含 URL 会话覆盖）；此处仅同步选择器，不重复写长期偏好。
+  applyThemeMode(window.__newsReaderThemeMode || localStorage.getItem(THEME_KEY) || "system", { persist: false });
 } catch {
-  applyThemeMode("system");
+  applyThemeMode("system", { persist: false });
 }
 try {
   applyDetailFontMode(localStorage.getItem(DETAIL_FONT_KEY) || "medium");

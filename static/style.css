@@ -5295,3 +5295,352 @@ html[data-detail-font="large"] {
     flex: 0 0 auto;
   }
 }
+
+/* ===== E-Ink theme (墨水屏外观) =====
+   纯黑白灰阶、触控优先、无渐变/透明叠层/模糊/阴影/动画；
+   所有状态脱离颜色可辨；仅作用于 html[data-theme="eink"]。 */
+
+html[data-theme="eink"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-soft: #ffffff;
+  --panel-strong: #ffffff;
+  --sidebar-bg: #f7f7f7;
+  --sidebar-hover: #ececec;
+  --border: #4b5563;
+  --hairline: #d4d4d4;
+  --text: #000000;
+  --muted: #374151;
+  --accent: #111827;
+  --accent-soft: #ececec;
+  --tint-lavender: #f5f5f5;
+  --tint-sage: #f5f5f5;
+  --tint-cyan: #f5f5f5;
+  --tint-apricot: #f0f0f0;
+  --shadow-soft: none;
+  --shadow-subtle: none;
+  --topbar-edge-highlight: transparent;
+  --radius-control: 6px;
+  --radius-row: 8px;
+  --radius-panel: 10px;
+  --row-title: #000000;
+  --row-title-important: #000000;
+  --row-title-bullish: #000000;
+  --row-title-bearish: #000000;
+  --row-title-mixed: #000000;
+  --row-summary: #1f2937;
+  --row-hover: #f5f5f5;
+  --row-selected: #e5e7eb;
+  --row-selected-outline: #111827;
+  --queue-surface: #ffffff;
+  --queue-row: #ffffff;
+  --queue-row-hover: #efefef;
+  --queue-row-read: #fafafa;
+  --queue-row-selected: #e5e7eb;
+  --queue-row-ring: #111827;
+  --icon-default: #1f2937;
+  --detail-text: #000000;
+  --detail-soft: #1f2937;
+  --detail-font-base: 1rem;
+  --detail-card-bg: #ffffff;
+  --detail-card-border: #4b5563;
+  --detail-divider: #4b5563;
+  --status-pending: #1f2937;
+  --status-ready: #111827;
+  --status-failed: #000000;
+  --video-badge-border: #4b5563;
+  --video-badge-text: #000000;
+  --video-badge-bg: #ffffff;
+  --note-badge-border: #4b5563;
+  --note-badge-text: #000000;
+  --note-badge-bg: #ffffff;
+  --row-note-preview-bg: #f5f5f5;
+  --row-note-preview-text: #000000;
+  --trend-bullish-note-bg: #ffffff;
+  --trend-bullish-note-text: #000000;
+  --trend-bullish-note-border: #4b5563;
+  --trend-bearish-note-bg: #ffffff;
+  --trend-bearish-note-text: #000000;
+  --trend-bearish-note-border: #4b5563;
+  --scrollbar-track: #f0f0f0;
+  --scrollbar-thumb: #9ca3af;
+  --scrollbar-thumb-hover: #4b5563;
+}
+
+/* 动效与视觉噪音全局清零：最终计算样式必须为 0/none。 */
+html[data-theme="eink"] *,
+html[data-theme="eink"] *::before,
+html[data-theme="eink"] *::after {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+  animation: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background-image: none !important;
+}
+
+/* 面板与关键组件改为实底 + 清晰边框（补偿被移除的内阴影描边）。 */
+html[data-theme="eink"] .topbar,
+html[data-theme="eink"] .left-nav,
+html[data-theme="eink"] .news-item,
+html[data-theme="eink"] .detail-panel {
+  border: 1px solid var(--border);
+}
+html[data-theme="eink"] .topbar,
+html[data-theme="eink"] .left-nav,
+html[data-theme="eink"] .news-item,
+html[data-theme="eink"] .detail-panel,
+html[data-theme="eink"] .feed-controls,
+html[data-theme="eink"] .panel-toolbar,
+html[data-theme="eink"] .detail-toolbar,
+html[data-theme="eink"] .topbar-view-popover,
+html[data-theme="eink"] .detail-highlight-popover,
+html[data-theme="eink"] .mobile-filter-sheet,
+html[data-theme="eink"] .mobile-filter-panel,
+html[data-theme="eink"] .settings-panel,
+html[data-theme="eink"] .settings-feed-source-group {
+  background-color: #ffffff;
+}
+html[data-theme="eink"] .left-nav .nav-btn:hover {
+  background-color: #ececec;
+}
+html[data-theme="eink"] .topbar,
+html[data-theme="eink"] .panel-toolbar,
+html[data-theme="eink"] .feed-controls,
+html[data-theme="eink"] .detail-toolbar {
+  border-bottom: 1px solid var(--border);
+}
+html[data-theme="eink"] .feed-controls-frame::before,
+html[data-theme="eink"] .feed-controls-frame::after,
+html[data-theme="eink"] .detail-toolbar-frame::before,
+html[data-theme="eink"] .detail-toolbar-frame::after {
+  display: none;
+}
+html[data-theme="eink"] button,
+html[data-theme="eink"] select,
+html[data-theme="eink"] input:not([type="checkbox"]):not([type="radio"]),
+html[data-theme="eink"] textarea {
+  border: 1px solid var(--border);
+  background-color: #ffffff;
+  color: #000000;
+}
+html[data-theme="eink"] .topbar-view-popover,
+html[data-theme="eink"] .detail-highlight-popover {
+  border: 1px solid var(--border);
+  background-color: #ffffff;
+}
+html[data-theme="eink"] .market-tag-badge {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  color: #000000;
+}
+html[data-theme="eink"] .market-tag-badge.bullish::before {
+  content: "↑ ";
+  font-weight: 700;
+}
+html[data-theme="eink"] .market-tag-badge.bearish::before {
+  content: "↓ ";
+  font-weight: 700;
+}
+html[data-theme="eink"] .row-note-preview {
+  border: 1px dashed var(--border);
+}
+
+/* 触控优先：不依赖 hover，操作常显；辅助信息不用低透明度弱化。 */
+@media (hover: hover) {
+  html[data-theme="eink"] .news-item .row-actions {
+    opacity: 1 !important;
+  }
+}
+html[data-theme="eink"] .news-item .row-actions,
+html[data-theme="eink"] .nav-btn-secondary,
+html[data-theme="eink"] .icon-btn,
+html[data-theme="eink"] .icon-btn.loading,
+html[data-theme="eink"] .topbar-view-trigger,
+html[data-theme="eink"] .topbar-view-trigger::after,
+html[data-theme="eink"] .detail-tag-admin-order-btn,
+html[data-theme="eink"] .detail-highlight-color-button,
+html[data-theme="eink"] .detail-link,
+html[data-theme="eink"] .detail-link.disabled,
+html[data-theme="eink"] .detail-reminder-item.done,
+html[data-theme="eink"] .reminder-item.done,
+html[data-theme="eink"] .detail-scroll-area .detail-reminder-item.done {
+  opacity: 1 !important;
+}
+html[data-theme="eink"] .row-actions button:active {
+  transform: none;
+}
+
+/* 常用触控目标约 44px。 */
+html[data-theme="eink"] .row-actions button,
+html[data-theme="eink"] .panel-toolbar button,
+html[data-theme="eink"] .detail-toolbar button,
+html[data-theme="eink"] .mobile-tab,
+html[data-theme="eink"] .pref-select {
+  min-height: 44px;
+}
+html[data-theme="eink"] .row-actions button,
+html[data-theme="eink"] .detail-toolbar button.icon-btn,
+html[data-theme="eink"] .panel-toolbar button.icon-btn {
+  min-width: 44px;
+}
+
+/* 状态脱离颜色可辨：标题前缀字形。 */
+html[data-theme="eink"] .title.tone-important::before {
+  content: "★ ";
+  font-weight: 700;
+}
+html[data-theme="eink"] .title.tone-bullish::before {
+  content: "↑ ";
+  font-weight: 700;
+}
+html[data-theme="eink"] .title.tone-bearish::before {
+  content: "↓ ";
+  font-weight: 700;
+}
+html[data-theme="eink"] .title.tone-mixed::before {
+  content: "↕ ";
+  font-weight: 700;
+}
+html[data-theme="eink"] .unread-dot {
+  background: #111827;
+}
+html[data-theme="eink"] .news-item.selected {
+  outline: 2px solid #111827;
+  outline-offset: -2px;
+}
+
+/* 四色高亮在灰阶下改用线型区分：黄=实线 绿=虚线 蓝=双线 粉=点线。 */
+html[data-theme="eink"] .detail-content mark.article-highlight,
+html[data-theme="eink"] .detail-ai-points mark.article-highlight,
+html[data-theme="eink"] .detail-ai-conclusion mark.article-highlight {
+  background: transparent !important;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  padding: 1px 2px;
+}
+html[data-theme="eink"] mark.article-highlight[data-highlight-color] {
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+html[data-theme="eink"] mark.article-highlight[data-highlight-color="yellow"] {
+  text-decoration-style: solid;
+}
+html[data-theme="eink"] mark.article-highlight[data-highlight-color="green"] {
+  text-decoration-style: dashed;
+}
+html[data-theme="eink"] mark.article-highlight[data-highlight-color="blue"] {
+  text-decoration-style: double;
+}
+html[data-theme="eink"] mark.article-highlight[data-highlight-color="pink"] {
+  text-decoration-style: dotted;
+}
+html[data-theme="eink"] .article-highlight-annotation-button {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  color: #000000;
+}
+html[data-theme="eink"] .article-highlight-annotation-button.has-annotation .article-highlight-annotation-glyph {
+  box-shadow: none;
+}
+
+/* 正文排版：至少 16px、行高约 1.65；禁用态用虚线边框表达。 */
+html[data-theme="eink"] .detail-summary,
+html[data-theme="eink"] .detail-ai-points,
+html[data-theme="eink"] .detail-ai-conclusion,
+html[data-theme="eink"] .detail-content,
+html[data-theme="eink"] .detail-original-content,
+html[data-theme="eink"] .detail-note-text,
+html[data-theme="eink"] .detail-chat-text {
+  font-size: max(1rem, calc(var(--detail-font-base) * var(--detail-font-scale)));
+  line-height: 1.65;
+}
+html[data-theme="eink"] .detail-tag-admin-order-btn:disabled,
+html[data-theme="eink"] .detail-highlight-color-button:disabled,
+html[data-theme="eink"] .detail-link.disabled {
+  border-style: dashed;
+}
+
+/* 键盘焦点态保持且加强。 */
+html[data-theme="eink"] :focus-visible {
+  outline: 2px solid #111827 !important;
+  outline-offset: 2px;
+}
+
+/* 返修（Review blocker）：可见 UI 全部实底灰阶。 */
+html[data-theme="eink"] .date-section {
+  background: #ffffff;
+  border: 1px solid var(--border);
+}
+html[data-theme="eink"] .mobile-more-row,
+html[data-theme="eink"] .mobile-more-select-row {
+  background: #ffffff;
+  border: 1px solid var(--border);
+}
+html[data-theme="eink"] .settings-nav {
+  background-color: #f7f7f7;
+  border: 1px solid var(--border);
+}
+html[data-theme="eink"] .settings-api-badge.ok,
+html[data-theme="eink"] .settings-api-badge.muted,
+html[data-theme="eink"] .settings-release-badge.new,
+html[data-theme="eink"] .settings-release-badge.improve,
+html[data-theme="eink"] .settings-release-badge.fix {
+  color: #000000;
+  background: #ffffff;
+  border: 1px solid var(--border);
+}
+
+/* 稍后阅读五态：保留原有书签图标，以填充/描边/空心和线型表达状态，
+   不依赖颜色；失败只用虚线，不改变列表按钮的点击语义。 */
+html[data-theme="eink"] .news-item .btn-read-later {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  gap: 0;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+/* 已抓取且仍在稍后：黑色实心按钮 + 白色实心书签。 */
+html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-ready="1"] .btn-read-later {
+  color: #ffffff;
+  background: #111827;
+  border: 2px solid #111827;
+}
+
+/* 已抓取但已完成/移出稍后：白底、粗实线、空心书签。 */
+html[data-theme="eink"] .news-item[data-read-later="0"][data-detail-ready="1"] .btn-read-later {
+  color: #111827;
+  background: #ffffff;
+  border: 2px solid #111827;
+}
+
+/* 未抓取且未加入：保留普通空心按钮的细实线。 */
+html[data-theme="eink"] .news-item[data-read-later="0"][data-detail-ready="0"] .btn-read-later {
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid var(--border);
+}
+
+/* 已加入但尚未抓取（等待/抓取中）：白底、点线、实心书签。 */
+html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-ready="0"] .btn-read-later {
+  color: #111827;
+  background: #ffffff;
+  border: 2px dotted #111827;
+}
+
+/* 抓取失败：覆盖点线为虚线；书签保留，失败不再追加突兀文字。 */
+html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-status="failed"] .btn-read-later {
+  color: #111827;
+  background: #ffffff;
+  border: 2px dashed #111827;
+}

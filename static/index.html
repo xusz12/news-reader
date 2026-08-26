@@ -3,15 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.2.6</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.2.6" />
+    <title>News Reader v2.1.3.0</title>
+    <script>
+      (function () {
+        var VALID = ["system", "light", "dark", "eink"];
+        var SESSION_KEY = "news_reader_theme_mode_url";
+        var mode = "";
+        try {
+          mode = new URLSearchParams(window.location.search).get("theme") || "";
+        } catch (e) {}
+        if (VALID.indexOf(mode) !== -1) {
+          try { window.sessionStorage.setItem(SESSION_KEY, mode); } catch (e) {}
+        } else {
+          try { mode = window.sessionStorage.getItem(SESSION_KEY) || ""; } catch (e) {}
+        }
+        if (VALID.indexOf(mode) === -1) {
+          try { mode = window.localStorage.getItem("news_reader_theme_mode") || ""; } catch (e) {}
+        }
+        if (VALID.indexOf(mode) === -1) mode = "system";
+        window.__newsReaderThemeMode = mode;
+        document.documentElement.setAttribute("data-theme", mode);
+      })();
+    </script>
+    <link rel="stylesheet" href="/static/style.css?v=2.1.3.0" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.2.6</span>
+          <span class="topbar-version">v2.1.3.0</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -27,6 +48,7 @@
                 <option value="system">跟随系统</option>
                 <option value="light">浅色</option>
                 <option value="dark">深色</option>
+                <option value="eink">墨水屏</option>
               </select>
             </label>
             <label class="topbar-pref-field" for="detailFontSelect">
@@ -919,6 +941,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.2.6"></script>
+    <script src="/static/app.js?v=2.1.3.0"></script>
   </body>
 </html>

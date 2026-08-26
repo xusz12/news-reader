@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.2.6" in html
-    assert "/static/style.css?v=2.1.2.6" in html
-    assert "/static/app.js?v=2.1.2.6" in html
+    assert "News Reader v2.1.3.0" in html
+    assert "/static/style.css?v=2.1.3.0" in html
+    assert "/static/app.js?v=2.1.3.0" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -5097,10 +5097,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.2.6" in app_source
-    assert "News Reader v2.1.2.6" in index_source
-    assert "/static/style.css?v=2.1.2.6" in index_source
-    assert "/static/app.js?v=2.1.2.6" in index_source
+    assert "News Reader v2.1.3.0" in app_source
+    assert "News Reader v2.1.3.0" in index_source
+    assert "/static/style.css?v=2.1.3.0" in index_source
+    assert "/static/app.js?v=2.1.3.0" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -10277,10 +10277,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.2.6" in app_source
-    assert "News Reader v2.1.2.6" in index_source
-    assert "/static/style.css?v=2.1.2.6" in index_source
-    assert "/static/app.js?v=2.1.2.6" in index_source
+    assert "News Reader v2.1.3.0" in app_source
+    assert "News Reader v2.1.3.0" in index_source
+    assert "/static/style.css?v=2.1.3.0" in index_source
+    assert "/static/app.js?v=2.1.3.0" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -11454,3 +11454,104 @@ const rows = () => newsList.querySelectorAll(".feed-news-item");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_frontend_eink_theme_contract():
+    """墨水屏外观一期：首帧初始化、第四外观项、覆盖层与非颜色状态契约。"""
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+
+    # 首帧主题初始化：内联脚本必须出现在样式表链接之前，且含 eink 与会话覆盖逻辑。
+    head_part, head_rest = index_source.split("<link rel=\"stylesheet\"", 1)
+    assert "news_reader_theme_mode_url" in head_part
+    assert '"eink"' in head_part
+    assert 'document.documentElement.setAttribute("data-theme", mode);' in head_part
+    assert "__newsReaderThemeMode" in head_part
+
+    # 外观选择器新增第四项。
+    assert '<option value="eink">墨水屏</option>' in index_source
+    # 移动端更多面板同步。
+    assert '{ value: "eink", label: "墨水屏" }' in app_source
+
+    # applyThemeMode 支持 eink 与 persist 语义；启动不重复写长期偏好。
+    assert '["system", "light", "dark", "eink"].includes(mode)' in app_source
+    assert "function applyThemeMode(mode, { persist = true } = {})" in app_source
+    assert "applyThemeMode(window.__newsReaderThemeMode || localStorage.getItem(THEME_KEY) || \"system\", { persist: false });" in app_source
+    listener_block = app_source.split("if (themeModeSelect) {", 1)[1].split("}", 1)[0]
+    assert 'window.sessionStorage.removeItem("news_reader_theme_mode_url")' in listener_block
+
+    # 覆盖层：全局动效/阴影/模糊/背景图清零。
+    eink_block = style_source.split('html[data-theme="eink"] *', 1)[1].split("/* 面板与关键组件", 1)[0]
+    assert "transition-duration: 0s !important;" in eink_block
+    assert "animation: none !important;" in eink_block
+    assert "box-shadow: none !important;" in eink_block
+    assert "backdrop-filter: none !important;" in eink_block
+    assert "-webkit-backdrop-filter: none !important;" in eink_block
+    assert "background-image: none !important;" in eink_block
+
+    # 触控优先：hover 常显 + 触控目标 + 低透明度弱化移除。
+    assert 'html[data-theme="eink"] .news-item .row-actions {\n    opacity: 1 !important;\n  }' in style_source
+    assert "html[data-theme=\"eink\"] .nav-btn-secondary," in style_source
+    assert "min-height: 44px;" in style_source.split("常用触控目标约 44px", 1)[1]
+
+    # 状态脱离颜色：标题前缀、未读点、选中描边、四色高亮线型、禁用虚线。
+    assert 'html[data-theme="eink"] .title.tone-important::before {\n  content: "★ ";' in style_source
+    assert 'html[data-theme="eink"] .title.tone-bullish::before {\n  content: "↑ ";' in style_source
+    assert 'html[data-theme="eink"] .title.tone-bearish::before {\n  content: "↓ ";' in style_source
+    assert 'html[data-theme="eink"] .title.tone-mixed::before {\n  content: "↕ ";' in style_source
+    assert "html[data-theme=\"eink\"] .unread-dot {\n  background: #111827;\n}" in style_source
+    assert "outline: 2px solid #111827;" in style_source
+    assert 'mark.article-highlight[data-highlight-color="yellow"] {\n  text-decoration-style: solid;' in style_source
+    assert 'mark.article-highlight[data-highlight-color="green"] {\n  text-decoration-style: dashed;' in style_source
+    assert 'mark.article-highlight[data-highlight-color="blue"] {\n  text-decoration-style: double;' in style_source
+    assert 'mark.article-highlight[data-highlight-color="pink"] {\n  text-decoration-style: dotted;' in style_source
+    assert "border-style: dashed;" in style_source
+
+    # 正文排版与键盘焦点态。
+    assert "font-size: max(1rem, calc(var(--detail-font-base) * var(--detail-font-scale)));" in style_source
+    assert "line-height: 1.65;" in style_source
+    assert "html[data-theme=\"eink\"] :focus-visible {" in style_source
+
+    # 返修回归：可见 UI 实底灰阶（日期栏/移动更多行/设置导航/状态徽章）。
+    assert "html[data-theme=\"eink\"] .date-section {\n  background: #ffffff;\n  border: 1px solid var(--border);\n}" in style_source
+    assert "html[data-theme=\"eink\"] .mobile-more-row,\nhtml[data-theme=\"eink\"] .mobile-more-select-row {\n  background: #ffffff;" in style_source
+    assert "html[data-theme=\"eink\"] .settings-nav {\n  background-color: #f7f7f7;" in style_source
+    assert "html[data-theme=\"eink\"] .settings-api-badge.ok," in style_source
+    assert "html[data-theme=\"eink\"] .settings-release-badge.fix {\n  color: #000000;\n  background: #ffffff;" in style_source
+    # 稍后阅读五态：展示状态只增加 data-detail-ready，不改状态机或点击语义。
+    assert 'li.dataset.detailReady = Number(item.detail_ready || 0) === 1 ? "1" : "0";' in app_source
+    assert 'html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-ready="1"] .btn-read-later {' in style_source
+    assert 'html[data-theme="eink"] .news-item[data-read-later="0"][data-detail-ready="1"] .btn-read-later {' in style_source
+    assert 'html[data-theme="eink"] .news-item[data-read-later="0"][data-detail-ready="0"] .btn-read-later {' in style_source
+    assert 'html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-ready="0"] .btn-read-later {' in style_source
+    assert 'html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-status="failed"] .btn-read-later {' in style_source
+    assert 'border: 2px solid #111827;' in style_source
+    assert 'border: 2px dotted #111827;' in style_source
+    assert 'border: 2px dashed #111827;' in style_source
+    assert 'width: 44px;' in style_source
+    assert 'height: 44px;' in style_source
+    # 失败只用虚线；不得再追加文字或隐藏原书签 glyph。
+    assert 'content: "⚠ 失败";' not in style_source
+    assert 'html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-status="failed"] .btn-read-later::after' not in style_source
+    # 冲突冗余规则不得残留：tone-danger eink 覆盖与 glyph 隐藏必须不存在。
+    assert 'html[data-theme="eink"] .btn-read-later.tone-danger' not in style_source
+    eink_layer = style_source.split('===== E-Ink theme', 1)[1]
+    assert '.glyph {\n  display: none;' not in eink_layer
+    # aria/title 语义保持准确（取消稍后再看 + 详情抓取失败），点击行为不改。
+    assert 'detailFailed ? "取消稍后再看（详情抓取失败）"' in app_source
+
+    # 现有三主题不被回退：dark/system 规则仍存在且位于 eink 层之前。
+    dark_pos = style_source.index('html[data-theme="dark"] {')
+    system_pos = style_source.index('@media (prefers-color-scheme: dark) {')
+    eink_pos = style_source.index("===== E-Ink theme")
+    assert dark_pos < system_pos < eink_pos
+
+
+def test_index_theme_init_script_precedes_stylesheet():
+    """首帧脚本必须在样式表之前执行，避免普通主题先渲染。"""
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    script_pos = index_source.index("(function () {")
+    css_pos = index_source.index('<link rel="stylesheet"')
+    js_pos = index_source.index('<script src="/static/app.js')
+    assert script_pos < css_pos < js_pos
