@@ -79,6 +79,14 @@ let state = {
   detailChatStatus: "",
   detailChatSending: false,
   detailChatArchiving: false,
+  detailChatJobs: [],
+  detailChatSession: null,
+  detailChatPanelOpen: false,
+  detailChatPanelMaximized: false,
+  detailChatStreamSource: null,
+  detailChatStreamJobId: "",
+  detailChatQuoteText: "",
+  detailChatQuoteSource: "",
   detailHighlightEligible: false,
   detailHighlightBody: "",
   detailHighlightRows: [],
@@ -91,6 +99,8 @@ let state = {
   detailHighlightTwitterEligible: false,
   detailHighlightTwitterBody: "",
   detailHighlightTwitterRows: [],
+  detailOriginalAgentEligible: false,
+  detailOriginalAgentBody: "",
   detailHighlightSelectedColor: null,
   detailHighlightAction: null,
   detailHighlightBusy: false,
@@ -129,6 +139,7 @@ const DETAIL_HIGHLIGHT_BODY_KIND = "ai_zh";
 const DETAIL_HIGHLIGHT_POINTS_BODY_KIND = "ai_points_zh";
 const DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND = "ai_conclusion_zh";
 const DETAIL_HIGHLIGHT_TWITTER_BODY_KIND = "twitter_detail";
+const DETAIL_ORIGINAL_AGENT_BODY_KIND = "original_detail";
 const sourceIconMap = {
   reuters: "/static/source-icons/reuters.ico",
   bloomberg: "/static/source-icons/bloomberg.png",
@@ -415,8 +426,10 @@ const detailDailyMeta = document.getElementById("detailDailyMeta");
 const detailDailyStatus = document.getElementById("detailDailyStatus");
 const detailDailyContent = document.getElementById("detailDailyContent");
 const detailChatBody = document.getElementById("detailChatBody");
+const detailAgentLauncher = document.getElementById("detailAgentLauncher");
 const detailAskBtn = document.getElementById("detailAskBtn");
 const detailChatBackBtn = document.getElementById("detailChatBackBtn");
+const detailAgentExpandBtn = document.getElementById("detailAgentExpandBtn");
 const detailChatMeta = document.getElementById("detailChatMeta");
 const detailChatCapability = document.getElementById("detailChatCapability");
 const detailChatStatus = document.getElementById("detailChatStatus");
@@ -424,6 +437,9 @@ const detailChatMessages = document.getElementById("detailChatMessages");
 const detailChatInput = document.getElementById("detailChatInput");
 const detailChatArchiveBtn = document.getElementById("detailChatArchiveBtn");
 const detailChatSendBtn = document.getElementById("detailChatSendBtn");
+const detailAgentNewBtn = document.getElementById("detailAgentNewBtn");
+const detailAgentStopBtn = document.getElementById("detailAgentStopBtn");
+const detailAgentQuotePreview = document.getElementById("detailAgentQuotePreview");
 const settingsOverlay = document.getElementById("settingsOverlay");
 const settingsBackdrop = document.getElementById("settingsBackdrop");
 const settingsCloseBtn = document.getElementById("settingsCloseBtn");
@@ -454,6 +470,8 @@ const settingsPiChatModelCurrent = document.getElementById("settingsPiChatModelC
 const settingsPiChatProviderField = document.getElementById("settingsPiChatProviderField");
 const settingsPiChatModelField = document.getElementById("settingsPiChatModelField");
 const settingsChatArchiveNote = document.getElementById("settingsChatArchiveNote");
+const settingsAgentTtlSelect = document.getElementById("settingsAgentTtlSelect");
+const settingsAgentClearAllBtn = document.getElementById("settingsAgentClearAllBtn");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
 const settingsFeedSourceSubkeys = document.getElementById("settingsFeedSourceSubkeys");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
@@ -507,6 +525,7 @@ const detailHighlightColorOptions = Array.from(
   detailHighlightColorButtons?.querySelectorAll("[data-highlight-color]") || [],
 );
 const detailHighlightAnnotationActionBtn = document.getElementById("detailHighlightAnnotationActionBtn");
+const detailHighlightAskBtn = document.getElementById("detailHighlightAskBtn");
 const detailHighlightAnnotationPopover = document.getElementById("detailHighlightAnnotationPopover");
 const detailHighlightAnnotationTitle = document.getElementById("detailHighlightAnnotationTitle");
 const detailHighlightAnnotationView = document.getElementById("detailHighlightAnnotationView");
@@ -2036,6 +2055,9 @@ function syncPiChatModelSelectForProvider() {
 function populateSettingsForm() {
   const llm = state.runtimeSettings?.llm;
   if (!llm) return;
+  if (settingsAgentTtlSelect) {
+    settingsAgentTtlSelect.value = Number(state.runtimeSettings?.agent?.session_ttl_hours) === 24 ? "24" : "72";
+  }
   settingsTranslationProvider.value = llm.translation?.provider || "deepseek";
   if (settingsChatProviderSelect) {
     settingsChatProviderSelect.value = llm.chat?.provider || "codex";
@@ -2129,6 +2151,12 @@ function renderSettingsOverlay() {
   renderFeedSourceSettings();
   populateSettingsForm();
   if (settingsSaveBtn) settingsSaveBtn.disabled = state.settingsSaving;
+  if (settingsAgentTtlSelect) {
+    settingsAgentTtlSelect.disabled = state.settingsLoading || state.settingsSaving || state.settingsClosing;
+  }
+  if (settingsAgentClearAllBtn) {
+    settingsAgentClearAllBtn.disabled = state.settingsLoading || state.settingsSaving || state.settingsClosing;
+  }
   renderSettingsStatus();
 }
 
@@ -2166,6 +2194,9 @@ function runtimeSettingsSavePayload({ hiddenSourceSubkeys = savedFeedHiddenSourc
     },
     feed: {
       hidden_source_subkeys: hiddenSourceSubkeys,
+    },
+    agent: {
+      session_ttl_hours: Number(settings.agent?.session_ttl_hours) === 24 ? 24 : 72,
     },
   };
 }
@@ -2343,6 +2374,7 @@ async function saveRuntimeSettings() {
   const draftCodexChatModel = readModelSetting(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
   const draftPiChatProvider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
   const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
+  const draftAgentTtl = Number(settingsAgentTtlSelect?.value) === 24 ? 24 : 72;
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
@@ -2359,6 +2391,7 @@ async function saveRuntimeSettings() {
     payload.llm.codex_chat.model = draftCodexChatModel;
     payload.llm.pi_chat.provider = draftPiChatProvider;
     payload.llm.pi_chat.model = draftPiChatModel;
+    payload.agent.session_ttl_hours = draftAgentTtl;
     const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -3436,7 +3469,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.3.0";
+  version.textContent = "News Reader v2.1.4.0";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -3865,7 +3898,7 @@ function renderTrackedTopicEmpty(message = "选择一个跟踪主题，右栏会
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
-  if (detailChatBody) detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   renderDetailEmpty(message);
   updateWorkspaceLayout();
 }
@@ -3886,7 +3919,7 @@ function renderTrackedTopicDetail(topic, items = state.trackedTimelineItems) {
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
-  if (detailChatBody) detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   detailTrackedBody.classList.remove("hidden");
   detailTrackedTitle.textContent = topic.title || "未命名主题";
   detailTrackedMeta.textContent = `${trackedScopeLabel(topic)} · 可见 ${Number(topic.visible_item_count || 0)} · 隐藏 ${Number(topic.hidden_item_count || 0)}`;
@@ -4005,7 +4038,7 @@ function openTrackedDefaultsPanel() {
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
-  if (detailChatBody) detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   detailTrackedDefaultsBody.classList.remove("hidden");
   resetTrackedEditorScroll(detailTrackedDefaultsBody);
   clearInlineFeedback(trackedFeedbackHost(detailTrackedDefaultsBody));
@@ -4025,7 +4058,7 @@ function openTrackedTopicForm(mode, topic = null) {
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedDefaultsBody) detailTrackedDefaultsBody.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
-  if (detailChatBody) detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   detailTrackedFormBody.classList.remove("hidden");
   resetTrackedEditorScroll(detailTrackedFormBody);
   clearInlineFeedback(trackedFeedbackHost(detailTrackedFormBody));
@@ -5305,7 +5338,30 @@ function normalizedDetailNote(cached) {
   return typeof text === "string" ? text.trim() : "";
 }
 
+function stopDetailAgentStream() {
+  const source = state.detailChatStreamSource;
+  if (source && typeof source.close === "function") source.close();
+  state.detailChatStreamSource = null;
+  state.detailChatStreamJobId = "";
+}
+
+function hideDetailAgentUi() {
+  detailChatBody?.classList.add("hidden");
+  detailChatBody?.classList.remove("is-maximized");
+  detailAgentLauncher?.classList.add("hidden");
+  detailAgentLauncher?.setAttribute("aria-expanded", "false");
+}
+
+function closeDetailAgentPanel() {
+  if (!state.detailChatPanelOpen) return;
+  state.detailChatPanelOpen = false;
+  stopDetailAgentStream();
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  if (item) renderDetail(item);
+}
+
 function resetDetailChatState({ keepProvider = false } = {}) {
+  stopDetailAgentStream();
   state.detailView = "detail";
   state.detailChatMessages = [];
   state.detailChatSessionId = "";
@@ -5314,12 +5370,13 @@ function resetDetailChatState({ keepProvider = false } = {}) {
   state.detailChatStatus = "";
   state.detailChatSending = false;
   state.detailChatArchiving = false;
+  state.detailChatJobs = [];
+  state.detailChatSession = null;
+  state.detailChatPanelOpen = false;
+  state.detailChatPanelMaximized = false;
+  state.detailChatQuoteText = "";
+  state.detailChatQuoteSource = "";
   if (detailChatInput) detailChatInput.value = "";
-}
-
-function chatProvidersFromItem(item) {
-  const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
-  return cached?.chat_providers || {};
 }
 
 function currentCodexChatModel() {
@@ -5332,9 +5389,7 @@ function currentChatProvider() {
 
 function currentChatModel() {
   const provider = currentChatProvider();
-  if (provider === "pi") {
-    return (state.runtimeSettings?.llm?.pi_chat?.model || "").trim();
-  }
+  if (provider === "pi") return (state.runtimeSettings?.llm?.pi_chat?.model || "").trim();
   return currentCodexChatModel();
 }
 
@@ -5369,11 +5424,11 @@ function isCodexFallbackAi(ai) {
   return provider.startsWith("codex-fallback") || (ai?.model || "") === "codex-fallback";
 }
 
-function renderDetailChatMeta(item, providerMeta) {
+function renderDetailChatMeta(item, session) {
   if (!detailChatMeta) return;
   detailChatMeta.innerHTML = "";
-  const contextMeta = detailChatContextMeta(item);
-  const label = providerMeta?.label || (currentChatProvider() === "pi" ? "Pi" : "Codex");
+  const provider = session?.provider || currentChatProvider();
+  const label = provider === "pi" ? "Pi" : "Codex";
 
   const source = document.createElement("span");
   source.className = "detail-chat-source";
@@ -5381,14 +5436,14 @@ function renderDetailChatMeta(item, providerMeta) {
   detailChatMeta.appendChild(source);
 
   const modelBadge = document.createElement("span");
-  modelBadge.className = `detail-chat-model-badge ${providerMeta?.available ? "ok" : "failed"}`;
-  modelBadge.textContent = `● ${label}${chatModelLabel(providerMeta) ? ` · ${chatModelLabel(providerMeta)}` : ""}`;
+  modelBadge.className = "detail-chat-model-badge ok";
+  modelBadge.textContent = `● ${label}${chatModelLabel(session) ? ` · ${chatModelLabel(session)}` : ""}`;
   detailChatMeta.appendChild(modelBadge);
 
-  if (contextMeta?.context_label) {
+  if (session?.executor_provider && provider === "pi") {
     const contextBadge = document.createElement("span");
     contextBadge.className = "detail-chat-source";
-    contextBadge.textContent = contextMeta.context_label;
+    contextBadge.textContent = `只读联网 · ${session.executor_provider}`;
     detailChatMeta.appendChild(contextBadge);
   }
 }
@@ -5406,6 +5461,37 @@ function renderDetailChatKeyPoints(item) {
   detailChatCapability.classList.remove("hidden");
 }
 
+function appendSafeAgentText(container, value) {
+  if (!container) return;
+  const text = String(value || "");
+  const urlPattern = /https?:\/\/[^\s<>"'`]+/gi;
+  let cursor = 0;
+  let match;
+  while ((match = urlPattern.exec(text))) {
+    const rawUrl = match[0];
+    const trailing = rawUrl.match(/[.,!?;:，。！？；：）】》]+$/)?.[0] || "";
+    const url = trailing ? rawUrl.slice(0, -trailing.length) : rawUrl;
+    if (match.index > cursor) container.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+    if (url) {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsafe_url");
+        const link = document.createElement("a");
+        link.href = parsed.href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = url;
+        container.appendChild(link);
+      } catch {
+        container.appendChild(document.createTextNode(url));
+      }
+    }
+    if (trailing) container.appendChild(document.createTextNode(trailing));
+    cursor = match.index + rawUrl.length;
+  }
+  if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
+}
+
 function detailChatContextMeta(item) {
   const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
   const context = cached?.chat_context || null;
@@ -5416,96 +5502,243 @@ function detailChatContextMeta(item) {
   return { context_level: "summary_context", context_label: "摘要与元数据" };
 }
 
-function renderDetailChat(item) {
-  if (!item) return;
-  const providers = chatProvidersFromItem(item);
-  const activeKey = currentChatProvider();
-  const providerMeta = providers[activeKey] || { available: true, model: currentChatModel(), label: activeKey === "pi" ? "Pi" : "Codex" };
-  const chatEnabled = !!providerMeta.available;
-  // 归档跟随当前 Chat provider：按钮可用性看当前 provider 是否可用 + 已有 assistant 消息 + 非发送/归档中。
-  const archiveEnabled = chatEnabled
-    && !state.detailChatSending
-    && !state.detailChatArchiving
-    && state.detailChatMessages.some((message) => message.role === "assistant");
-  const contextMeta = detailChatContextMeta(item);
-  const contextLabel = contextMeta?.context_label || "摘要与元数据";
-  const contextHint = contextMeta?.context_level === "full_detail"
-    ? "可基于完整正文继续追问；涉及背景或最新信息时，助手会主动搜索补充。"
-    : "当前只有摘要与元数据；助手会把它当作提问场景，并在需要时主动搜索补充。";
+function detailAgentCached(item) {
+  return item?.url ? state.detailCacheByUrl.get(item.url)?.agent || null : null;
+}
 
-  renderDetailChatMeta(item, providerMeta);
-  renderDetailChatKeyPoints(item);
-  detailChatInput.disabled = state.detailChatSending || state.detailChatArchiving || !chatEnabled;
-  detailChatSendBtn.disabled = state.detailChatSending || state.detailChatArchiving || !chatEnabled;
-  if (detailChatArchiveBtn) {
-    detailChatArchiveBtn.disabled = !archiveEnabled;
+function activeDetailAgentJob() {
+  return state.detailChatJobs.find((job) => ["queued", "pending", "running", "streaming", "stopping"].includes(job?.status)) || null;
+}
+
+function mergeDetailAgentJob(job) {
+  if (!job?.id) return;
+  const next = state.detailChatJobs.filter((entry) => entry.id !== job.id);
+  state.detailChatJobs = [...next, job].sort((left, right) => String(left.created_at || "").localeCompare(String(right.created_at || "")));
+  const message = state.detailChatMessages.find((entry) => entry.job_id === job.id && entry.role === "assistant");
+  if (message) {
+    message.content = job.answer_text || "";
+    message.status = job.status;
+    message.error = job.error || "";
   }
-  const unavailableLabel = `${providerMeta.label || (activeKey === "pi" ? "Pi" : "Codex")} chat 当前不可用。`;
-  detailChatInput.placeholder = chatEnabled
-    ? (contextMeta?.context_level === "full_detail"
-      ? "围绕这条新闻提问，例如：这件事现在的最新进展是什么？"
-      : "结合这条新闻背景提问，例如：这件事现在有哪些最新进展？")
-    : unavailableLabel;
+}
 
-  const chatReady = !!(state.detailChatMessages && state.detailChatMessages.length);
-  const statusText = state.detailChatStatus || (chatReady ? "" : (chatEnabled ? "" : unavailableLabel));
+function applyDetailAgentPayload(item, payload) {
+  if (!item || !payload) return;
+  const agent = payload.agent || payload;
+  const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
+  cached.agent = agent;
+  if (item.url) state.detailCacheByUrl.set(item.url, cached);
+  if (state.selectedId !== item.id) return;
+  state.detailChatSession = agent.session || null;
+  state.detailChatSessionId = agent.session?.id || "";
+  state.detailChatProvider = agent.session?.provider || "";
+  state.detailChatModel = agent.session?.model || "";
+  state.detailChatMessages = Array.isArray(agent.messages) ? agent.messages.map((message) => ({ ...message })) : [];
+  state.detailChatJobs = Array.isArray(agent.jobs) ? agent.jobs.map((job) => ({ ...job })) : [];
+  if (state.detailChatPanelOpen) {
+    renderDetailChat(item);
+    const active = activeDetailAgentJob();
+    if (active) startDetailAgentStream(item, active.id);
+  }
+}
+
+async function fetchDetailAgentSession(item) {
+  if (!item?.id) return null;
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/agent/session`);
+  const payload = await parseDetailAgentResponse(res, "agent_session_failed");
+  applyDetailAgentPayload(item, payload);
+  return payload;
+}
+
+async function parseDetailAgentResponse(res, fallbackCode) {
+  const payload = await res.json().catch(() => null);
+  if (res.ok && payload?.ok) return payload;
+  const status = Number(res.status || 0);
+  const code = payload?.error || payload?.message
+    || ([404, 405].includes(status) ? "agent_api_unavailable" : status ? `http_${status}` : fallbackCode);
+  const error = new Error(code || fallbackCode);
+  error.httpStatus = status;
+  throw error;
+}
+
+function detailAgentErrorMessage(error, fallbackMessage) {
+  const code = error instanceof Error ? error.message : "";
+  const httpStatus = Number.isInteger(error?.httpStatus) && error.httpStatus > 0
+    ? error.httpStatus
+    : 0;
+  if (code === "agent_api_unavailable") {
+    if (httpStatus) {
+      return `Agent 后端尚未加载（HTTP ${httpStatus}）；请重启 Flask 服务并刷新页面。`;
+    }
+    return "无法连接 Agent 后端；请确认 news-reader 服务已启动并刷新页面。";
+  }
+  if (/^http_\d+$/.test(code)) {
+    return `Agent 服务请求失败（HTTP ${code.slice(5)}）；请查看 Flask 日志后重试。`;
+  }
+  if (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(code)) {
+    return "无法连接 Agent 后端；请确认 news-reader 服务已启动并刷新页面。";
+  }
+  const known = {
+    detail_not_ready: "正文尚未抓取完成，暂时不能提问。",
+    job_in_progress: "上一条问题仍在后台研究，请先停止或等待完成。",
+    session_config_changed: "模型配置已变化，请点击“新会话”后重试。",
+    session_expired: "临时会话已过期，请重新提问。",
+  };
+  if (known[code]) return known[code];
+  return code ? `${fallbackMessage}（${code}）` : fallbackMessage;
+}
+
+async function requestDetailAgentSession(item, newSession = false) {
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/agent/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(newSession ? { new_session: true } : {}),
+  });
+  const payload = await parseDetailAgentResponse(res, "agent_session_failed");
+  applyDetailAgentPayload(item, payload);
+  return payload;
+}
+
+function updateDetailAgentJobFromStream(item, job) {
+  if (!item || !job) return;
+  mergeDetailAgentJob(job);
+  renderDetailChat(item);
+  if (["succeeded", "failed", "stopped", "interrupted"].includes(job.status)) stopDetailAgentStream();
+}
+
+async function pollDetailAgentJob(item, jobId) {
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/agent/jobs/${encodeURIComponent(jobId)}`);
+  const payload = await res.json().catch(() => ({ ok: false }));
+  if (!res.ok || !payload.ok) throw new Error(payload.error || "agent_job_failed");
+  updateDetailAgentJobFromStream(item, payload.job);
+  return payload.job;
+}
+
+function startDetailAgentStream(item, jobId) {
+  if (!state.detailChatPanelOpen || !item?.id || !jobId) return;
+  if (state.detailChatStreamJobId === jobId && state.detailChatStreamSource) return;
+  stopDetailAgentStream();
+  state.detailChatStreamJobId = jobId;
+  if (typeof window.EventSource === "function") {
+    const source = new EventSource(`/api/news/${encodeURIComponent(item.id)}/agent/jobs/${encodeURIComponent(jobId)}/stream`);
+    state.detailChatStreamSource = source;
+    source.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data || "{}");
+        if (payload.ok && payload.job) updateDetailAgentJobFromStream(item, payload.job);
+      } catch {
+        // Ignore malformed stream frames; the next frame or polling fallback remains authoritative.
+      }
+    };
+    source.onerror = () => {
+      source.close();
+      if (state.detailChatStreamSource === source) {
+        state.detailChatStreamSource = null;
+        pollDetailAgentJob(item, jobId).catch(() => {
+          if (state.selectedId === item.id && state.detailChatPanelOpen) {
+            state.detailChatStatus = "流式连接已断开，正在等待后台任务；可重新打开面板恢复。";
+            renderDetailChat(item);
+          }
+        });
+      }
+    };
+    return;
+  }
+  const timer = window.setInterval(() => {
+    pollDetailAgentJob(item, jobId).catch(() => stopDetailAgentStream());
+  }, 700);
+  state.detailChatStreamSource = { close: () => window.clearInterval(timer) };
+}
+
+function renderDetailChat(item) {
+  if (!item || !detailChatBody) return;
+  const cachedAgent = detailAgentCached(item) || {};
+  const session = state.detailChatSession;
+  const contextAvailable = cachedAgent.context_available !== false && !!item.url;
+  const activeJob = activeDetailAgentJob();
+  const maximized = !!state.detailChatPanelMaximized;
+  detailChatBody.classList.toggle("is-maximized", maximized);
+  if (detailAgentExpandBtn) {
+    detailAgentExpandBtn.textContent = maximized ? "还原" : "放大";
+    detailAgentExpandBtn.setAttribute("aria-label", maximized ? "还原 Agent 浮窗" : "放大 Agent 浮窗");
+    detailAgentExpandBtn.title = maximized ? "还原 Agent 浮窗" : "放大 Agent 浮窗";
+  }
+  detailAgentLauncher?.setAttribute("aria-expanded", "true");
+  renderDetailChatMeta(item, session);
+  renderDetailChatKeyPoints(item);
+  detailChatInput.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
+  detailChatSendBtn.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
+  if (detailAgentNewBtn) detailAgentNewBtn.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
+  if (detailAgentStopBtn) {
+    detailAgentStopBtn.classList.toggle("hidden", !activeJob);
+    detailAgentStopBtn.disabled = state.detailChatSending;
+  }
+  detailChatInput.placeholder = contextAvailable
+    ? "围绕这条新闻提问；需要时 Agent 会搜索公开资料补充。"
+    : "正文尚未抓取完成，准备好英文原文后才能提问。";
+  if (detailAgentQuotePreview) {
+    const quote = state.detailChatQuoteText.trim();
+    detailAgentQuotePreview.classList.toggle("hidden", !quote);
+    detailAgentQuotePreview.textContent = quote ? `引用${state.detailChatQuoteSource || "原文"}：\n${quote}` : "";
+  }
+
+  const contextUpdated = !!cachedAgent.context_updated;
+  const statusText = state.detailChatStatus || (
+    activeJob ? (["queued", "pending"].includes(activeJob.status) ? "已排队，后台研究中…" : "后台研究中，可继续阅读正文。")
+      : contextUpdated ? "正文已更新；当前会话仍使用旧原文快照，可用“新会话”开始新版研究。"
+        : contextAvailable ? "问题会在后台异步处理，关闭面板或切换新闻不会取消。" : "等待完整英文原文。"
+  );
   detailChatStatus.textContent = statusText;
-  detailChatStatus.className = `detail-status ${state.detailChatSending ? "pending" : statusText ? "muted" : "hidden"}`;
+  detailChatStatus.className = `detail-status ${activeJob ? "pending" : contextUpdated ? "muted" : "muted"}`;
 
-  detailChatMessages.innerHTML = "";
-  if (!chatReady) {
+  const jobById = new Map(state.detailChatJobs.map((job) => [job.id, job]));
+  detailChatMessages.replaceChildren();
+  if (!state.detailChatMessages.length) {
     const empty = document.createElement("div");
     empty.className = "detail-chat-empty";
-    empty.textContent = chatEnabled
-      ? `${contextHint}当前上下文：${contextLabel}。`
-      : unavailableLabel;
+    empty.textContent = contextAvailable
+      ? "这是本篇新闻独立的临时研究会话；Agent 只使用固定英文原文作为事实上下文。"
+      : "详情页抓取完成后，这里会启用新闻研究 Agent。";
     detailChatMessages.appendChild(empty);
-    return;
   }
   state.detailChatMessages.forEach((message) => {
     const card = document.createElement("div");
     card.className = `detail-chat-message ${message.role}`;
     const role = document.createElement("div");
     role.className = "detail-chat-role";
-    role.textContent = message.role === "user" ? "你" : "助手";
+    role.textContent = message.role === "user" ? "你" : "Agent";
+    card.appendChild(role);
+    if (message.role === "user" && message.quote_text) {
+      const quote = document.createElement("blockquote");
+      quote.className = "detail-agent-message-quote";
+      quote.textContent = `引用${message.quote_source || "原文"}：${message.quote_text}`;
+      card.appendChild(quote);
+    }
     const text = document.createElement("div");
     text.className = "detail-chat-text";
-    text.textContent = message.content || "";
-    card.appendChild(role);
+    const job = message.job_id ? jobById.get(message.job_id) : null;
+    const messageText = message.content || (message.role === "assistant" && ["queued", "pending", "running", "streaming"].includes(job?.status) ? "思考中…" : "");
+    appendSafeAgentText(text, messageText);
     card.appendChild(text);
+    if (message.role === "assistant" && ["failed", "interrupted", "stopped"].includes(job?.status)) {
+      const error = document.createElement("div");
+      error.className = "detail-agent-job-error";
+      error.textContent = job.status === "stopped"
+        ? "已停止；已生成的部分内容已保留。"
+        : job.status === "interrupted"
+          ? "服务曾重启，任务已中断；可以重试。"
+          : `研究失败：${job.error || "请重试"}`;
+      card.appendChild(error);
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "detail-retry-btn";
+      retry.textContent = "重试";
+      retry.addEventListener("click", () => retryDetailAgentJob(item, job.id));
+      card.appendChild(retry);
+    }
     detailChatMessages.appendChild(card);
   });
-  detailChatMessages.scrollTop = detailChatMessages.scrollHeight;
-}
-
-async function requestNewsChat(item, requestPayload) {
-  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestPayload),
-  });
-  const payload = await res.json().catch(() => ({ ok: false, error: "chat_request_failed" }));
-  if (!res.ok || !payload.ok) {
-    const err = new Error(payload.error || "chat_request_failed");
-    err.detail = payload.detail || "";
-    throw err;
-  }
-  return payload;
-}
-
-async function archiveNewsChat(item, requestPayload) {
-  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/chat/archive`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestPayload),
-  });
-  const payload = await res.json().catch(() => ({ ok: false, error: "archive_request_failed" }));
-  if (!res.ok || !payload.ok) {
-    const err = new Error(payload.error || "archive_request_failed");
-    err.detail = payload.detail || "";
-    throw err;
-  }
-  return payload;
+  if (activeJob) startDetailAgentStream(item, activeJob.id);
 }
 
 async function sendDetailChatMessage() {
@@ -5514,106 +5747,162 @@ async function sendDetailChatMessage() {
   if (!item) return;
   const content = (detailChatInput.value || "").trim().slice(0, DETAIL_CHAT_MAX_LEN);
   if (!content) return;
-  const configuredProvider = currentChatProvider();
-  const configuredModel = currentChatModel();
-  const reset = !!state.detailChatSessionId
-    && (!!state.detailChatProvider && state.detailChatProvider !== configuredProvider
-      || !!state.detailChatModel && state.detailChatModel !== configuredModel);
-  if (reset) {
-    state.detailChatMessages = [];
-    state.detailChatSessionId = "";
-    state.detailChatProvider = "";
-    state.detailChatModel = "";
-    state.detailChatStatus = `${configuredProvider === "pi" ? "Pi" : "Codex"} chat 配置已切换，已为你重新开始一轮对话。`;
+  const cachedAgent = detailAgentCached(item);
+  if (cachedAgent?.context_available === false) {
+    state.detailChatStatus = "正文尚未抓取完成，暂时不能提问。";
+    renderDetailChat(item);
+    return;
   }
-
-  state.detailChatMessages = [...state.detailChatMessages, { role: "user", content }];
   state.detailChatSending = true;
-  state.detailChatStatus = "正在生成回答，可能会搜索资料...";
-  detailChatInput.value = "";
+  state.detailChatStatus = "正在创建后台研究任务…";
   renderDetailChat(item);
-
   try {
-    const payload = await requestNewsChat(item, {
+    if (!state.detailChatSession) await requestDetailAgentSession(item);
+    const jobPayload = {
+      session_id: state.detailChatSession?.id || "",
       question: content,
-      session_id: state.detailChatSessionId,
-      model: configuredModel,
-      reset,
-    });
-    state.detailChatMessages = [...state.detailChatMessages, { role: "assistant", content: payload.answer || "" }];
-    state.detailChatSessionId = payload.session_id || "";
-    state.detailChatProvider = payload.provider || configuredProvider;
-    state.detailChatModel = configuredModel;
-    const providerLabel = payload.provider === "pi" ? "Pi" : "Codex";
-    state.detailChatStatus = `${providerLabel} · ${payload.model || "默认模型"} · ${payload.context_label || "摘要与元数据"}`.trim();
-  } catch (error) {
-    const code = error instanceof Error ? error.message : "chat_request_failed";
-    const labelMap = {
-      detail_not_ready: "正文还没准备好，暂时不能提问。",
-      context_unavailable: "这条新闻缺少可提问的上下文，请稍后重试。",
-      provider_busy: "该模型当前正忙，请稍后重试。",
-      provider_timeout: "请求超时，请稍后重试。",
-      provider_failed: "调用失败，请稍后重试。",
-      session_invalid: "上轮对话 session 已失效，请重新开始。",
-      missing_session_id: "没有返回可继续对话的 session id，请重试。",
-      empty_answer: "没有返回有效回答，请重试。",
+      quote_text: state.detailChatQuoteText,
+      quote_source: state.detailChatQuoteSource,
     };
-    if (code === "session_invalid") {
-      state.detailChatSessionId = "";
-      state.detailChatProvider = "";
-      state.detailChatModel = "";
-      state.detailChatMessages = state.detailChatMessages.slice(0, -1);
+    let response;
+    try {
+      response = await requestDetailAgentJob(item, jobPayload);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "session_config_changed") throw error;
+      await requestDetailAgentSession(item, true);
+      response = await requestDetailAgentJob(item, {
+        session_id: state.detailChatSession?.id || "",
+        question: content,
+        quote_text: state.detailChatQuoteText,
+        quote_source: state.detailChatQuoteSource,
+      });
     }
-    state.detailChatStatus = labelMap[code] || "发送失败，请稍后重试。";
+    applyDetailAgentPayload(item, response);
+    state.detailChatStatus = "";
+    state.detailChatQuoteText = "";
+    state.detailChatQuoteSource = "";
+    detailChatInput.value = "";
+    const active = activeDetailAgentJob();
+    if (active) startDetailAgentStream(item, active.id);
+  } catch (error) {
+    state.detailChatStatus = detailAgentErrorMessage(error, "后台研究任务创建失败，请重试。");
   } finally {
     state.detailChatSending = false;
     renderDetailChat(item);
   }
 }
 
-async function archiveDetailChat() {
-  if (!state.selectedId || state.detailChatSending || state.detailChatArchiving) return;
-  const item = state.itemsById.get(state.selectedId);
-  if (!item) return;
-  if (!state.detailChatMessages.some((message) => message.role === "assistant")) return;
+async function requestDetailAgentJob(item, requestPayload) {
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/agent/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestPayload),
+  });
+  return parseDetailAgentResponse(res, "agent_job_failed");
+}
 
-  const configuredModel = currentChatModel();
-  state.detailChatArchiving = true;
-  state.detailChatStatus = "正在归档到想法...";
+async function stopDetailAgentJob() {
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  const active = activeDetailAgentJob();
+  if (!item || !active) return;
+  state.detailChatStatus = "正在停止后台研究…";
   renderDetailChat(item);
-
   try {
-    const payload = await archiveNewsChat(item, {
-      messages: state.detailChatMessages,
-      model: configuredModel,
-    });
-    const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
-    cached.has_note = payload.has_note;
-    cached.note = payload.note;
-    cached.note_preview = payload.note_preview || "";
-    if (item.url) state.detailCacheByUrl.set(item.url, cached);
-    item.has_note = payload.has_note;
-    item.note_preview = payload.note_preview || "";
-    state.itemsById.set(item.id, item);
-    rerenderOne(item.id);
-    refreshDetailNoteUI(item);
-    state.detailChatStatus = "已归档到想法。";
-  } catch (error) {
-    const code = error instanceof Error ? error.message : "archive_request_failed";
-    const archiveLabel = currentChatProvider() === "pi" ? "Pi" : "Codex";
-    const labelMap = {
-      empty_archive_source: "没有可归档回答。",
-      empty_archive_summary: "没有生成可归档结论。",
-      invalid_archive_summary: "归档结果无效，请重试。",
-      note_too_long: "想法过长，无法追加归档。",
-      provider_busy: `${archiveLabel} 当前正忙，请稍后重试。`,
-      provider_timeout: `${archiveLabel} 归档超时，请稍后重试。`,
-      provider_failed: `${archiveLabel} 归档失败，请稍后重试。`,
-    };
-    state.detailChatStatus = labelMap[code] || "归档失败，请稍后重试。";
+    const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/agent/jobs/${encodeURIComponent(active.id)}/stop`, { method: "POST" });
+    const payload = await res.json().catch(() => ({ ok: false, error: "agent_stop_failed" }));
+    if (!res.ok || !payload.ok) throw new Error(payload.error || "agent_stop_failed");
+    mergeDetailAgentJob(payload.job);
+    state.detailChatStatus = "已停止；部分输出已保留。";
+  } catch {
+    state.detailChatStatus = "停止失败，请稍后重试。";
   } finally {
-    state.detailChatArchiving = false;
+    stopDetailAgentStream();
     renderDetailChat(item);
+  }
+}
+
+async function retryDetailAgentJob(item, jobId) {
+  if (!item || activeDetailAgentJob()) return;
+  state.detailChatSending = true;
+  state.detailChatStatus = "正在重新创建研究任务…";
+  renderDetailChat(item);
+  try {
+    const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/agent/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
+    const payload = await res.json().catch(() => ({ ok: false, error: "agent_retry_failed" }));
+    if (!res.ok || !payload.ok) throw new Error(payload.error || "agent_retry_failed");
+    applyDetailAgentPayload(item, payload);
+    state.detailChatStatus = "";
+    const active = activeDetailAgentJob();
+    if (active) startDetailAgentStream(item, active.id);
+  } catch {
+    state.detailChatStatus = "重试失败，请稍后重试。";
+  } finally {
+    state.detailChatSending = false;
+    renderDetailChat(item);
+  }
+}
+
+async function openDetailAgentPanel(item) {
+  if (!item?.id || !item.url) return;
+  state.detailChatPanelOpen = true;
+  renderDetail(item);
+  try {
+    await fetchDetailAgentSession(item);
+  } catch (error) {
+    state.detailChatStatus = detailAgentErrorMessage(error, "研究会话读取失败，请稍后重试。");
+    renderDetailChat(item);
+  }
+  detailChatInput?.focus({ preventScroll: true });
+}
+
+async function startNewDetailAgentSession() {
+  const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+  if (!item || activeDetailAgentJob()) return;
+  state.detailChatSending = true;
+  state.detailChatStatus = "正在创建新的临时会话…";
+  renderDetailChat(item);
+  try {
+    await requestDetailAgentSession(item, true);
+    state.detailChatQuoteText = "";
+    state.detailChatQuoteSource = "";
+    detailChatInput.value = "";
+    state.detailChatStatus = "新会话已准备好。";
+  } catch (error) {
+    state.detailChatStatus = detailAgentErrorMessage(error, "新会话创建失败，请稍后重试。");
+  } finally {
+    state.detailChatSending = false;
+    renderDetailChat(item);
+  }
+}
+
+async function clearAllAgentSessions() {
+  if (typeof window.confirm === "function" && !window.confirm("清空全部新闻研究 Agent 会话？这会删除所有临时对话与任务，新闻数据不受影响。")) return;
+  if (settingsAgentClearAllBtn) settingsAgentClearAllBtn.disabled = true;
+  try {
+    const res = await fetch("/api/agent/sessions", { method: "DELETE" });
+    const payload = await res.json().catch(() => ({ ok: false, error: "agent_clear_failed" }));
+    if (!res.ok || !payload.ok) throw new Error(payload.error || "agent_clear_failed");
+    state.detailCacheByUrl.forEach((cached) => {
+      if (cached?.agent) {
+        cached.agent = {
+          session: null,
+          messages: [],
+          jobs: [],
+          context_available: !!cached.detail?.content,
+          context_hash: "",
+        };
+      }
+    });
+    resetDetailChatState({ keepProvider: true });
+    state.settingsMessage = "全部 Agent 临时会话已清空。";
+    state.settingsMessageTone = "ready";
+  } catch {
+    state.settingsMessage = "清空全部 Agent 会话失败，请稍后重试。";
+    state.settingsMessageTone = "failed";
+  } finally {
+    renderSettingsOverlay();
+    const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+    if (item) renderDetail(item);
   }
 }
 
@@ -6344,6 +6633,10 @@ function hideDetailHighlightPopover() {
     detailHighlightAnnotationActionBtn.classList.add("hidden");
     detailHighlightAnnotationActionBtn.disabled = false;
   }
+  if (detailHighlightAskBtn) {
+    detailHighlightAskBtn.classList.add("hidden");
+    detailHighlightAskBtn.disabled = false;
+  }
 }
 
 function setDetailHighlightColorControls(visible, selectedColor = null) {
@@ -6358,6 +6651,9 @@ function setDetailHighlightColorControls(visible, selectedColor = null) {
   });
   if (detailHighlightAnnotationActionBtn) {
     detailHighlightAnnotationActionBtn.disabled = !!state.detailHighlightBusy;
+  }
+  if (detailHighlightAskBtn) {
+    detailHighlightAskBtn.disabled = !!state.detailHighlightBusy;
   }
 }
 
@@ -6562,6 +6858,11 @@ function resetDetailHighlightState({ preserveAnnotationEditor = false } = {}) {
   updateDetailHighlightStatus();
 }
 
+function resetDetailOriginalAgentState() {
+  state.detailOriginalAgentEligible = false;
+  state.detailOriginalAgentBody = "";
+}
+
 function positionDetailHighlightPopover(rect) {
   if (!detailHighlightPopover || detailHighlightPopover.classList.contains("hidden")) return;
   const width = detailHighlightPopover.offsetWidth || 180;
@@ -6592,6 +6893,11 @@ function showDetailHighlightPopover({ rect, action, message }) {
     const showAnnotationAction = action?.type === "remove";
     detailHighlightAnnotationActionBtn.classList.toggle("hidden", !showAnnotationAction);
     detailHighlightAnnotationActionBtn.disabled = !!state.detailHighlightBusy;
+  }
+  if (detailHighlightAskBtn) {
+    const showAskAction = (action?.type === "create" || action?.type === "ask") && !!action.selectedText;
+    detailHighlightAskBtn.classList.toggle("hidden", !showAskAction);
+    detailHighlightAskBtn.disabled = !!state.detailHighlightBusy;
   }
   detailHighlightPopover.classList.remove("hidden");
   positionDetailHighlightPopover(rect);
@@ -6825,6 +7131,23 @@ function detailHighlightRangeSurface(range) {
   return candidates.length === 1 ? candidates[0] : null;
 }
 
+function detailSelectionRangeSurface(range) {
+  if (
+    detailOriginalContent &&
+    state.detailOriginalAgentEligible &&
+    detailOriginalContent.contains(range.startContainer) &&
+    detailOriginalContent.contains(range.endContainer)
+  ) {
+    return {
+      bodyKind: DETAIL_ORIGINAL_AGENT_BODY_KIND,
+      root: detailOriginalContent,
+      body: state.detailOriginalAgentBody,
+      askOnly: true,
+    };
+  }
+  return detailHighlightRangeSurface(range);
+}
+
 function updateDetailHighlightSelection() {
   const selection = window.getSelection?.();
   const range = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
@@ -6832,7 +7155,7 @@ function updateDetailHighlightSelection() {
     if (state.detailHighlightAction?.type !== "remove") hideDetailHighlightPopover();
     return;
   }
-  const surface = detailHighlightRangeSurface(range);
+  const surface = detailSelectionRangeSurface(range);
   if (!surface) {
     hideDetailHighlightPopover();
     return;
@@ -6840,6 +7163,14 @@ function updateDetailHighlightSelection() {
   const offsets = detailHighlightSelectionOffsets(range, surface.root, surface.body);
   if (!offsets) {
     hideDetailHighlightPopover();
+    return;
+  }
+  if (surface.askOnly) {
+    showDetailHighlightPopover({
+      rect: range.getBoundingClientRect(),
+      action: { type: "ask", bodyKind: surface.bodyKind, ...offsets },
+      message: "",
+    });
     return;
   }
   if (detailHighlightSelectionOverlaps(offsets, surface.bodyKind)) {
@@ -7095,6 +7426,7 @@ async function runDetailHighlightColorChange(color) {
 function renderDetail(item, { preserveTransientUi = false } = {}) {
   closeTagAdminView();
   clearTrendIdeaDetailState();
+  resetDetailOriginalAgentState();
   if (!item) {
     resetDetailHighlightState();
     resetDetailChatState({ keepProvider: true });
@@ -7110,7 +7442,7 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
     if (detailDailyBody) detailDailyBody.classList.add("hidden");
     detailBody.classList.add("hidden");
     clearFeedKeyboardDetailFocusMode();
-    detailChatBody.classList.add("hidden");
+    hideDetailAgentUi();
     closeAllReviewPanels();
     renderDetailEmpty();
     updateWorkspaceLayout();
@@ -7222,6 +7554,8 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   detailAiConclusion.classList.add("hidden");
   detailOriginalWrap.classList.add("hidden");
   detailOriginalContent.textContent = "";
+  state.detailOriginalAgentEligible = false;
+  state.detailOriginalAgentBody = "";
   retryBtn.textContent = "重试详情抓取";
   retryBtn.classList.add("hidden");
   retranslateBtn.textContent = "重新翻译";
@@ -7258,6 +7592,10 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
     const original = detail.content;
     detailOriginalContent.textContent = original;
     detailOriginalWrap.classList.remove("hidden");
+    if (!isTwitterDetail) {
+      state.detailOriginalAgentEligible = true;
+      state.detailOriginalAgentBody = original;
+    }
     retranslateBtn.classList.remove("hidden");
     if (isTwitterDetail) retranslateBtn.textContent = "翻译正文";
 
@@ -7397,10 +7735,15 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   }
 
   const chatReady = !item.snapshotOnly && !!item.id && !!item.url;
-  askBtn.classList.toggle("hidden", !chatReady);
-  detailBody.classList.toggle("hidden", state.detailView === "chat");
-  detailChatBody.classList.toggle("hidden", state.detailView !== "chat");
-  if (state.detailView === "chat" && chatReady) {
+  askBtn.classList.add("hidden");
+  const chatOpen = state.detailChatPanelOpen && chatReady;
+  detailChatBody.classList.toggle("hidden", !chatOpen);
+  detailAgentLauncher?.classList.toggle("hidden", !chatReady || chatOpen);
+  detailAgentLauncher?.setAttribute("aria-expanded", chatOpen ? "true" : "false");
+  if (!chatReady) {
+    detailChatBody.classList.remove("is-maximized");
+  }
+  if (chatOpen) {
     renderDetailChat(item);
   }
 
@@ -7494,6 +7837,7 @@ async function loadDetail(itemId) {
 
   const cached = { ...payload };
   state.detailCacheByUrl.set(item.url, cached);
+  if (payload.agent) applyDetailAgentPayload(item, payload);
   state.marketTagChoices = Array.isArray(payload.market_tag_choices) ? payload.market_tag_choices : state.marketTagChoices;
   item.detail_status = payload.detail_status;
   item.read_at = payload.read_at;
@@ -8200,7 +8544,7 @@ function renderTrendIdeaDetail(item) {
   syncDetailReturnButton();
   detailBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
-  detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   closeAllReviewPanels();
   if (!item) {
     clearTrendIdeaDetailState();
@@ -8232,7 +8576,7 @@ function renderStandaloneIdeaDetail(item) {
   syncDetailReturnButton();
   detailBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
-  detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   closeAllReviewPanels();
   if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
   if (!item) {
@@ -8267,7 +8611,7 @@ function hideAllDetailPanelsForReview() {
   if (detailReminderCard) detailReminderCard.classList.add("hidden");
   if (detailBody) detailBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
-  if (detailChatBody) detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
   if (detailStandaloneIdeaBody) detailStandaloneIdeaBody.classList.add("hidden");
   if (detailStandaloneIdeaNewBody) detailStandaloneIdeaNewBody.classList.add("hidden");
@@ -8654,7 +8998,7 @@ function openStandaloneIdeaNewView() {
   syncDetailReturnButton();
   detailBody.classList.add("hidden");
   if (detailDailyBody) detailDailyBody.classList.add("hidden");
-  detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   if (detailTrendIdeaBody) detailTrendIdeaBody.classList.add("hidden");
   detailStandaloneIdeaBody.classList.add("hidden");
   state.selectedStandaloneIdea = null;
@@ -8911,7 +9255,7 @@ function renderDailyBriefingDetailLoading(item) {
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   detailBody.classList.add("hidden");
-  detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   detailEmpty.classList.add("hidden");
   detailDailyBody.classList.remove("hidden");
   setDailyBriefingHeader(item || {}, "读取中...", "pending");
@@ -8936,7 +9280,7 @@ function renderDailyBriefingDetail(briefing) {
   if (detailTrackedBody) detailTrackedBody.classList.add("hidden");
   if (detailTrackedFormBody) detailTrackedFormBody.classList.add("hidden");
   detailBody.classList.add("hidden");
-  detailChatBody.classList.add("hidden");
+  hideDetailAgentUi();
   detailEmpty.classList.add("hidden");
   detailDailyBody.classList.remove("hidden");
   setDailyBriefingHeader(briefing || {});
@@ -10271,6 +10615,12 @@ if (settingsSaveBtn) {
   });
 }
 
+if (settingsAgentClearAllBtn) {
+  settingsAgentClearAllBtn.addEventListener("click", () => {
+    clearAllAgentSessions();
+  });
+}
+
 [
   [settingsNavServices, "services"],
   [settingsNavModels, "models"],
@@ -10445,6 +10795,12 @@ detailPanel.addEventListener("touchstart", handleDetailTouchStart, { passive: tr
 detailPanel.addEventListener("touchmove", handleDetailTouchMove, { passive: false });
 detailPanel.addEventListener("touchend", handleDetailTouchEnd, { passive: true });
 detailPanel.addEventListener("touchcancel", handleDetailTouchEnd, { passive: true });
+detailPanel.addEventListener("click", (event) => {
+  if (!state.detailChatPanelOpen || !detailChatBody) return;
+  const target = event.target;
+  if (target instanceof Node && (detailChatBody.contains(target) || detailAgentLauncher?.contains(target))) return;
+  closeDetailAgentPanel();
+});
 
 function handleDetailHighlightMarkClick(event, root) {
   const target = event.target;
@@ -10486,6 +10842,10 @@ function handleDetailHighlightMarkClick(event, root) {
   root.addEventListener("keyup", scheduleDetailHighlightSelectionUpdate);
   root.addEventListener("click", (event) => handleDetailHighlightMarkClick(event, root));
 });
+if (detailOriginalContent) {
+  detailOriginalContent.addEventListener("mouseup", scheduleDetailHighlightSelectionUpdate);
+  detailOriginalContent.addEventListener("keyup", scheduleDetailHighlightSelectionUpdate);
+}
 detailHighlightColorOptions.forEach((button) => {
   button.addEventListener("click", () => {
     const color = button.dataset.highlightColor;
@@ -10506,6 +10866,24 @@ detailHighlightColorOptions.forEach((button) => {
     }
   });
 });
+if (detailHighlightAskBtn) {
+  detailHighlightAskBtn.addEventListener("click", () => {
+    const action = state.detailHighlightAction;
+    const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+    if (!["create", "ask"].includes(action?.type) || !action.selectedText || !item) return;
+    state.detailChatQuoteText = action.selectedText;
+    state.detailChatQuoteSource = {
+      [DETAIL_HIGHLIGHT_TWITTER_BODY_KIND]: "英文原文引用",
+      [DETAIL_HIGHLIGHT_BODY_KIND]: "中文正文引用",
+      [DETAIL_HIGHLIGHT_POINTS_BODY_KIND]: "中文要点引用",
+      [DETAIL_HIGHLIGHT_CONCLUSION_BODY_KIND]: "中文结论引用",
+      [DETAIL_ORIGINAL_AGENT_BODY_KIND]: "英文原文引用",
+    }[action.bodyKind] || "中文阅读引用";
+    hideDetailHighlightPopover();
+    window.getSelection?.()?.removeAllRanges?.();
+    openDetailAgentPanel(item).catch(() => {});
+  });
+}
 if (detailHighlightAnnotationActionBtn) {
   detailHighlightAnnotationActionBtn.addEventListener("click", () => {
     const action = state.detailHighlightAction;
@@ -10570,7 +10948,8 @@ document.addEventListener("selectionchange", () => {
   if (
     state.detailHighlightEligible ||
     state.detailHighlightPointsEligible ||
-    state.detailHighlightConclusionEligible
+    state.detailHighlightConclusionEligible ||
+    state.detailOriginalAgentEligible
   ) scheduleDetailHighlightSelectionUpdate();
 });
 document.addEventListener("pointerdown", (event) => {
@@ -11025,22 +11404,32 @@ const detailRetryBtn = document.getElementById("detailRetryBtn");
 const detailRetranslateBtn = document.getElementById("detailRetranslateBtn");
 if (detailAskBtn) {
   detailAskBtn.addEventListener("click", () => {
-    if (!state.selectedId) return;
-    const item = state.itemsById.get(state.selectedId);
-    if (!item) return;
-    state.detailView = "chat";
-    renderDetail(item);
-    detailChatInput.focus();
+    const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+    openDetailAgentPanel(item).catch(() => {});
+  });
+}
+
+if (detailAgentLauncher) {
+  detailAgentLauncher.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+    openDetailAgentPanel(item).catch(() => {});
+  });
+}
+
+if (detailAgentExpandBtn) {
+  detailAgentExpandBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!state.detailChatPanelOpen) return;
+    state.detailChatPanelMaximized = !state.detailChatPanelMaximized;
+    const item = state.selectedId ? state.itemsById.get(state.selectedId) : null;
+    if (item) renderDetailChat(item);
   });
 }
 
 if (detailChatBackBtn) {
   detailChatBackBtn.addEventListener("click", () => {
-    if (!state.selectedId) return;
-    const item = state.itemsById.get(state.selectedId);
-    if (!item) return;
-    state.detailView = "detail";
-    renderDetail(item);
+    closeDetailAgentPanel();
   });
 }
 
@@ -11050,9 +11439,15 @@ if (detailChatSendBtn) {
   });
 }
 
-if (detailChatArchiveBtn) {
-  detailChatArchiveBtn.addEventListener("click", () => {
-    archiveDetailChat();
+if (detailAgentStopBtn) {
+  detailAgentStopBtn.addEventListener("click", () => {
+    stopDetailAgentJob();
+  });
+}
+
+if (detailAgentNewBtn) {
+  detailAgentNewBtn.addEventListener("click", () => {
+    startNewDetailAgentSession();
   });
 }
 
@@ -11551,6 +11946,10 @@ window.addEventListener("resize", () => {
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.settingsOpen) {
     closeSettingsOverlay();
+    return;
+  }
+  if (event.key === "Escape" && state.detailChatPanelOpen) {
+    closeDetailAgentPanel();
     return;
   }
   if (event.key === "Escape") {

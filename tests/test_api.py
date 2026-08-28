@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.3.0" in html
-    assert "/static/style.css?v=2.1.3.0" in html
-    assert "/static/app.js?v=2.1.3.0" in html
+    assert "News Reader v2.1.4.0" in html
+    assert "/static/style.css?v=2.1.4.0" in html
+    assert "/static/app.js?v=2.1.4.0" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -5097,10 +5097,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.3.0" in app_source
-    assert "News Reader v2.1.3.0" in index_source
-    assert "/static/style.css?v=2.1.3.0" in index_source
-    assert "/static/app.js?v=2.1.3.0" in index_source
+    assert "News Reader v2.1.4.0" in app_source
+    assert "News Reader v2.1.4.0" in index_source
+    assert "/static/style.css?v=2.1.4.0" in index_source
+    assert "/static/app.js?v=2.1.4.0" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -10277,10 +10277,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.3.0" in app_source
-    assert "News Reader v2.1.3.0" in index_source
-    assert "/static/style.css?v=2.1.3.0" in index_source
-    assert "/static/app.js?v=2.1.3.0" in index_source
+    assert "News Reader v2.1.4.0" in app_source
+    assert "News Reader v2.1.4.0" in index_source
+    assert "/static/style.css?v=2.1.4.0" in index_source
+    assert "/static/app.js?v=2.1.4.0" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10326,6 +10326,22 @@ def test_frontend_article_highlight_contract_and_version():
     assert "contenteditable" not in index_source.lower()
     assert ".detail-content mark.article-highlight" in style_source
     assert ".detail-highlight-popover" in style_source
+
+
+def test_frontend_original_article_selection_is_agent_only():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    original_selection = app_source.split("function detailSelectionRangeSurface", 1)[1].split(
+        "function updateDetailHighlightSelection", 1
+    )[0]
+    assert 'const DETAIL_ORIGINAL_AGENT_BODY_KIND = "original_detail"' in app_source
+    assert "detailOriginalAgentEligible" in app_source
+    assert 'detailOriginalContent.addEventListener("mouseup", scheduleDetailHighlightSelectionUpdate)' in app_source
+    assert "askOnly: true" in original_selection
+    assert 'action: { type: "ask", bodyKind: surface.bodyKind, ...offsets }' in app_source
+    assert 'if (surface.askOnly)' in app_source
+    assert '["create", "ask"].includes(action?.type)' in app_source
+    assert '[DETAIL_ORIGINAL_AGENT_BODY_KIND]: "英文原文引用"' in app_source
+    assert 'action?.type === "create" || action?.type === "remove"' in app_source
 
 
 def test_frontend_highlight_annotation_save_failure_preserves_edit_state():
@@ -11555,3 +11571,543 @@ def test_index_theme_init_script_precedes_stylesheet():
     css_pos = index_source.index('<link rel="stylesheet"')
     js_pos = index_source.index('<script src="/static/app.js')
     assert script_pos < css_pos < js_pos
+
+
+def _setup_agent_api_fixture(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年8月"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "dailyFreshNews_2026-08-27.md").write_text(
+        """## Reuters · World（1条）
+### [Agent API 新闻](https://example.com/agent-api)
+- 发布时间：2026-08-27 09:00:00
+- 摘要：不应被研究 Agent 当作完整原文上下文。
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "news_index.sqlite3"
+    agent_db_path = tmp_path / "agent_sessions.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+    monkeypatch.setenv("NEWS_READER_AGENT_DB_PATH", str(agent_db_path))
+    monkeypatch.setenv("NEWS_READER_AGENT_RUNTIME_DIR", str(tmp_path / "agent-runtime"))
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    with app_module.db_conn() as conn:
+        stamp = app_module.now_ts()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(
+                  url, source, title, author, published_at, content,
+                  content_length, raw_json, fetched_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["url"],
+                    "Reuters",
+                    item["title"],
+                    "Reporter",
+                    "2026-08-27 09:00:00",
+                    "The complete original article used as the authoritative context.",
+                    68,
+                    "{}",
+                    stamp,
+                    stamp,
+                ),
+            )
+    return app_module, client, item, db_path, agent_db_path
+
+
+def test_agent_job_is_async_and_keeps_data_out_of_main_db(tmp_path: Path, monkeypatch):
+    app_module, client, item, db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+
+    session_before = client.get(f"/api/news/{item['id']}/agent/session").get_json()
+    assert session_before["ok"] is True
+    assert session_before["context_available"] is True
+    assert session_before["session"] is None
+
+    created = client.post(
+        f"/api/news/{item['id']}/agent/jobs",
+        json={
+            "question": "原文中的核心风险是什么？",
+            "quote_text": "The complete original article",
+            "quote_source": "英文原文引用",
+        },
+    )
+    assert created.status_code == 202
+    payload = created.get_json()
+    assert payload["ok"] is True
+    assert payload["job_id"] == payload["job"]["id"]
+    assert payload["job"]["status"] == "queued"
+    assert payload["job"]["provider"] == "codex"
+    assert payload["job"]["quote_source"] == "英文原文引用"
+
+    detail_payload = client.get(f"/api/news/{item['id']}/detail").get_json()
+    assert detail_payload["agent"]["session"]["context_hash"]
+    assert detail_payload["agent"]["jobs"][0]["status"] == "queued"
+    assert detail_payload["agent"]["session"]["context_hash"] == payload["session"]["context_hash"]
+
+    with sqlite3.connect(agent_db_path) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"agent_sessions", "agent_jobs", "agent_messages"}.issubset(tables)
+        context_json = conn.execute("SELECT context_json FROM agent_sessions").fetchone()[0]
+        assert "complete original article" in context_json
+        assert "摘要：不应被研究 Agent" not in context_json
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_sessions'"
+        ).fetchone() is None
+
+    cleared = client.delete(f"/api/news/{item['id']}/agent/session")
+    assert cleared.status_code == 200
+    assert cleared.get_json()["cleared"] is True
+    assert client.get(f"/api/news/{item['id']}/agent/session").get_json()["session"] is None
+
+
+def test_agent_session_new_and_clear_are_real_and_idempotent(tmp_path: Path, monkeypatch):
+    app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+
+    empty_clear = client.delete(f"/api/news/{item['id']}/agent/session")
+    assert empty_clear.status_code == 200
+    assert empty_clear.get_json() == {"ok": True, "cleared": True}
+
+    first = client.post(f"/api/news/{item['id']}/agent/session", json={})
+    assert first.status_code == 200
+    first_id = first.get_json()["session"]["id"]
+    old_job = client.post(
+        f"/api/news/{item['id']}/agent/jobs",
+        json={
+            "question": "旧会话问题",
+            "quote_text": "旧引用",
+            "quote_source": "英文原文引用",
+        },
+    )
+    assert old_job.status_code == 202
+    old_job_id = old_job.get_json()["job_id"]
+    with app_module.agent_db_conn() as conn:
+        with conn:
+            conn.execute(
+                "UPDATE agent_jobs SET status='failed', error='old_error', finished_at=?, updated_at=? WHERE id=?",
+                (app_module.now_ts(), app_module.now_ts(), old_job_id),
+            )
+    old_runtime = app_module.agent_session_runtime_dir(first_id)
+    old_runtime.mkdir(parents=True)
+    (old_runtime / "stale-session.json").write_text("stale", encoding="utf-8")
+
+    replaced = client.post(
+        f"/api/news/{item['id']}/agent/session",
+        json={"new_session": True},
+    )
+    assert replaced.status_code == 200
+    second_id = replaced.get_json()["session"]["id"]
+    assert second_id != first_id
+    with sqlite3.connect(agent_db_path) as conn:
+        assert conn.execute("SELECT id, status FROM agent_sessions").fetchall() == [(second_id, "active")]
+        assert conn.execute("SELECT 1 FROM agent_sessions WHERE id=?", (first_id,)).fetchone() is None
+        assert conn.execute("SELECT 1 FROM agent_jobs WHERE id=?", (old_job_id,)).fetchone() is None
+        assert conn.execute("SELECT COUNT(*) FROM agent_jobs WHERE item_id=?", (item["id"],)).fetchone() == (0,)
+        assert conn.execute("SELECT COUNT(*) FROM agent_messages WHERE session_id=?", (first_id,)).fetchone() == (0,)
+        assert conn.execute("SELECT COUNT(*) FROM agent_messages").fetchone() == (0,)
+        assert conn.execute(
+            "SELECT status FROM agent_sessions WHERE id=?", (second_id,)
+        ).fetchone() == ("active",)
+    assert not old_runtime.exists()
+
+    first_clear = client.delete(f"/api/news/{item['id']}/agent/session")
+    second_clear = client.delete(f"/api/news/{item['id']}/agent/session")
+    assert first_clear.status_code == second_clear.status_code == 200
+    assert first_clear.get_json()["cleared"] is True
+    assert second_clear.get_json()["cleared"] is True
+    with sqlite3.connect(agent_db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM agent_sessions").fetchone() == (0,)
+        assert conn.execute("SELECT COUNT(*) FROM agent_jobs").fetchone() == (0,)
+        assert conn.execute("SELECT COUNT(*) FROM agent_messages").fetchone() == (0,)
+
+
+def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+
+    assert "[404, 405].includes(status)" in app_source
+    assert '"agent_api_unavailable"' in app_source
+    assert "Agent 后端尚未加载（HTTP ${httpStatus}）" in app_source
+    assert "Number.isInteger(error?.httpStatus)" in app_source
+    assert "error instanceof TypeError" in app_source
+    assert "payload?.error || payload?.message" in app_source
+    assert "parseDetailAgentResponse(res, \"agent_session_failed\")" in app_source
+    assert "parseDetailAgentResponse(res, \"agent_job_failed\")" in app_source
+    assert "detailAgentClearBtn" not in app_source
+    assert 'id="detailAgentLauncher"' in index_source
+    assert 'id="detailAgentExpandBtn"' in index_source
+    assert 'id="detailChatBody"' in index_source
+    assert '清空本篇' not in index_source
+    assert index_source.index('id="detailAgentLauncher"') < index_source.index('id="detailBody"')
+    assert index_source.index('id="detailChatBody"') < index_source.index('id="detailBody"')
+    assert "detailChatPanelMaximized" in app_source
+    assert "closeDetailAgentPanel();" in app_source
+    assert "detailChatBody.contains(target)" in app_source
+
+    panel_rule = style_source[style_source.index(".detail-agent-panel {"):]
+    panel_rule = panel_rule[:panel_rule.index("}")]
+    assert "display: flex" in panel_rule
+    assert "flex-direction: column" in panel_rule
+    assert "overflow: hidden" in panel_rule
+    assert "position: absolute" in panel_rule
+    assert "height: min(58%, 560px)" in panel_rule
+    assert ".detail-agent-panel.is-maximized" in style_source
+    assert "height: min(58dvh, 520px)" in style_source
+    assert ".detail-agent-launcher" in style_source
+    agent_rules = style_source[style_source.index(".detail-agent-panel {"):style_source.index(".detail-chat-composer {")]
+    assert "max-height: 230px" not in agent_rules
+    assert "max-height: 180px" not in agent_rules
+    composer_rule = style_source[style_source.index(".detail-agent-panel .detail-chat-composer {"):]
+    composer_rule = composer_rule[:composer_rule.index("}")]
+    assert "flex: 0 0 auto" in composer_rule
+    messages_rule = style_source[style_source.index(".detail-agent-panel .detail-chat-messages {"):]
+    messages_rule = messages_rule[:messages_rule.index("}")]
+    assert "overflow-y: auto" in style_source[style_source.index(".detail-chat-messages {"):style_source.index(".detail-chat-message {")]
+    assert "flex: 1 1 auto" in messages_rule
+
+
+def test_agent_frontend_diagnostics_preserve_actual_http_status():
+    """Agent diagnostics must retain non-JSON HTTP status and business errors."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) throw new Error("front-end bootstrap marker missing");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by diagnostics regression test");
+
+const noop = () => {};
+const element = new Proxy(noop, {
+  get(target, prop) {
+    if (["addEventListener", "removeEventListener", "appendChild", "removeChild", "setAttribute", "removeAttribute", "focus", "blur", "click"].includes(prop)) return noop;
+    if (["querySelectorAll", "getElementsByTagName"].includes(prop)) return () => [];
+    if (prop === "querySelector") return () => element;
+    if (prop === "classList") return { add: noop, remove: noop, toggle: noop, contains: () => false };
+    if (prop === "style" || prop === "dataset") return element;
+    if (prop === "children" || prop === "options") return [];
+    if (prop === "length") return 0;
+    if (["value", "textContent", "innerHTML", "className"].includes(prop)) return "";
+    if (["checked", "disabled"].includes(prop)) return false;
+    if (prop === Symbol.iterator) return function* () {};
+    return element;
+  },
+  set() { return true; },
+  apply() { return undefined; },
+});
+const document = {
+  getElementById: () => element,
+  querySelector: () => element,
+  querySelectorAll: () => [],
+  createElement: () => element,
+  addEventListener: noop,
+  body: element,
+  documentElement: element,
+};
+const localStorage = { getItem: () => null, setItem: noop };
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  localStorage,
+};
+const context = {
+  console, document, window, localStorage, IntersectionObserver, fetch: noop,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+async function diagnose(response) {
+  try {
+    await context.parseDetailAgentResponse(response, "agent_job_failed");
+    throw new Error("expected response failure");
+  } catch (error) {
+    return { error, message: context.detailAgentErrorMessage(error, "fallback") };
+  }
+}
+function nonJsonResponse(status) {
+  return { ok: false, status, json: async () => { throw new Error("HTML response"); } };
+}
+
+(async () => {
+  const stale = await diagnose(nonJsonResponse(404));
+  assert(stale.error.httpStatus === 404, "404 status was not retained");
+  assert(stale.message.includes("HTTP 404"), `404 message=${stale.message}`);
+
+  const method = await diagnose(nonJsonResponse(405));
+  assert(method.error.httpStatus === 405, "405 status was not retained");
+  assert(method.message.includes("HTTP 405"), `405 message=${method.message}`);
+  assert(!method.message.includes("HTTP 404"), `405 was misreported: ${method.message}`);
+
+  const other = await diagnose(nonJsonResponse(502));
+  assert(other.error.httpStatus === 502, "502 status was not retained");
+  assert(other.message.includes("HTTP 502"), `502 message=${other.message}`);
+
+  const connectionError = vm.runInContext('new TypeError("Failed to fetch")', context);
+  const connection = context.detailAgentErrorMessage(connectionError, "fallback");
+  assert(connection.includes("无法连接 Agent 后端"), `connection message=${connection}`);
+  assert(!/HTTP \d+/.test(connection), `connection fabricated a status: ${connection}`);
+
+  const business = await diagnose({
+    ok: false,
+    status: 405,
+    json: async () => ({ ok: false, error: "detail_not_ready" }),
+  });
+  assert(business.message === "正文尚未抓取完成，暂时不能提问。", `business message=${business.message}`);
+  assert(!business.message.includes("HTTP 405"), `business error was replaced: ${business.message}`);
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_agent_frontend_clears_transient_status_after_job_success():
+    """Successful send/retry must remove the transient creating-task status."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) throw new Error("front-end bootstrap marker missing");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by job status regression test");
+source = source.replace("let state = {", "var state = {");
+const renderStart = source.indexOf("function renderDetailChat(item) {");
+const sendStart = source.indexOf("async function sendDetailChatMessage()", renderStart);
+if (renderStart < 0 || sendStart < 0) throw new Error("agent render/send functions missing");
+source = source.slice(0, renderStart) + "function renderDetailChat(item) {}\n\n" + source.slice(sendStart);
+
+const noop = () => {};
+const target = {
+  value: "",
+  disabled: false,
+  className: "",
+  classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+};
+const element = new Proxy(target, {
+  get(obj, prop) {
+    if (prop in obj) return obj[prop];
+    if (["children", "options"].includes(prop)) return [];
+    if (prop === Symbol.iterator) return function* () {};
+    return noop;
+  },
+  set(obj, prop, value) { obj[prop] = value; return true; },
+});
+const document = {
+  getElementById: () => element,
+  querySelector: () => element,
+  querySelectorAll: () => [],
+  createElement: () => element,
+  addEventListener: noop,
+  body: element,
+  documentElement: element,
+};
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const localStorage = { getItem: () => null, setItem: noop };
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  localStorage,
+};
+const jobPayload = {
+  ok: true,
+  agent: {
+    session: { id: "session-1", provider: "codex", model: "gpt-test" },
+    messages: [{ id: "message-1", job_id: "job-1", role: "assistant", content: "完成", status: "succeeded" }],
+    jobs: [{ id: "job-1", status: "succeeded", created_at: "2026-08-28T00:00:00Z", answer_text: "完成" }],
+  },
+};
+let fetchMode = "success";
+const fetch = async (url, init = {}) => {
+  if (fetchMode === "send-failure" || fetchMode === "retry-failure") {
+    return { ok: false, status: 500, json: async () => ({ ok: false, error: "agent_job_failed" }) };
+  }
+  return { ok: true, status: 202, json: async () => jobPayload };
+};
+const context = {
+  console, document, window, localStorage, IntersectionObserver, fetch,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+(async () => {
+  const item = { id: "news-1", url: "https://example.com/news-1" };
+  context.state.selectedId = item.id;
+  context.state.itemsById = new Map([[item.id, item]]);
+  context.state.detailChatSession = { id: "session-1", provider: "codex", model: "gpt-test" };
+  context.state.detailChatStatus = "正在创建后台研究任务…";
+  element.value = "请总结";
+  await context.sendDetailChatMessage();
+  assert(context.state.detailChatStatus === "", `send status=${context.state.detailChatStatus}`);
+  assert(context.state.detailChatSending === false, "send remained busy");
+
+  await context.retryDetailAgentJob(item, "old-job");
+  assert(context.state.detailChatStatus === "", `retry status=${context.state.detailChatStatus}`);
+  assert(context.state.detailChatSending === false, "retry remained busy");
+
+  fetchMode = "send-failure";
+  element.value = "失败路径";
+  await context.sendDetailChatMessage();
+  assert(context.state.detailChatStatus.includes("后台研究任务创建失败"), `send failure status=${context.state.detailChatStatus}`);
+
+  fetchMode = "retry-failure";
+  await context.retryDetailAgentJob(item, "old-job");
+  assert(context.state.detailChatStatus === "重试失败，请稍后重试。", `retry failure status=${context.state.detailChatStatus}`);
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_agent_existing_temp_db_is_migrated_before_session_use(tmp_path: Path, monkeypatch):
+    agent_db_path = tmp_path / "agent_sessions.sqlite3"
+    with sqlite3.connect(agent_db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE agent_sessions (
+              id TEXT PRIMARY KEY,
+              item_id TEXT NOT NULL,
+              url TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              model TEXT NOT NULL DEFAULT '',
+              executor_session_id TEXT NOT NULL DEFAULT '',
+              context_hash TEXT NOT NULL,
+              context_json TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active',
+              created_at TEXT NOT NULL,
+              last_activity_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+    monkeypatch.setenv("NEWS_READER_AGENT_DB_PATH", str(agent_db_path))
+    monkeypatch.setenv("NEWS_READER_AGENT_RUNTIME_DIR", str(tmp_path / "agent-runtime"))
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_agent_db()
+    with sqlite3.connect(agent_db_path) as conn:
+        session_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(agent_sessions)").fetchall()
+        }
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+    assert "executor_provider" in session_columns
+    assert {"agent_sessions", "agent_jobs", "agent_messages"}.issubset(tables)
+
+
+def test_agent_restart_marks_jobs_interrupted_and_retry_is_async(tmp_path: Path, monkeypatch):
+    app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    created = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "请概括原文。"})
+    job_id = created.get_json()["job_id"]
+
+    with app_module.agent_db_conn() as conn:
+        with conn:
+            conn.execute(
+                "UPDATE agent_jobs SET status='running', answer_text='部分输出', updated_at=? WHERE id=?",
+                (app_module.now_ts(), job_id),
+            )
+            conn.execute(
+                "UPDATE agent_messages SET status='streaming', content='部分输出', updated_at=? WHERE job_id=? AND role='assistant'",
+                (app_module.now_ts(), job_id),
+            )
+    assert app_module.mark_agent_jobs_interrupted() == 1
+    with sqlite3.connect(agent_db_path) as conn:
+        row = conn.execute("SELECT status, error, answer_text FROM agent_jobs WHERE id=?", (job_id,)).fetchone()
+        message = conn.execute("SELECT status FROM agent_messages WHERE job_id=? AND role='assistant'", (job_id,)).fetchone()
+    assert row == ("interrupted", "service_restarted", "部分输出")
+    assert message[0] == "interrupted"
+
+    # 会话使用创建时的执行器配置；当前设置变化不会把旧会话静默切换到另一组模型。
+    monkeypatch.setattr(app_module, "_agent_provider_model", lambda: ("pi", "other-model", "deepseek"))
+    retry = client.post(f"/api/news/{item['id']}/agent/jobs/{job_id}/retry")
+    assert retry.status_code == 202
+    assert retry.get_json()["job"]["status"] == "queued"
+    assert retry.get_json()["job"]["provider"] == "codex"
+    assert retry.get_json()["job"]["id"] != job_id
+
+
+def test_agent_prompt_and_commands_are_original_only_and_read_only(tmp_path: Path, monkeypatch):
+    app_module, _client, item, _db_path, _agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    with app_module.db_conn() as conn:
+        detail = conn.execute("SELECT * FROM article_details WHERE url=?", (item["url"],)).fetchone()
+    context = app_module.build_agent_context(item, detail)
+    assert context["context_level"] == "full_detail"
+    prompt = app_module.build_agent_prompt(context, "问题", "引用")
+    assert "complete original article" in prompt
+    assert "摘要：不应被研究 Agent" not in prompt
+    assert "外部来源事实" in prompt
+
+    pi_command, _env, runtime_dir = app_module._agent_process_command(
+        {"provider": "pi", "model": "minimax-m3:cloud", "question": "问题", "quote_text": "",},
+        {"id": "session-1", "executor_provider": "ollama", "executor_session_id": ""},
+        context,
+        [],
+    )
+    assert "--session-dir" in pi_command
+    assert str(runtime_dir).startswith(str(tmp_path / "agent-runtime"))
+    assert "--tools" in pi_command
+    assert pi_command[pi_command.index("--tools") + 1] == "web_search,web_fetch"
+    assert "--no-tools" not in pi_command
+    assert not any(tool in pi_command for tool in ("bash", "edit", "write"))
+
+    codex_command, _env, runtime_dir = app_module._agent_process_command(
+        {"provider": "codex", "model": "gpt-test", "question": "问题", "quote_text": "",},
+        {"id": "session-2", "executor_provider": "", "executor_session_id": ""},
+        context,
+        [],
+    )
+    assert runtime_dir is None
+    assert "--ephemeral" in codex_command
+    assert codex_command[codex_command.index("--sandbox") + 1] == "read-only"
+
+    static_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    assert "function appendSafeAgentText(container, value)" in static_source
+    assert 'parsed.protocol !== "http:" && parsed.protocol !== "https:"' in static_source
+    assert "detailAgentClearBtn" not in static_source
+
+
+def test_agent_ttl_setting_persists_and_ui_exposes_cleanup_controls(tmp_path: Path, monkeypatch):
+    app_module, client, _item, _db_path, _agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    assert client.get("/api/settings").get_json()["agent"]["session_ttl_hours"] == 72
+    saved = client.put(
+        "/api/settings",
+        json={
+            "llm": {"translation": {"provider": "deepseek", "model": ""}},
+            "agent": {"session_ttl_hours": 24},
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.get_json()["agent"]["session_ttl_hours"] == 24
+    assert app_module.load_app_settings()["agent"]["session_ttl_hours"] == 24
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    assert 'id="settingsAgentTtlSelect"' in index_source
+    assert 'id="settingsAgentClearAllBtn"' in index_source
+    assert 'id="detailAgentNewBtn"' in index_source
+    assert 'id="detailAgentClearBtn"' not in index_source
+    assert "payload.agent.session_ttl_hours = draftAgentTtl;" in app_source
+    assert "clearAllAgentSessions();" in app_source

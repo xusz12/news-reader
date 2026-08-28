@@ -49,6 +49,9 @@ DEFAULT_APP_SETTINGS = {
             "threshold": 6,
         },
     },
+    "agent": {
+        "session_ttl_hours": 72,
+    },
 }
 
 
@@ -156,6 +159,12 @@ def load_app_settings() -> dict:
                 value = default_rule_params.get(key)
                 if isinstance(value, (int, float)):
                     base["tracked"]["default_rule_params"][key] = value
+
+    agent = payload.get("agent") if isinstance(payload, dict) else None
+    if isinstance(agent, dict):
+        ttl = agent.get("session_ttl_hours")
+        if ttl in (24, 72):
+            base["agent"]["session_ttl_hours"] = ttl
 
     return base
 
