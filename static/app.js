@@ -83,6 +83,8 @@ let state = {
   detailChatSession: null,
   detailChatPanelOpen: false,
   detailChatPanelMaximized: false,
+  detailChatPanelHeightPx: null,
+  detailChatPanelHeightCustom: false,
   detailChatStreamSource: null,
   detailChatStreamJobId: "",
   detailChatQuoteText: "",
@@ -153,6 +155,11 @@ const sourceIconAliases = {
 };
 const SETTINGS_CUSTOM_MODEL_VALUE = "__custom__";
 const FEED_SOURCE_SAVE_DEBOUNCE_MS = 400;
+const DETAIL_AGENT_HEIGHT_STORAGE_KEY = "news_reader_detail_agent_height";
+const DETAIL_AGENT_DEFAULT_HEIGHT_RATIO = 2 / 3;
+const DETAIL_AGENT_MIN_HEIGHT = 240;
+const DETAIL_AGENT_MAX_HEIGHT = 760;
+const DETAIL_AGENT_EDGE_GUTTER = 24;
 const TRACKED_SYSTEM_DEFAULT_RULE_PARAMS = {
   title_weight: 1,
   note_weight: 1,
@@ -427,11 +434,11 @@ const detailDailyStatus = document.getElementById("detailDailyStatus");
 const detailDailyContent = document.getElementById("detailDailyContent");
 const detailChatBody = document.getElementById("detailChatBody");
 const detailAgentLauncher = document.getElementById("detailAgentLauncher");
+const detailAgentResizeHandle = document.getElementById("detailAgentResizeHandle");
 const detailAskBtn = document.getElementById("detailAskBtn");
 const detailChatBackBtn = document.getElementById("detailChatBackBtn");
 const detailAgentExpandBtn = document.getElementById("detailAgentExpandBtn");
 const detailChatMeta = document.getElementById("detailChatMeta");
-const detailChatCapability = document.getElementById("detailChatCapability");
 const detailChatStatus = document.getElementById("detailChatStatus");
 const detailChatMessages = document.getElementById("detailChatMessages");
 const detailChatInput = document.getElementById("detailChatInput");
@@ -3408,7 +3415,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.4.1";
+  version.textContent = "News Reader v2.1.4.2";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5285,6 +5292,7 @@ function stopDetailAgentStream() {
 }
 
 function hideDetailAgentUi() {
+  detailChatBody?.style?.removeProperty?.("height");
   detailChatBody?.classList.add("hidden");
   detailChatBody?.classList.remove("is-maximized");
   detailAgentLauncher?.classList.add("hidden");
@@ -5327,16 +5335,123 @@ function chatModelLabel(meta) {
   return model || "默认模型";
 }
 
-function parseKeyPoints(raw) {
-  if (!raw) return [];
+function isDetailAgentDesktop() {
+  return Number(window.innerWidth || 0) >= FEED_KEYBOARD_NAV_MIN_WIDTH;
+}
+
+function loadDetailAgentHeightPreference() {
+  if (state.detailChatPanelHeightCustom) return;
   try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.map((point) => (typeof point === "string" ? point.trim() : "")).filter(Boolean)
-      : [];
+    const raw = window.localStorage.getItem(DETAIL_AGENT_HEIGHT_STORAGE_KEY);
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    state.detailChatPanelHeightPx = Math.round(parsed);
+    state.detailChatPanelHeightCustom = true;
   } catch {
-    return [];
+    // A storage restriction should not disable the in-page resize behavior.
   }
+}
+
+function detailAgentAvailableHeight() {
+  if (!detailPanel) return 0;
+  const panelStyle = window.getComputedStyle(detailPanel);
+  const verticalFrame = [
+    panelStyle.paddingTop,
+    panelStyle.paddingBottom,
+    panelStyle.borderTopWidth,
+    panelStyle.borderBottomWidth,
+  ].reduce((total, value) => total + (Number.parseFloat(value) || 0), 0);
+  return Math.max(0, detailPanel.getBoundingClientRect().height - verticalFrame);
+}
+
+function detailAgentHeightBounds() {
+  const available = detailAgentAvailableHeight();
+  const availableMax = Math.max(0, available - DETAIL_AGENT_EDGE_GUTTER);
+  const max = Math.max(0, Math.min(DETAIL_AGENT_MAX_HEIGHT, availableMax || DETAIL_AGENT_MAX_HEIGHT));
+  const min = Math.min(DETAIL_AGENT_MIN_HEIGHT, max);
+  return { available, min, max };
+}
+
+function clampDetailAgentHeight(height, bounds = detailAgentHeightBounds()) {
+  const value = Number(height);
+  if (!Number.isFinite(value)) return Math.round(bounds.min);
+  return Math.round(Math.min(bounds.max, Math.max(bounds.min, value)));
+}
+
+function persistDetailAgentHeight() {
+  if (!state.detailChatPanelHeightCustom || !Number.isFinite(state.detailChatPanelHeightPx)) return;
+  try {
+    window.localStorage.setItem(
+      DETAIL_AGENT_HEIGHT_STORAGE_KEY,
+      String(Math.round(state.detailChatPanelHeightPx)),
+    );
+  } catch {
+    // Keep the current value in memory when browser storage is unavailable.
+  }
+}
+
+function syncDetailAgentPanelHeight() {
+  if (!detailChatBody) return;
+  loadDetailAgentHeightPreference();
+  if (!state.detailChatPanelOpen || !isDetailAgentDesktop() || state.detailChatPanelMaximized) {
+    detailChatBody.style?.removeProperty?.("height");
+    return;
+  }
+  const bounds = detailAgentHeightBounds();
+  const desired = state.detailChatPanelHeightCustom
+    ? state.detailChatPanelHeightPx
+    : bounds.available * DETAIL_AGENT_DEFAULT_HEIGHT_RATIO;
+  detailChatBody.style.height = `${clampDetailAgentHeight(desired, bounds)}px`;
+}
+
+let detailAgentResizeState = null;
+
+function startDetailAgentResize(event) {
+  if (!isDetailAgentDesktop() || !state.detailChatPanelOpen || state.detailChatPanelMaximized) return;
+  if (event.button !== undefined && event.button !== 0) return;
+  const currentHeight = detailChatBody?.getBoundingClientRect().height;
+  if (!detailChatBody || !Number.isFinite(currentHeight) || currentHeight <= 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  detailAgentResizeState = {
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    startHeight: currentHeight,
+    moved: false,
+  };
+  detailAgentResizeHandle?.setPointerCapture?.(event.pointerId);
+  document.body.classList.add("detail-agent-resizing");
+  window.addEventListener("pointermove", handleDetailAgentResize, { capture: true, passive: false });
+  window.addEventListener("pointerup", finishDetailAgentResize, true);
+  window.addEventListener("pointercancel", finishDetailAgentResize, true);
+}
+
+function handleDetailAgentResize(event) {
+  if (!detailAgentResizeState || event.pointerId !== detailAgentResizeState.pointerId) return;
+  event.preventDefault();
+  const bounds = detailAgentHeightBounds();
+  const nextHeight = clampDetailAgentHeight(
+    detailAgentResizeState.startHeight + detailAgentResizeState.startY - event.clientY,
+    bounds,
+  );
+  if (nextHeight !== Math.round(detailAgentResizeState.startHeight)) {
+    detailAgentResizeState.moved = true;
+    state.detailChatPanelHeightPx = nextHeight;
+    state.detailChatPanelHeightCustom = true;
+    detailChatBody.style.height = `${nextHeight}px`;
+  }
+}
+
+function finishDetailAgentResize(event) {
+  if (!detailAgentResizeState || event.pointerId !== detailAgentResizeState.pointerId) return;
+  const resizeState = detailAgentResizeState;
+  detailAgentResizeState = null;
+  detailAgentResizeHandle?.releasePointerCapture?.(event.pointerId);
+  document.body.classList.remove("detail-agent-resizing");
+  window.removeEventListener("pointermove", handleDetailAgentResize, true);
+  window.removeEventListener("pointerup", finishDetailAgentResize, true);
+  window.removeEventListener("pointercancel", finishDetailAgentResize, true);
+  if (resizeState.moved) persistDetailAgentHeight();
 }
 
 function renderDetailChatMeta(item, session) {
@@ -5359,19 +5474,6 @@ function renderDetailChatMeta(item, session) {
     contextBadge.textContent = `本机 CLI · ${session.executor_provider}`;
     detailChatMeta.appendChild(contextBadge);
   }
-}
-
-function renderDetailChatKeyPoints(item) {
-  if (!detailChatCapability) return;
-  const cached = item?.url ? state.detailCacheByUrl.get(item.url) : null;
-  const points = parseKeyPoints(cached?.ai?.key_points_zh).slice(0, 4);
-  if (!points.length) {
-    detailChatCapability.textContent = "";
-    detailChatCapability.classList.add("hidden");
-    return;
-  }
-  detailChatCapability.textContent = points.join(" · ");
-  detailChatCapability.classList.remove("hidden");
 }
 
 function appendSafeAgentText(container, value) {
@@ -5571,6 +5673,7 @@ function renderDetailChat(item) {
   const activeJob = activeDetailAgentJob();
   const maximized = !!state.detailChatPanelMaximized;
   detailChatBody.classList.toggle("is-maximized", maximized);
+  syncDetailAgentPanelHeight();
   if (detailAgentExpandBtn) {
     detailAgentExpandBtn.textContent = maximized ? "还原" : "放大";
     detailAgentExpandBtn.setAttribute("aria-label", maximized ? "还原 Agent 浮窗" : "放大 Agent 浮窗");
@@ -5578,7 +5681,6 @@ function renderDetailChat(item) {
   }
   detailAgentLauncher?.setAttribute("aria-expanded", "true");
   renderDetailChatMeta(item, session);
-  renderDetailChatKeyPoints(item);
   detailChatInput.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
   detailChatSendBtn.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
   if (detailAgentNewBtn) detailAgentNewBtn.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
@@ -7644,9 +7746,12 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   detailAgentLauncher?.setAttribute("aria-expanded", chatOpen ? "true" : "false");
   if (!chatReady) {
     detailChatBody.classList.remove("is-maximized");
+    detailChatBody.style?.removeProperty?.("height");
   }
   if (chatOpen) {
     renderDetailChat(item);
+  } else {
+    detailChatBody.style?.removeProperty?.("height");
   }
 
   const importantBtn = document.getElementById("detailImportantBtn");
@@ -11317,6 +11422,10 @@ if (detailAgentExpandBtn) {
   });
 }
 
+if (detailAgentResizeHandle) {
+  detailAgentResizeHandle.addEventListener("pointerdown", startDetailAgentResize);
+}
+
 if (detailChatBackBtn) {
   detailChatBackBtn.addEventListener("click", () => {
     closeDetailAgentPanel();
@@ -11830,6 +11939,7 @@ window.addEventListener("resize", () => {
   scheduleFeedControlsOverflowSync();
   scheduleDetailToolbarOverflowSync();
   refreshDetailHighlightAnnotationEditor();
+  syncDetailAgentPanelHeight();
   if ((feedKeyboardMode || feedKeyboardDetailFocusMode) && !isFeedKeyboardDesktopEnabled()) exitFeedKeyboardMode();
 });
 

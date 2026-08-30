@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.4.1</title>
+    <title>News Reader v2.1.4.2</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.4.1" />
+    <link rel="stylesheet" href="/static/style.css?v=2.1.4.2" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.4.1</span>
+          <span class="topbar-version">v2.1.4.2</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -225,6 +225,7 @@
         </div>
         <button id="detailAgentLauncher" class="detail-agent-launcher hidden" type="button" aria-controls="detailChatBody" aria-expanded="false" title="打开新闻研究 Agent">Agent</button>
         <section id="detailChatBody" class="detail-agent-panel hidden" aria-label="新闻研究 Agent">
+          <div id="detailAgentResizeHandle" class="detail-agent-resize-handle" role="separator" aria-orientation="horizontal" aria-label="拖拽调整 Agent 浮窗高度"></div>
           <div class="detail-agent-header">
             <div>
               <h3 class="detail-agent-title">新闻研究 Agent</h3>
@@ -236,7 +237,6 @@
               <button id="detailChatBackBtn" class="detail-retry-btn" type="button">收起</button>
             </div>
           </div>
-          <div id="detailChatCapability" class="detail-summary detail-chat-capability"></div>
           <div id="detailChatStatus" class="detail-status muted">可围绕这篇新闻提问或开展联网研究。</div>
           <div id="detailChatMessages" class="detail-chat-messages" aria-live="polite"></div>
           <div class="detail-chat-composer">
@@ -956,6 +956,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.4.1"></script>
+    <script src="/static/app.js?v=2.1.4.2"></script>
   </body>
 </html>

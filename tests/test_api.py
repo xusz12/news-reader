@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.4.1" in html
-    assert "/static/style.css?v=2.1.4.1" in html
-    assert "/static/app.js?v=2.1.4.1" in html
+    assert "News Reader v2.1.4.2" in html
+    assert "/static/style.css?v=2.1.4.2" in html
+    assert "/static/app.js?v=2.1.4.2" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -4445,10 +4445,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.4.1" in app_source
-    assert "News Reader v2.1.4.1" in index_source
-    assert "/static/style.css?v=2.1.4.1" in index_source
-    assert "/static/app.js?v=2.1.4.1" in index_source
+    assert "News Reader v2.1.4.2" in app_source
+    assert "News Reader v2.1.4.2" in index_source
+    assert "/static/style.css?v=2.1.4.2" in index_source
+    assert "/static/app.js?v=2.1.4.2" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -8907,10 +8907,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.4.1" in app_source
-    assert "News Reader v2.1.4.1" in index_source
-    assert "/static/style.css?v=2.1.4.1" in index_source
-    assert "/static/app.js?v=2.1.4.1" in index_source
+    assert "News Reader v2.1.4.2" in app_source
+    assert "News Reader v2.1.4.2" in index_source
+    assert "/static/style.css?v=2.1.4.2" in index_source
+    assert "/static/app.js?v=2.1.4.2" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10328,8 +10328,13 @@ def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
     assert "parseDetailAgentResponse(res, \"agent_job_failed\")" in app_source
     assert "detailAgentClearBtn" not in app_source
     assert 'id="detailAgentLauncher"' in index_source
+    assert 'id="detailAgentResizeHandle"' in index_source
     assert 'id="detailAgentExpandBtn"' in index_source
     assert 'id="detailChatBody"' in index_source
+    assert 'id="detailChatCapability"' not in index_source
+    assert "detailChatCapability" not in app_source
+    assert "renderDetailChatKeyPoints" not in app_source
+    assert "detail-chat-capability" not in style_source
     assert '清空本篇' not in index_source
     assert index_source.index('id="detailAgentLauncher"') < index_source.index('id="detailBody"')
     assert index_source.index('id="detailChatBody"') < index_source.index('id="detailBody"')
@@ -10343,10 +10348,29 @@ def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
     assert "flex-direction: column" in panel_rule
     assert "overflow: hidden" in panel_rule
     assert "position: absolute" in panel_rule
-    assert "height: min(58%, 560px)" in panel_rule
+    assert "height: min(66.6667%, 760px)" in panel_rule
+    assert "min-height: 240px" in panel_rule
+    assert "max-height: calc(100% - 24px)" in panel_rule
+    assert "background: var(--agent-panel-bg)" in panel_rule
+    assert "box-shadow: 0 18px 44px rgba(15, 23, 42, 0.32), 0 4px 12px rgba(15, 23, 42, 0.18)" in panel_rule
     assert ".detail-agent-panel.is-maximized" in style_source
     assert "height: min(58dvh, 520px)" in style_source
     assert ".detail-agent-launcher" in style_source
+    assert ".detail-agent-resize-handle" in style_source
+    assert "cursor: ns-resize" in style_source
+    assert "touch-action: none" in style_source
+    assert "DETAIL_AGENT_HEIGHT_STORAGE_KEY" in app_source
+    assert "DETAIL_AGENT_DEFAULT_HEIGHT_RATIO = 2 / 3" in app_source
+    assert "state.detailChatPanelHeightCustom" in app_source
+    assert "setItem(" in app_source
+    assert "state.detailChatPanelMaximized" in app_source
+    actions_rule = style_source[style_source.rindex(".detail-agent-actions {"):]
+    actions_rule = actions_rule[:actions_rule.index("}")]
+    assert "justify-content: flex-start" in actions_rule
+    assert "--agent-panel-bg: #f7fbff" in style_source
+    assert "--agent-panel-bg: #172033" in style_source
+    assert "html[data-theme=\"eink\"] .detail-agent-panel" in style_source
+    assert "background-color: #ffffff" in style_source
     agent_rules = style_source[style_source.index(".detail-agent-panel {"):style_source.index(".detail-chat-composer {")]
     assert "max-height: 230px" not in agent_rules
     assert "max-height: 180px" not in agent_rules
@@ -10357,6 +10381,144 @@ def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
     messages_rule = messages_rule[:messages_rule.index("}")]
     assert "overflow-y: auto" in style_source[style_source.index(".detail-chat-messages {"):style_source.index(".detail-chat-message {")]
     assert "flex: 1 1 auto" in messages_rule
+
+
+def test_agent_frontend_height_defaults_persistence_resize_and_mobile_contract():
+    """Desktop height is 2/3 by default, while drag persistence and mobile rules stay isolated."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) throw new Error("front-end bootstrap marker missing");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by height regression test");
+source = source.replace("let state = {", "var state = {");
+
+const noop = () => {};
+const listeners = new Map();
+const storage = new Map();
+const classList = { add: noop, remove: noop, toggle: noop, contains: () => false };
+const makeElement = (id) => {
+  const element = {
+    id,
+    value: "",
+    disabled: false,
+    hidden: false,
+    className: "",
+    style: {
+      height: "",
+      removeProperty(name) { this[name] = ""; },
+    },
+    classList,
+    dataset: {},
+    children: [],
+    options: [],
+    getBoundingClientRect() {
+      const height = Number.parseFloat(this.style.height);
+      return { height: Number.isFinite(height) && height > 0 ? height : 387 };
+    },
+    setPointerCapture: noop,
+    releasePointerCapture: noop,
+    appendChild: noop,
+    removeChild: noop,
+    replaceChildren: noop,
+    setAttribute: noop,
+    removeAttribute: noop,
+    addEventListener: noop,
+    removeEventListener: noop,
+    focus: noop,
+    blur: noop,
+    click: noop,
+    querySelector: () => element,
+    querySelectorAll: () => [],
+  };
+  return element;
+};
+const elements = new Map();
+const elementFor = (id) => {
+  if (!elements.has(id)) elements.set(id, makeElement(id));
+  return elements.get(id);
+};
+const detailPanel = elementFor("detailPanel");
+detailPanel.getBoundingClientRect = () => ({ height: 600 });
+const detailChatBody = elementFor("detailChatBody");
+const detailAgentResizeHandle = elementFor("detailAgentResizeHandle");
+const document = {
+  getElementById: elementFor,
+  querySelector: () => elementFor("querySelector"),
+  querySelectorAll: () => [],
+  createElement: () => makeElement("created"),
+  addEventListener: noop,
+  body: elementFor("body"),
+  documentElement: elementFor("documentElement"),
+};
+const window = {
+  addEventListener(name, fn) { listeners.set(name, fn); },
+  removeEventListener(name, fn) { if (listeners.get(name) === fn) listeners.delete(name); },
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  getComputedStyle: () => ({ paddingTop: "10px", paddingBottom: "10px", borderTopWidth: "1px", borderBottomWidth: "1px" }),
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  confirm: () => false,
+  innerWidth: 1600,
+  localStorage: {
+    getItem: (key) => storage.has(key) ? storage.get(key) : null,
+    setItem: (key, value) => storage.set(key, String(value)),
+  },
+};
+const localStorage = window.localStorage;
+class IntersectionObserver { constructor() {} observe() {} disconnect() {} }
+const context = {
+  console, document, window, localStorage, IntersectionObserver, fetch: noop,
+  URLSearchParams, Date, Map, Set, JSON, encodeURIComponent, Node: function Node() {},
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+const item = { id: "news-1", url: "https://example.com/news-1" };
+context.state.selectedId = item.id;
+context.state.itemsById = new Map([[item.id, item]]);
+context.state.detailChatPanelOpen = true;
+context.state.detailChatPanelMaximized = false;
+context.state.detailChatPanelHeightPx = null;
+context.state.detailChatPanelHeightCustom = false;
+context.syncDetailAgentPanelHeight();
+assert(detailChatBody.style.height === "385px", `default height=${detailChatBody.style.height}`);
+
+storage.set("news_reader_detail_agent_height", "420");
+context.state.detailChatPanelHeightPx = null;
+context.state.detailChatPanelHeightCustom = false;
+context.syncDetailAgentPanelHeight();
+assert(detailChatBody.style.height === "420px", `stored height=${detailChatBody.style.height}`);
+
+context.startDetailAgentResize({ button: 0, pointerId: 7, clientY: 100, preventDefault: noop, stopPropagation: noop });
+context.handleDetailAgentResize({ pointerId: 7, clientY: 50, preventDefault: noop });
+context.finishDetailAgentResize({ pointerId: 7 });
+assert(detailChatBody.style.height === "470px", `drag height=${detailChatBody.style.height}`);
+assert(storage.get("news_reader_detail_agent_height") === "470", `persisted height=${storage.get("news_reader_detail_agent_height")}`);
+
+context.startDetailAgentResize({ button: 0, pointerId: 8, clientY: 100, preventDefault: noop, stopPropagation: noop });
+context.handleDetailAgentResize({ pointerId: 8, clientY: 1000, preventDefault: noop });
+context.finishDetailAgentResize({ pointerId: 8 });
+assert(detailChatBody.style.height === "240px", `minimum height=${detailChatBody.style.height}`);
+
+context.state.detailChatPanelMaximized = true;
+context.syncDetailAgentPanelHeight();
+assert(detailChatBody.style.height === "", "maximize did not remove inline height");
+context.state.detailChatPanelMaximized = false;
+context.syncDetailAgentPanelHeight();
+assert(detailChatBody.style.height === "240px", `restore height=${detailChatBody.style.height}`);
+
+window.innerWidth = 390;
+context.syncDetailAgentPanelHeight();
+assert(detailChatBody.style.height === "", "mobile sync unexpectedly kept inline height");
+context.startDetailAgentResize({ button: 0, pointerId: 9, clientY: 100, preventDefault: noop, stopPropagation: noop });
+assert(detailChatBody.style.height === "", "mobile resize unexpectedly started");
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
 
 
 def test_agent_frontend_diagnostics_preserve_actual_http_status():
