@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.4.0</title>
+    <title>News Reader v2.1.4.1</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.4.0" />
+    <link rel="stylesheet" href="/static/style.css?v=2.1.4.1" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.4.0</span>
+          <span class="topbar-version">v2.1.4.1</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -863,23 +863,9 @@
                 </div>
               </section>
               <section class="settings-form-group" aria-labelledby="settingsChatGroupTitle">
-                <h4 id="settingsChatGroupTitle" class="settings-form-group-title">Chat</h4>
+                <h4 id="settingsChatGroupTitle" class="settings-form-group-title">Chat 与新闻研究 Agent</h4>
                 <div class="settings-form-grid">
                   <div class="settings-field">
-                    <label for="settingsChatProviderSelect">Chat provider</label>
-                    <select id="settingsChatProviderSelect" class="pref-select">
-                      <option value="codex">Codex</option>
-                      <option value="pi">Pi</option>
-                    </select>
-                    <div id="settingsChatProviderCurrent" class="settings-field-current"></div>
-                  </div>
-                  <div class="settings-field">
-                    <label for="settingsCodexChatModelSelect">Codex chat 默认模型</label>
-                    <select id="settingsCodexChatModelSelect" class="pref-select"></select>
-                    <input id="settingsCodexChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Codex 模型名" />
-                    <div id="settingsCodexChatModelCurrent" class="settings-field-current"></div>
-                  </div>
-                  <div class="settings-field" id="settingsPiChatProviderField">
                     <label for="settingsPiChatProviderSelect">Pi chat provider</label>
                     <select id="settingsPiChatProviderSelect" class="pref-select">
                       <option value="ollama">ollama</option>
@@ -887,7 +873,7 @@
                     <input id="settingsPiChatProviderCustom" class="settings-input hidden" type="text" maxlength="40" placeholder="输入自定义 pi provider" />
                     <div class="settings-field-help">默认 ollama，可自定义 provider，如 deepseek</div>
                   </div>
-                  <div class="settings-field" id="settingsPiChatModelField">
+                  <div class="settings-field">
                     <label for="settingsPiChatModelSelect">Pi chat 默认模型</label>
                     <select id="settingsPiChatModelSelect" class="pref-select"></select>
                     <input id="settingsPiChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Pi 模型名" />
@@ -913,7 +899,7 @@
                   </div>
                 </div>
               </section>
-              <div class="settings-field-note" id="settingsChatArchiveNote">归档摘要跟随当前 Chat provider（Codex 或 Pi）。</div>
+              <div class="settings-field-note" id="settingsChatArchiveNote">Chat、新闻研究 Agent 和归档摘要均使用 Pi；后台任务继承本机 Pi CLI 的实际配置与权限。</div>
               <div class="settings-actions">
                 <button id="settingsSaveBtn" class="detail-retry-btn" type="button">保存设置</button>
               </div>
@@ -970,6 +956,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.4.0"></script>
+    <script src="/static/app.js?v=2.1.4.1"></script>
   </body>
 </html>

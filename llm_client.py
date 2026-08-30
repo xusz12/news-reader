@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import tempfile
-from pathlib import Path
 from typing import Any
 
 from secret_store import SecretStoreError, read_secret
@@ -808,114 +806,6 @@ def generate_market_tag_summary(
     }
 
 
-def generate_codex_fallback_translation(
-    *,
-    title: str,
-    source: str,
-    content: str,
-    model: str | None = None,
-    timeout: int = 90,
-    max_chars: int = 12000,
-) -> dict[str, Any]:
-    body = (content or "").strip()
-    if not body:
-        raise LLMClientError("CODEX_FALLBACK_EMPTY_CONTENT")
-
-    truncated = False
-    if len(body) > max_chars:
-        body = body[:max_chars]
-        truncated = True
-
-    prompt = (
-        "你是专业新闻编辑与翻译。请基于英文新闻正文返回一个 JSON 对象，不要输出 JSON 以外的任何内容。\n"
-        "JSON 字段要求：\n"
-        '- "key_points_zh": 3 到 5 条中文要点数组，每条一句话\n'
-        '- "conclusion_zh": 一句中文结论\n'
-        '- "body_zh": 完整中文翻译，保持段落结构，不遗漏关键信息\n'
-        f"来源：{source or '未知'}\n"
-        f"标题：{title or '无标题'}\n\n"
-        f"{body}"
-    )
-
-    command = ["codex", "exec", prompt, "--skip-git-repo-check"]
-    model_name = (model or "").strip()
-    if model_name:
-        command.extend(["--model", model_name])
-
-    with tempfile.NamedTemporaryFile(prefix="news-reader-codex-fallback-", suffix=".txt", delete=False) as handle:
-        output_path = handle.name
-    command.extend(["--output-last-message", output_path])
-
-    try:
-        proc = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout + 15,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise LLMClientError("CODEX_FALLBACK_TIMEOUT") from exc
-    except Exception as exc:
-        raise LLMClientError(f"CODEX_FALLBACK_FAILED: {exc}") from exc
-
-    stdout = (proc.stdout or "").strip()
-    stderr = (proc.stderr or "").strip()
-    try:
-        raw_output = Path(output_path).read_text(encoding="utf-8").strip()
-    except Exception:
-        raw_output = ""
-    finally:
-        Path(output_path).unlink(missing_ok=True)
-
-    if proc.returncode != 0:
-        detail = stderr or stdout or f"exit={proc.returncode}"
-        raise LLMClientError(f"CODEX_FALLBACK_FAILED: {detail[:300]}")
-
-    raw_payload = {
-        "provider": "codex-fallback-structured",
-        "truncated": truncated,
-        "stdout": stdout[:4000],
-        "stderr": stderr[:1000],
-    }
-
-    try:
-        parsed = json.loads(raw_output)
-        normalized = _validate_structured_translation_payload(parsed)
-        return {
-            "model": model_name or "codex-fallback",
-            **normalized,
-            "raw_json": json.dumps(
-                {
-                    **raw_payload,
-                    "structured_success": True,
-                    "parsed": parsed,
-                },
-                ensure_ascii=False,
-            ),
-        }
-    except Exception as exc:
-        body_zh = raw_output.strip()
-        if not body_zh or not _contains_cjk(body_zh):
-            detail = str(exc) if isinstance(exc, LLMClientError) else "CODEX_FALLBACK_INVALID_OUTPUT"
-            raise LLMClientError(detail)
-        return {
-            "model": model_name or "codex-fallback",
-            "key_points_zh": [],
-            "conclusion_zh": "",
-            "body_zh": body_zh,
-            "raw_json": json.dumps(
-                {
-                    **raw_payload,
-                    "provider": "codex-fallback-body-only",
-                    "structured_success": False,
-                    "structured_error": str(exc),
-                },
-                ensure_ascii=False,
-            ),
-        }
-
-
 def _pi_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     # Slock 会注入指向其 runtime-pkg 的 PI_PACKAGE_DIR，该目录缺少 pi 主题文件，
@@ -1015,7 +905,7 @@ def generate_pi_fallback_translation(
 ) -> dict[str, Any]:
     """DeepSeek 翻译失败后的 Pi 兜底：复用结构化翻译 schema/prompt，调 pi 单次无会话。
 
-    复用现有"结构化成功 / body-only 降级 / 完全失败"分层；Pi 失败不隐式回退 Codex。
+    复用现有"结构化成功 / body-only 降级 / 完全失败"分层。
     """
     body = (content or "").strip()
     if not body:

@@ -4,12 +4,17 @@
 
 ## What's Changed
 
+### 2026-08-29 — v2.1.4.1 fix: 统一使用本机 Pi CLI
+- 新闻 Chat、归档和研究 Agent 统一使用本机完整 Pi CLI 配置、rules、extensions、tools、skills 与权限；后台执行器不额外承诺严格只读，实际能力以本机 CLI 配置为准。
+- 研究 Agent 为每篇新闻保留独立连续会话；首次建立会话时带入必要的可见历史，后续追问只续接真实会话，不重复拼接历史。
+- 保留新闻研究 UI、后台任务、SSE、停止/重试、新会话和 TTL 语义；删除另一套执行器及其专用设置、会话和生成兜底。
+
 ### 2026-08-27 — v2.1.4.0 feat: 正文内异步新闻研究 Agent
 - 新闻详情新增右栏双态悬浮研究 Agent：收起时仅显示右下角按钮，默认打开半栏浮窗，可放大至整栏；浮窗覆盖正文但不重排正文，窗外点击或 Escape 可收起，窄屏改为避开底部导航的底部浮层。正文滚动、选区高亮、阅读状态和 Agent 任务互不阻塞；切换新闻、关闭详情、刷新页面或 SSE 断线不会取消后台任务。
 - 每篇新闻建立独立短期会话，首次固定标题、来源、发布时间、URL、完整英文原文快照与 hash；划线“提问”只把当前选文和来源面预填为引用，不会自动发送或串到其它新闻。
 - 提问 API 使用 `202 + job_id` 异步任务、受限 worker、可重连 SSE、状态持久化、停止/重试和服务重启 `interrupted` 标记；停止保留已生成内容。
 - 会话数据写入独立 `agent_sessions.sqlite3`，默认 TTL 72 小时，可在设置中选择 24/72 小时并清空全部；面板以“新会话”作为本篇唯一重新开始动作，物理删除旧会话、消息、任务、错误、快照与执行器临时文件后创建新会话。过期清理同样删除这些临时数据，运行中任务受保护。
-- Pi 研究执行器使用独立 `--session-dir` 与 `--tools web_search,web_fetch`，Codex 使用 `--ephemeral`、只读沙箱和忽略用户配置；不保存密钥，不允许 bash/edit/write 或外部写操作。回答中的来源仅安全渲染 HTTP(S) 链接，明确区分原文、外部事实与推断。
+- 研究 Agent 通过独立会话目录保存每篇新闻的短期会话；执行时沿用本机 Pi CLI 的完整能力，不另设工具白名单或权限替换。回答中的来源仅安全渲染 HTTP(S) 链接，明确区分原文、外部事实与推断。
 - 同步版本号 v2.1.4.0（title、顶栏、CSS/JS cache-bust、移动端版本、README）。
 
 ### 2026-08-26 — v2.1.3.0 feat: 墨水屏外观与触控非颜色状态（一期）
@@ -21,7 +26,7 @@
 ### 2026-08-24 — v2.1.2.6 fix: Pi Chat 真实模型目录与 provider 联动
 - 设置页 Pi Chat 模型下拉改为当前机器、当前登录态的真实 CLI 目录：复用单次 `pi --list-models` 调用完整解析 provider 与 model 两列，后端按 provider 分组返回真实候选；读取失败或空结果时才回退默认 `ollama / minimax-m3:cloud`。
 - 切换 Pi provider 时即时重建对应模型下拉：当前/已保存模型属于该 provider 则保留，否则自动选中该 provider 首个真实候选；已保存但目录缺失的 provider/model 只追加到其保存 provider，不污染其它分组；自定义输入始终可用。
-- Codex 的 `codex debug models` 动态目录、翻译模型与实际 Chat 调用链不变；不读取 `ollama list`，不遍历硬盘。同步版本号 v2.1.2.6（title、顶栏、CSS/JS cache-bust、移动端更多面板、README）。
+- 翻译模型与 Pi Chat 调用链保持独立；不读取 `ollama list`，不遍历硬盘。同步版本号 v2.1.2.6（title、顶栏、CSS/JS cache-bust、移动端更多面板、README）。
 
 ### 2026-08-20 — v2.1.2.5 fix: 关闭翻译生成链路推理
 - 普通新闻的中文要点、末段总结与正文翻译，以及 Twitter/X 正文翻译，继续使用 DeepSeek `deepseek-v4-flash`；真实请求保持官方 `thinking.type=disabled`，重试入口复用同一发送链路。
@@ -232,41 +237,39 @@
 - **影响**：涉及 `schema.sql` / `app.py` 与前端，拉取后需重启 Flask 并刷新页面；首次启动自动建 `standalone_ideas` 表，不需要手动迁移。
 
 
-### 2026-07-10 — v2.0.2.11 fix: 翻译兜底跟随 Chat provider + Pi provider 自定义输入与记忆
+### 2026-07-10 — v2.0.2.11 fix: Pi Chat provider 自定义输入与翻译兜底
 - **文件**
   - *llm_client.py（+）*、*app.py（+）*、*static/app.js（+）*、*static/index.html（+）*、*tests/test_api.py（+）*、*README.md（+）*
-    - 翻译兜底跟随当前 Chat provider：`process_pending_ai_once()` 里 DeepSeek 翻译失败后，按 `current_chat_provider()` 分发；Codex 仍走 `generate_codex_fallback_translation()`，Pi 走新增 `generate_pi_fallback_translation()`（复用结构化翻译 schema/prompt，`pi -p --mode json --no-session`，复用"结构化成功 / body-only 降级 / 完全失败"分层，文案区分 `pi-fallback-structured` / `pi-fallback-body-only`）；Pi 失败不隐式回退 Codex
-    - `_pi_subprocess_env()` / `_parse_pi_stdout()` 从 app.py 移到 llm_client.py（与 codex fallback 同模块），app.py 改为导入复用；`run_pi_chat` / `run_pi_chat_archive` 不变
+    - DeepSeek 翻译失败后统一使用 `generate_pi_fallback_translation()` 兜底（复用结构化翻译 schema/prompt、`pi -p --mode json --no-session` 以及“结构化成功 / body-only 降级 / 完全失败”分层）；Pi 兜底失败时保留明确失败状态
+    - `_pi_subprocess_env()` / `_parse_pi_stdout()` 从 app.py 移到 llm_client.py；app.py 改为导入复用；`run_pi_chat` / `run_pi_chat_archive` 不变
     - 前端修复 Pi provider 自定义输入：change handler 由不存在的 `renderPiChatModelVisibility()` 改为 `syncModelCustomVisibility(...)`，选"自定义输入..."后正确展开输入框；设置页文案改为"默认 ollama，可自定义 provider，如 deepseek"
     - Pi provider 下拉改为后端检测：`pi_chat_settings_snapshot` 调 `pi --list-models` 解析第一列 provider 去重（如 `deepseek`/`ollama`）返回 `provider_options`；失败/空回退默认 `ollama`，已保存 provider 不在检测列表时追加到下拉并选中，避免已保存配置消失；保留"自定义输入..."入口；Pi provider 变更（如 ollama→deepseek）也会清空当前临时 chat session
     - 自定义 model/provider 在下拉框中出现并被记住：`populateModelSelect()` 已保存但不在当前目录内的值追加为下拉选项并选中（恢复 savedOption 行为），自定义 model 体验不回退
-    - 测试：Pi 翻译兜底走 Pi 不走 Codex、Pi 兜底失败不隐式回 Codex、`generate_pi_fallback_translation` 结构化/body-only/失败分层、`parse_pi_providers` 解析、provider 检测/失败回退/已保存 provider 保留、Codex 兜底不回归
-- **影响**：涉及 `app.py` / `llm_client.py` 与前端，拉取后需重启 Flask 并刷新页面；provider=Pi 时翻译兜底也走 Pi（需 pi CLI + 对应 provider/model 可用）。
+    - 测试：翻译兜底统一走 Pi、Pi 兜底失败保持错误、`generate_pi_fallback_translation` 结构化/body-only/失败分层、`parse_pi_providers` 解析、provider 检测/失败回退/已保存 provider 保留
+- **影响**：涉及 `app.py` / `llm_client.py` 与前端，拉取后需重启 Flask 并刷新页面；翻译兜底需要本地 Pi CLI 及对应 provider/model 可用。
 
-### 2026-07-10 — v2.0.2.10 improve: 归档摘要跟随当前 Chat provider
+### 2026-07-10 — v2.0.2.10 improve: 归档摘要统一使用 Pi
 - **文件**
   - *app.py（+）*、*static/app.js（+）*、*static/index.html（+）*、*tests/test_api.py（+）*、*README.md（+）*
-    - `/api/news/<id>/chat/archive` 按 `current_chat_provider()` 分发：Codex 继续走 `run_codex_chat_archive`，Pi 新增 `run_pi_chat_archive()`
-    - `run_pi_chat_archive()` 复用 `build_chat_archive_prompt()`，单次调用 `pi -p --mode json --no-session --provider <pi_provider> --model <pi_model>`，不复用原 chat session、不自动 fallback Codex；复用 `_parse_pi_stdout()` 与 `_pi_subprocess_env()`（清理 `PI_PACKAGE_DIR`）
-    - 错误码保持中性：`provider_timeout` / `provider_failed` / `provider_busy` / `empty_archive_summary`（Pi `pi_timeout` / `pi_empty_archive` 映射到中性码）；前端归档错误文案按当前 provider label 显示（Pi/Codex 归档超时·失败·正忙），非 provider 类错误保持中性
+    - `/api/news/<id>/chat/archive` 统一分发至 `run_pi_chat_archive()`
+    - `run_pi_chat_archive()` 复用 `build_chat_archive_prompt()`，单次调用 `pi -p --mode json --no-session --provider <pi_provider> --model <pi_model>`，不复用原 chat session；复用 `_parse_pi_stdout()` 与 `_pi_subprocess_env()`（清理 `PI_PACKAGE_DIR`）
+    - 错误码保持中性：`provider_timeout` / `provider_failed` / `provider_busy` / `empty_archive_summary`（Pi 的内部超时/空结果映射到中性码），非 provider 类错误保持中性
     - 归档成功响应返回实际 `provider` 与 `model`
-    - 前端归档按钮可用性改回跟随当前 Chat provider（移除 v2.0.2.9 的"归档始终走 Codex"绑定）；设置页与 README 同步为"归档跟随当前 Chat provider"
-    - 测试：反向改掉 v2.0.2.9 的"provider=Pi 仍走 Codex"用例为"provider=Pi 走 Pi"；新增 Pi archive timeout/empty 映射、`run_pi_chat_archive` 成功（含 `--no-session` 与 `PI_PACKAGE_DIR` 清理断言）与空摘要用例；Codex archive 不回归
-- **影响**：涉及 `app.py` 与前端，拉取后需重启 Flask 并刷新页面；provider=Pi 时归档也会走 Pi（需 pi CLI + ollama/minimax-m3:cloud 可用）。
+    - 前端归档按钮与设置页统一说明归档使用 Pi
+    - 测试：覆盖 Pi archive timeout/empty 映射、`run_pi_chat_archive` 成功（含 `--no-session` 与 `PI_PACKAGE_DIR` 清理断言）与空摘要用例
+- **影响**：涉及 `app.py` 与前端，拉取后需重启 Flask 并刷新页面；归档需要 pi CLI 与配置的 provider/model 可用。
 
-### 2026-07-09 — v2.0.2.9 improve: Chat 新增可选 Pi provider（基于 `pi` CLI + ollama）
+### 2026-07-09 — v2.0.2.9 improve: Chat 切换至本机 Pi CLI
 - **文件**
   - *settings.py（+）*、*app.py（+）*、*static/index.html（+）*、*static/app.js（+）*、*tests/test_api.py（+）*、*README.md（+）*
-    - 新增 `llm.chat.provider` 设置（`codex` / `pi`，默认 `codex`），兼容旧配置，未指定时保持 Codex 不变
-    - 新增 `llm.pi_chat` 设置：provider（当前仅 `ollama`）与 model，默认模型为探针验证通过的 `minimax-m3:cloud`
-    - `/api/settings` 返回 `llm.chat` / `llm.pi_chat`；`/api/runtime-settings` 返回 chat provider catalog（含 Pi CLI 可用性检测）
+    - 新增 `llm.pi_chat` 设置：provider 与 model，默认 provider 为 `ollama`、模型为 `minimax-m3:cloud`
+    - `/api/settings` 只返回 `llm.translation` / `llm.pi_chat`；运行状态只展示 DeepSeek 与 Pi 所需信息
     - 后端新增 `run_pi_chat()`：调用 `pi -p --mode json --provider ollama --model <model>`，JSON 流式解析 session id 与回答；清理 `PI_PACKAGE_DIR` 避免 Slock 注入导致 pi 启动崩溃
-    - `/api/news/<id>/chat` 按当前 provider 分发至 `run_codex_chat` 或 `run_pi_chat`，错误码统一映射（timeout / session_invalid / empty_answer / provider_failed 等）
-    - 前端设置页新增 Chat provider 下拉、Pi provider/model 下拉与自定义输入；切换 provider 时即时显示/隐藏对应字段
-    - 前端 chat 详情页读取当前 provider 与 model，发送/归档时应用；provider/model 切换后清空当前临时对话并提示
-    - 归档摘要首版仍固定走 Codex，与 chat provider 选择无关（已在设置页与 README 明确说明）
-    - 补齐回归测试：legacy chat 字段归一化、Pi stdout 解析、Pi 子进程调用环境、`run_pi_chat`、chat endpoint provider 分发与 timeout 错误映射
-- **影响**：涉及 `app.py` 与前端，拉取后需重启 Flask 并刷新页面；使用 Pi 前需本地安装 `pi` CLI 并配置 ollama。
+    - `/api/news/<id>/chat` 统一分发至 `run_pi_chat()`，错误码统一映射（timeout / session_invalid / empty_answer / provider_failed 等）
+    - 前端设置页只保留 Pi provider/model 与自定义输入；切换 Pi 配置后清空当前临时对话并提示
+    - 归档摘要同样使用 Pi
+    - 补齐回归测试：Pi stdout 解析、Pi 子进程调用环境、`run_pi_chat`、Chat endpoint 与 timeout 错误映射
+- **影响**：涉及 `app.py` 与前端，拉取后需重启 Flask 并刷新页面；使用 Chat 前需本地安装 `pi` CLI 并配置 provider/model。
 
 ### 2026-07-08 — v2.0.2.8 fix: DeepSeek 默认模型从 `deepseek-chat` 迁移到 `deepseek-v4-flash`
 - **文件**
@@ -459,17 +462,17 @@
     - 顶栏版本号、页面 `<title>` 与静态资源版本参数同步更新到 `v1.9.9.3`
 - **影响**：news-reader 现在可以优先消费 newsflow 的结构化 sidecar JSON，减少对 Markdown 格式演化的耦合；同时保留现有 md fallback，回滚成本低，不影响历史 DailyNews 工作流。
 
-### 2026-06-28 — v1.9.9.2 feat: Chat 搜索增强与超时调整
+### 2026-06-28 — v1.9.9.2 feat: Chat 研究提示与超时调整
 - **文件**
   - *app.py（+）*、*tests/test_api.py（+）*
-    - `build_codex_chat_prompt()` 改为“研究助手”口径：新闻正文/摘要继续作为提问场景上下文，但不再暗示答案只来自文内
-    - prompt 明确区分两类问题：问原文内容/作者观点优先用新闻上下文；问背景、最新进展、实时数据或文外细节时主动搜索补充，并在回答中区分“新闻上下文”与“搜索补充信息”
-    - `run_codex_chat()` 默认 timeout 从 `90s` 提到 `180s`，为搜索型问答留出更合理的执行时间
+    - Chat prompt 改为“研究助手”口径：新闻正文/摘要继续作为提问场景上下文，但不再暗示答案只来自文内
+    - prompt 明确区分两类问题：问原文内容/作者观点优先用新闻上下文；问背景、最新进展、实时数据或文外细节时补充外部资料，并在回答中区分“新闻上下文”与“外部补充信息”
+    - Chat 默认 timeout 从 `90s` 提到 `180s`，为研究型问答留出更合理的执行时间
     - 测试同步覆盖新的 prompt 搜索规则与默认 timeout
   - *static/app.js（+）*
     - chatPage 空态提示、placeholder 与发送中状态文案改为搜索增强口径
     - 发送中状态改为 `正在生成回答，可能会搜索资料...`，降低长等待时的误判
-- **影响**：新闻 Chat 现在默认把新闻当作提问背景，而不是唯一答案来源；涉及文外知识或最新信息的问题，会按 prompt 口径主动搜索补全，整体更贴近“研究助手”场景。
+- **影响**：新闻 Chat 现在默认把新闻当作提问背景，而不是唯一答案来源；涉及文外知识或最新信息的问题，会按 prompt 口径补充资料，整体更贴近“研究助手”场景。
 
 ### 2026-06-27 — v1.9.9.1 feat: Twitter 恢复稍后阅读与详情抓取
 - **文件**
@@ -658,8 +661,8 @@
 - **文件**
   - *app.py（+）*、*tests/test_api.py（+）*
     - 新增 `POST /api/news/:id/chat/archive`，把当前 chatPage 可见对话压缩为不超过 100 字的中文归档结论，并追加写入 `article_notes`
-    - 归档仅复用现有新闻想法表，不保存完整 transcript、不新增 schema；无 assistant 回答、Codex 失败、摘要无效或追加后超 5000 字时都不会写入
-    - 补覆盖：首次归档写入、已有想法时追加、无 assistant 拒绝、超长拒绝且旧想法不变、Codex 失败不落库
+    - 归档仅复用现有新闻想法表，不保存完整 transcript、不新增 schema；无 assistant 回答、执行失败、摘要无效或追加后超 5000 字时都不会写入
+    - 补覆盖：首次归档写入、已有想法时追加、无 assistant 拒绝、超长拒绝且旧想法不变、执行失败不落库
   - *static/index.html（+）*、*static/app.js（+）*
     - chatPage 在发送按钮旁新增 `归档` 按钮，仅在已有 assistant 回复且当前未发送时可用
     - 归档成功后同步更新右栏“我的想法”、新闻 row 的想法状态与 `note_preview`
@@ -763,62 +766,62 @@
     - chatPage 移除 `归档（预留）` 与大段能力说明，标题下改为紧凑 `来源 + ● model` 状态展示
     - chatPage 复用正文已有 `key_points_zh`，在标题下以紧凑单行要点显示；无要点时自动隐藏，不再占空白
   - *static/app.js（+）*
-    - fallback 来源判断改为优先读取 `ai.raw_json.provider` 前缀 `codex-fallback*`，兼容 structured fallback 使用真实 Codex model 的场景
-    - DeepSeek 失败且 Codex body-only fallback 时显示“已由 GPT 完成翻译；结构化 fallback 失败，仅保留正文翻译”
-    - DeepSeek 与 Codex fallback 都失败时，正文状态明确显示“DeepSeek 失败，Codex fallback 也失败”
-- **影响**：设置页和 chatPage 的工具信息更紧凑；翻译链路一旦走 fallback，用户能更明确地区分 DeepSeek 主链路成功、GPT 结构化 fallback 成功和 body-only / 全失败场景。
+    - fallback 来源判断改为读取 `ai.raw_json.provider`，区分 Pi 结构化结果与仅正文结果
+    - DeepSeek 失败且 Pi body-only fallback 时显示“已由 Pi 完成翻译；结构化 fallback 失败，仅保留正文翻译”
+    - DeepSeek 与 Pi fallback 都失败时，正文状态明确显示“DeepSeek 失败，Pi fallback 也失败”
+- **影响**：设置页和 chatPage 的工具信息更紧凑；翻译链路一旦走 fallback，用户能更明确地区分 DeepSeek 主链路成功、Pi 结构化 fallback 成功和 body-only / 全失败场景。
 
-### 2026-06-12 — fix: 修复 v1.9.6.3 设置页模型管理显示
+### 2026-06-12 — fix: 修复 v1.9.6.3 设置页模型显示
 - **文件**
   - *app.py（+）*、*static/app.js（+）*
-    - Codex 模型目录改为直接使用 `codex debug models` 的原始 `name/slug` 作为下拉 label/value，不再做 `GPT/gpt` 美化或拼描述
+    - Pi 模型目录直接使用本机 CLI 返回的原始名称作为下拉 label/value，不再做名称美化或拼描述
     - 设置页模型下拉在保存后会保持当前已保存值；即使目录失败或当前值不在候选中，也会把已保存 model 回填到下拉并显示为当前使用
   - *tests/test_api.py（+）*
-    - 更新 Codex 模型目录断言，覆盖 label/value 保持源 name、不拼描述
-- **影响**：模型管理在保存后会立即显示可信的当前 model；Codex chat 模型下拉展示与 `codex debug models` 源返回保持一致。
+    - 更新模型目录断言，覆盖 label/value 保持源名称、不拼描述
+- **影响**：模型管理在保存后会立即显示可信的当前 model；下拉展示与本机 CLI 源返回保持一致。
 
 ### 2026-06-12 — improve: 重构 v1.9.6.2 设置页服务管理与模型管理
 - **文件**
   - *app.py（+）*
-    - `/api/settings` 新增 DeepSeek / Codex exec 轻量服务状态与模型目录返回
+    - `/api/settings` 新增 DeepSeek / Pi 轻量服务状态与模型目录返回
     - DeepSeek 模型优先读取官方 `GET /models`，失败自动 fallback 到默认候选，并保留已保存模型展示
-    - Codex 模型改为解析本机 `codex debug models`，仅向前端暴露安全字段；同时补充 CLI / `codex exec` / models 可读状态
+    - Pi 模型改为解析本机 CLI 返回的目录，仅向前端暴露安全字段；同时补充 CLI 与 models 可读状态
   - *static/index.html（+）*、*static/app.js（+）*、*static/style.css（+）*
     - 设置页文案改为“服务管理 / 模型管理”
-    - DeepSeek / Codex 模型配置改为“下拉优先 + 自定义输入兜底”
-    - 服务管理区展示 DeepSeek key、`/models` 可访问性、Codex CLI / exec / models 状态与 fallback 摘要
+    - DeepSeek / Pi 模型配置改为“下拉优先 + 自定义输入兜底”
+    - 服务管理区展示 DeepSeek key、`/models` 可访问性、Pi CLI / models 状态与 fallback 摘要
   - *tests/test_api.py（+）*
-    - 覆盖 `/api/settings` 新字段、DeepSeek models 成功/失败 fallback、Codex models 解析成功/失败 fallback，以及 settings 响应不泄露 key
-- **影响**：设置页现在能直接看到 DeepSeek 与 Codex exec 的轻量健康状态，并优先使用真实模型目录配置默认模型；即便目录读取失败，已保存模型仍可显示和继续保存。
+    - 覆盖 `/api/settings` 新字段、DeepSeek models 成功/失败 fallback、Pi models 解析成功/失败 fallback，以及 settings 响应不泄露 key
+- **影响**：设置页现在能直接看到 DeepSeek 与 Pi 的轻量健康状态，并优先使用真实模型目录配置默认模型；即便目录读取失败，已保存模型仍可显示和继续保存。
 
-### 2026-06-12 — feat: 新增 v1.9.6 codex exec chatPage MVP
+### 2026-06-12 — feat: 新增 v1.9.6 Pi chatPage MVP
 - **文件**
   - *app.py（+）*、*settings.py（+）*
-    - 恢复 `POST /api/news/:id/chat`，改为通过本机 `codex exec` 执行新闻提问
-    - 首问从 `thread.started.thread_id` 提取具体 session id，续问固定使用 `codex exec resume <session_id>`，不使用 `--last`
-    - 新增 `llm.codex_chat.model` 设置项；留空时走 Codex 默认模型
+    - 恢复 `POST /api/news/:id/chat`，改为通过本机 Pi CLI 执行新闻提问
+    - 首问创建具体 Pi session id，续问固定复用该 session，不把每一轮伪装成新对话
+    - 新增 `llm.pi_chat.model` 设置项；留空时走 Pi 默认模型
     - 对 `detail_not_ready / provider_busy / provider_timeout / session_invalid / missing_session_id / provider_failed` 返回清晰结构化错误
   - *static/index.html（+）*、*static/app.js（+）*
-    - 右侧 chatPage 改为单一 `Codex exec` 入口，不再展示 provider 选择
-    - 设置页新增 `Codex Chat 模型` 输入项；切换模型时清空当前新闻的临时对话并重新建 session
+    - 右侧 chatPage 改为单一 Pi 入口，不再展示执行器选择
+    - 设置页新增 Pi Chat 模型输入项；切换模型时清空当前新闻的临时对话并重新建 session
     - 同一条新闻支持前端内存态多轮对话；切换新闻即清空
   - *tests/test_api.py（+）*
-    - 覆盖首问上下文透传、session id 返回、显式 resume、禁止 `--last`、模型设置生效、错误码与旧配置兼容
-- **影响**：用户现在可以在正文 ready 的新闻详情里直接通过 `codex exec` 提问；同一新闻支持多轮对话，且每轮都绑定具体 session id。当前版本仍不做 chat 落库、归档或翻译保底替换。
+    - 覆盖首问上下文透传、session id 返回、连续追问、模型设置生效、错误码与旧配置兼容
+- **影响**：用户现在可以在正文 ready 的新闻详情里直接通过 Pi CLI 提问；同一新闻支持多轮对话，且每轮都绑定具体 session id。当前版本仍不做 chat 落库、归档或翻译保底替换。
 
 ### 2026-06-12 — improve: 收敛 v1.9.5.2 设置页 LLM 配置
 - **文件**
   - *app.py（+）*、*settings.py（+）*
     - `/api/settings` 只保留 DeepSeek API 状态与翻译 / 总结模型配置
-    - 兼容忽略旧配置中的 `llm.chat` / `providers.openai` 历史字段，不因旧配置报错
-    - `chat_providers` 退场，现阶段不再把 DeepSeek / ChatGPT 作为 chatPage 的 API provider 暴露
+    - 兼容忽略旧配置中的旧 Chat / `providers.openai` 历史字段，不因旧配置报错
+    - Chat provider 选择退场，现阶段不再把多个 API provider 作为 chatPage 的可选入口暴露
   - *static/index.html（+）*、*static/app.js（+）*
     - 设置页 `LLM API 管理` 仅保留 DeepSeek key 管理入口
     - `模型与功能路由` 区收敛为 DeepSeek 翻译 / 总结模型配置，并明确文案“不用于 chatPage”
     - chatPage 保留占位，但不再展示可配置 API provider
   - *tests/test_api.py（+）*
     - 覆盖旧配置兼容、DeepSeek-only 设置保存、chat API 退场与设置页收敛
-- **影响**：设置页现在只呈现仍会继续保留的 DeepSeek 配置；API chat provider 已从当前版本的设置与正文详情中退场，后续 chatPage 将另走 `codex exec` 方向。
+- **影响**：设置页现在只呈现仍会继续保留的 DeepSeek 与 Pi 配置；API chat provider 已从当前版本的设置与正文详情中退场，Chat 后续统一走本机 Pi CLI。
 
 ### 2026-06-11 — feat: 新增 v1.9.5.1 设置页 API Key 管理
 - **文件**

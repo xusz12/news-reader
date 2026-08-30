@@ -13,7 +13,7 @@ from pathlib import Path
 
 @pytest.fixture(autouse=True)
 def _isolate_app_settings(tmp_path: Path, monkeypatch):
-    # 默认隔离 app_settings：指向不存在的路径 → load_app_settings 返回 DEFAULT（chat.provider=codex），
+    # 默认隔离 app_settings：指向不存在的路径 → load_app_settings 返回默认设置。
     # 避免测试读到本机运行态 app_settings.json（可能被设成 provider=pi）而分叉。
     # 需要 provider=pi 的测试在自己的 body 里 setenv NEWS_READER_APP_SETTINGS_PATH 覆盖。
     monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(tmp_path / "absent-app_settings.json"))
@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.4.0" in html
-    assert "/static/style.css?v=2.1.4.0" in html
-    assert "/static/app.js?v=2.1.4.0" in html
+    assert "News Reader v2.1.4.1" in html
+    assert "/static/style.css?v=2.1.4.1" in html
+    assert "/static/app.js?v=2.1.4.1" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -3946,415 +3946,6 @@ def test_market_tag_summary_generate_and_stale(tmp_path: Path, monkeypatch):
     assert "boom" in failed_payload["summary"]["error"]
 
 
-def test_ai_fallback_to_codex_success(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews"
-    daily_dir.mkdir(parents=True)
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-
-    with app_module.db_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "https://example.com/fallback",
-                "Fallback title",
-                "Reuters",
-                "Original english body",
-                21,
-                "2026-06-04 17:00:00",
-                "2026-06-04 17:00:00",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
-            VALUES (?, 'pending', 0, ?, ?)
-            """,
-            (
-                "https://example.com/fallback",
-                "2026-06-04 17:01:00",
-                "2026-06-04 17:01:00",
-            ),
-        )
-
-    def fail_primary(**kwargs):
-        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
-
-    def succeed_fallback(**kwargs):
-        return {
-            "model": "codex-fallback",
-            "key_points_zh": ["要点一", "要点二", "要点三"],
-            "conclusion_zh": "兜底结论",
-            "body_zh": "这是 Codex 保底译文。",
-            "raw_json": '{"provider":"codex-fallback-structured","structured_success":true}',
-        }
-
-    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
-    monkeypatch.setattr(app_module, "generate_codex_fallback_translation", succeed_fallback)
-
-    assert app_module.process_pending_ai_once() is True
-
-    with app_module.db_conn() as conn:
-        ai_row = conn.execute(
-            "SELECT model, key_points_zh, conclusion_zh, body_zh, raw_json FROM article_ai WHERE url=?",
-            ("https://example.com/fallback",),
-        ).fetchone()
-        job_row = conn.execute(
-            "SELECT status, last_error FROM ai_jobs WHERE url=?",
-            ("https://example.com/fallback",),
-        ).fetchone()
-
-    assert ai_row["model"] == "codex-fallback"
-    assert ai_row["body_zh"] == "这是 Codex 保底译文。"
-    assert ai_row["key_points_zh"] == '["要点一", "要点二", "要点三"]'
-    assert ai_row["conclusion_zh"] == "兜底结论"
-    assert "codex-fallback-structured" in ai_row["raw_json"]
-    assert job_row["status"] == "success"
-    assert job_row["last_error"] is None
-
-
-def test_ai_fallback_to_codex_failure_keeps_error(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews"
-    daily_dir.mkdir(parents=True)
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-
-    with app_module.db_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "https://example.com/fallback-failed",
-                "Fallback failed title",
-                "Reuters",
-                "Original english body",
-                21,
-                "2026-06-04 17:00:00",
-                "2026-06-04 17:00:00",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
-            VALUES (?, 'pending', 0, ?, ?)
-            """,
-            (
-                "https://example.com/fallback-failed",
-                "2026-06-04 17:01:00",
-                "2026-06-04 17:01:00",
-            ),
-        )
-
-    def fail_primary(**kwargs):
-        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
-
-    def fail_fallback(**kwargs):
-        raise app_module.LLMClientError("CODEX_FALLBACK_FAILED: bridge down")
-
-    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
-    monkeypatch.setattr(app_module, "generate_codex_fallback_translation", fail_fallback)
-
-    assert app_module.process_pending_ai_once() is True
-
-    with app_module.db_conn() as conn:
-        ai_row = conn.execute(
-            "SELECT url FROM article_ai WHERE url=?",
-            ("https://example.com/fallback-failed",),
-        ).fetchone()
-        job_row = conn.execute(
-            "SELECT status, last_error FROM ai_jobs WHERE url=?",
-            ("https://example.com/fallback-failed",),
-        ).fetchone()
-
-    assert ai_row is None
-    assert job_row["status"] == "failed"
-    assert "INVALID_TOOL_ARGUMENTS_JSON" in job_row["last_error"]
-    assert "CODEX_FALLBACK_FAILED" in job_row["last_error"]
-
-
-def test_ai_fallback_to_codex_body_only_degrades_cleanly(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews"
-    daily_dir.mkdir(parents=True)
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-
-    with app_module.db_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO source_files(path, mtime, size, last_scanned_at, item_count)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                "dailyFreshNews_2026-06-04.md",
-                1717488000.0,
-                123,
-                "2026-06-04 16:59:00",
-                1,
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO items(
-              id, source_file, item_order, published_at, date, time, source, source_type,
-              source_name, title, summary, url, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "fallback-body-item",
-                "dailyFreshNews_2026-06-04.md",
-                1,
-                "2026-06-04 17:00:00",
-                "2026-06-04",
-                "17:00:00",
-                "Reuters",
-                "article",
-                "Reuters",
-                "Fallback body title",
-                "Fallback body summary",
-                "https://example.com/fallback-body",
-                "2026-06-04 17:00:00",
-                "2026-06-04 17:00:00",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "https://example.com/fallback-body",
-                "Fallback body title",
-                "Reuters",
-                "Original english body",
-                21,
-                "2026-06-04 17:00:00",
-                "2026-06-04 17:00:00",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO article_ai(url, model, key_points_zh, conclusion_zh, body_zh, raw_json, generated_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "https://example.com/fallback-body",
-                "codex-fallback",
-                "[]",
-                "",
-                "这是只有正文的兜底翻译。",
-                '{"provider":"codex-fallback-body-only","structured_success":false,"structured_error":"INVALID_JSON"}',
-                "2026-06-04 17:10:00",
-                "2026-06-04 17:10:00",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO ai_jobs(url, status, attempts, queued_at, started_at, finished_at, updated_at)
-            VALUES (?, 'success', 1, ?, ?, ?, ?)
-            """,
-            (
-                "https://example.com/fallback-body",
-                "2026-06-04 17:01:00",
-                "2026-06-04 17:02:00",
-                "2026-06-04 17:03:00",
-                "2026-06-04 17:03:00",
-            ),
-        )
-
-    detail_res = client.get("/api/news/fallback-body-item/detail")
-    assert detail_res.status_code == 200
-    payload = detail_res.get_json()
-    assert payload["ai"]["model"] == "codex-fallback"
-    assert payload["ai"]["key_points_zh"] == "[]"
-    assert payload["ai"]["conclusion_zh"] == ""
-    assert "codex-fallback-body-only" in payload["ai"]["raw_json"]
-
-
-def test_ai_fallback_to_pi_success_when_provider_pi(tmp_path: Path, monkeypatch):
-    # provider=pi 时 DeepSeek 翻译失败 → 走 generate_pi_fallback_translation，不走 Codex。
-    daily_dir = tmp_path / "DailyNews"
-    daily_dir.mkdir(parents=True)
-    db_path = tmp_path / "news_index.sqlite3"
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    assert app_module.current_chat_provider() == "pi"
-    app_module.ensure_db()
-
-    with app_module.db_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "https://example.com/pi-fallback",
-                "Pi fallback title",
-                "Reuters",
-                "Original english body",
-                21,
-                "2026-06-04 17:00:00",
-                "2026-06-04 17:00:00",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
-            VALUES (?, 'pending', 0, ?, ?)
-            """,
-            ("https://example.com/pi-fallback", "2026-06-04 17:01:00", "2026-06-04 17:01:00"),
-        )
-
-    def fail_primary(**kwargs):
-        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
-
-    pi_called = {}
-    codex_called = {}
-
-    def succeed_pi(**kwargs):
-        pi_called.update(kwargs)
-        return {
-            "model": "minimax-m3:cloud",
-            "key_points_zh": ["要点一", "要点二", "要点三"],
-            "conclusion_zh": "Pi 兜底结论",
-            "body_zh": "这是 Pi 保底译文。",
-            "raw_json": '{"provider":"pi-fallback-structured","structured_success":true}',
-        }
-
-    def codex_should_not_run(**kwargs):
-        codex_called.update(kwargs)
-        return {"model": "codex-fallback", "key_points_zh": [], "conclusion_zh": "", "body_zh": "不应走 Codex", "raw_json": "{}"}
-
-    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
-    monkeypatch.setattr(app_module, "generate_pi_fallback_translation", succeed_pi)
-    monkeypatch.setattr(app_module, "generate_codex_fallback_translation", codex_should_not_run)
-
-    assert app_module.process_pending_ai_once() is True
-
-    with app_module.db_conn() as conn:
-        ai_row = conn.execute(
-            "SELECT model, body_zh, raw_json FROM article_ai WHERE url=?",
-            ("https://example.com/pi-fallback",),
-        ).fetchone()
-        job_row = conn.execute("SELECT status, last_error FROM ai_jobs WHERE url=?", ("https://example.com/pi-fallback",)).fetchone()
-
-    assert ai_row["model"] == "minimax-m3:cloud"
-    assert ai_row["body_zh"] == "这是 Pi 保底译文。"
-    assert "pi-fallback-structured" in ai_row["raw_json"]
-    assert job_row["status"] == "success"
-    assert pi_called, "provider=pi 时翻译兜底应走 generate_pi_fallback_translation"
-    assert not codex_called, "provider=pi 时翻译兜底不应再走 Codex"
-
-
-def test_ai_fallback_to_pi_failure_does_not_implicitly_use_codex(tmp_path: Path, monkeypatch):
-    # provider=pi 时 Pi 兜底失败 → 只记录失败，不隐式回退 Codex。
-    daily_dir = tmp_path / "DailyNews"
-    daily_dir.mkdir(parents=True)
-    db_path = tmp_path / "news_index.sqlite3"
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-
-    with app_module.db_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "https://example.com/pi-fallback-fail",
-                "Pi fallback fail title",
-                "Reuters",
-                "Original english body",
-                21,
-                "2026-06-04 17:00:00",
-                "2026-06-04 17:00:00",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
-            VALUES (?, 'pending', 0, ?, ?)
-            """,
-            ("https://example.com/pi-fallback-fail", "2026-06-04 17:01:00", "2026-06-04 17:01:00"),
-        )
-
-    def fail_primary(**kwargs):
-        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
-
-    def fail_pi(**kwargs):
-        raise app_module.LLMClientError("PI_FALLBACK_FAILED: timeout")
-
-    codex_called = {}
-
-    def codex_should_not_run(**kwargs):
-        codex_called.update(kwargs)
-        return {"model": "codex-fallback", "key_points_zh": [], "conclusion_zh": "", "body_zh": "不应走 Codex", "raw_json": "{}"}
-
-    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
-    monkeypatch.setattr(app_module, "generate_pi_fallback_translation", fail_pi)
-    monkeypatch.setattr(app_module, "generate_codex_fallback_translation", codex_should_not_run)
-
-    assert app_module.process_pending_ai_once() is True
-
-    with app_module.db_conn() as conn:
-        job_row = conn.execute("SELECT status, last_error FROM ai_jobs WHERE url=?", ("https://example.com/pi-fallback-fail",)).fetchone()
-
-    assert job_row["status"] == "failed"
-    assert job_row["last_error"] is not None
-    assert not codex_called, "Pi 兜底失败不应隐式回退 Codex"
-
-
 def test_generate_pi_fallback_translation_layered(tmp_path: Path, monkeypatch):
     # generate_pi_fallback_translation 复用结构化/body-only/失败分层。
     import app as app_module
@@ -4408,6 +3999,68 @@ def test_generate_pi_fallback_translation_layered(tmp_path: Path, monkeypatch):
     assert captured["env"].get("PI_PACKAGE_DIR") is None
 
 
+def test_deepseek_failure_uses_pi_fallback_and_persists_result(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    stamp = "2026-06-04 17:00:00"
+    with app_module.db_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO article_details(url, title, source, content, content_length, fetched_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("https://example.com/pi-fallback", "Fallback title", "Reuters", "English body", 12, stamp, stamp),
+            )
+            conn.execute(
+                "INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at) VALUES (?, 'pending', 0, ?, ?)",
+                ("https://example.com/pi-fallback", stamp, stamp),
+            )
+
+    def fail_primary(**kwargs):
+        raise app_module.LLMClientError("INVALID_TOOL_ARGUMENTS_JSON: bad json")
+
+    fallback_called = {}
+
+    def succeed_fallback(**kwargs):
+        fallback_called.update(kwargs)
+        return {
+            "model": "minimax-m3:cloud",
+            "key_points_zh": ["要点一", "要点二", "要点三"],
+            "conclusion_zh": "兜底结论",
+            "body_zh": "这是 Pi 兜底译文。",
+            "raw_json": '{"provider":"pi-fallback-structured"}',
+        }
+
+    monkeypatch.setattr(app_module, "generate_article_ai", fail_primary)
+    monkeypatch.setattr(app_module, "generate_pi_fallback_translation", succeed_fallback)
+    assert app_module.process_pending_ai_once() is True
+
+    with app_module.db_conn() as conn:
+        ai_row = conn.execute(
+            "SELECT model, body_zh, raw_json FROM article_ai WHERE url=?",
+            ("https://example.com/pi-fallback",),
+        ).fetchone()
+        job_row = conn.execute(
+            "SELECT status, last_error FROM ai_jobs WHERE url=?",
+            ("https://example.com/pi-fallback",),
+        ).fetchone()
+    assert ai_row["model"] == "minimax-m3:cloud"
+    assert ai_row["body_zh"] == "这是 Pi 兜底译文。"
+    assert "pi-fallback-structured" in ai_row["raw_json"]
+    assert job_row["status"] == "success"
+    assert job_row["last_error"] is None
+    assert fallback_called["pi_provider"] == "ollama"
+
+
 def test_error_stats_today_with_and_without_errors(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -4453,311 +4106,6 @@ def test_error_stats_today_with_and_without_errors(tmp_path: Path, monkeypatch):
             ],
         }
     ]
-
-
-def test_detail_endpoint_includes_chat_providers(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Detail](https://example.com/chat-detail)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    payload = client.get(f"/api/news/{item['id']}/detail").get_json()
-
-    assert payload["ok"] is True
-    assert payload["chat_providers"]["codex"]["available"] is True
-    assert payload["chat_providers"]["codex"]["label"] == "Codex"
-
-
-def test_news_chat_without_detail_uses_summary_context(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Pending](https://example.com/chat-pending)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    with app_module.db_conn() as conn:
-        with conn:
-            conn.execute(
-                "UPDATE items SET summary=? WHERE id=?",
-                ("Fallback summary for chat route tests.", item["id"]),
-            )
-
-    captured = {}
-
-    def fake_run_codex_chat(**kwargs):
-        captured.update(kwargs)
-        return {
-            "provider": "codex",
-            "session_id": "summary-session",
-            "model": kwargs["model"],
-            "answer": "Fallback 回答",
-        }
-
-    monkeypatch.setattr(app_module, "run_codex_chat", fake_run_codex_chat)
-    res = client.post(
-        f"/api/news/{item['id']}/chat",
-        json={"question": "这是什么意思？"},
-    )
-    assert res.status_code == 200
-    payload = res.get_json()
-    assert payload["ok"] is True
-    assert payload["context_level"] == "summary_context"
-    assert payload["context_label"] == "摘要与元数据"
-    assert captured["context_level"] == "summary_context"
-    assert "Fallback summary for chat route tests." in captured["content"]
-    assert "https://example.com/chat-pending" in captured["content"]
-    assert "Reuters" in captured["content"]
-
-
-def test_news_chat_first_turn_uses_context_and_returns_session(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Ready](https://example.com/chat-ready)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    with app_module.db_conn() as conn:
-        ts = app_module.now_ts()
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO article_details(
-                  url, source, title, author, published_at, content,
-                  content_length, raw_json, fetched_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item["url"],
-                    "Reuters",
-                    "Chat Ready",
-                    "Reporter",
-                    "2026-06-11 09:00:00",
-                    "Full english body for chat route tests.",
-                    37,
-                    "{}",
-                    ts,
-                    ts,
-                ),
-            )
-
-    captured = {}
-
-    def fake_run_codex_chat(**kwargs):
-        captured.update(kwargs)
-        return {
-            "provider": "codex",
-            "session_id": "session-123",
-            "model": kwargs["model"],
-            "answer": "Codex 回答",
-        }
-
-    monkeypatch.setattr(app_module, "run_codex_chat", fake_run_codex_chat)
-    res = client.post(
-        f"/api/news/{item['id']}/chat",
-        json={"question": "那最新影响呢？", "model": "gpt-5-codex"},
-    )
-    assert res.status_code == 200
-    payload = res.get_json()
-    assert payload["ok"] is True
-    assert payload["answer"] == "Codex 回答"
-    assert payload["session_id"] == "session-123"
-    assert payload["context_level"] == "full_detail"
-    assert payload["context_label"] == "完整正文"
-    assert captured["title"] == "Chat Ready"
-    assert captured["content"] == "Full english body for chat route tests."
-    assert captured["context_level"] == "full_detail"
-    assert captured["question"] == "那最新影响呢？"
-    assert captured["session_id"] == ""
-    assert captured["model"] == "gpt-5-codex"
-    assert captured["reset"] is False
-
-
-def test_news_chat_resume_uses_explicit_session_id(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Config](https://example.com/chat-config)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    with app_module.db_conn() as conn:
-        ts = app_module.now_ts()
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO article_details(
-                  url, source, title, author, published_at, content,
-                  content_length, raw_json, fetched_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item["url"],
-                    "Reuters",
-                    "Chat Config",
-                    "Reporter",
-                    "2026-06-11 09:00:00",
-                    "Ready detail body",
-                    17,
-                    "{}",
-                    ts,
-                    ts,
-                ),
-            )
-
-    captured = {}
-
-    def fake_run_codex_chat(**kwargs):
-        captured.update(kwargs)
-        return {
-            "provider": "codex",
-            "session_id": kwargs["session_id"] or "session-456",
-            "model": kwargs["model"],
-            "answer": "续问回答",
-        }
-
-    monkeypatch.setattr(app_module, "run_codex_chat", fake_run_codex_chat)
-
-    resume_res = client.post(
-        f"/api/news/{item['id']}/chat",
-        json={"question": "最新进展？", "session_id": "session-456", "model": "gpt-5-codex"},
-    )
-    assert resume_res.status_code == 200
-    assert resume_res.get_json()["session_id"] == "session-456"
-    assert resume_res.get_json()["context_level"] == "full_detail"
-    assert captured["session_id"] == "session-456"
-    assert captured["question"] == "最新进展？"
-    assert captured["model"] == "gpt-5-codex"
-    assert captured["context_level"] == "full_detail"
-
-
-def test_news_chat_twitter_skipped_detail_uses_summary_context(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## X · Social（1条）
-### [Tweet Update](https://x.com/example/status/123)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    with app_module.db_conn() as conn:
-        ts = app_module.now_ts()
-        with conn:
-            conn.execute(
-                "UPDATE items SET source=?, source_name=?, source_type=?, summary=? WHERE id=?",
-                ("Twitter", "Twitter", "twitter", "Tweet summary context.", item["id"]),
-            )
-            conn.execute(
-                """
-                INSERT INTO detail_jobs(url, item_id, source, status, attempts, last_error, queued_at, started_at, finished_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item["url"],
-                    item["id"],
-                    "Twitter",
-                    "skipped",
-                    "TWITTER_SKIPPED",
-                    ts,
-                    ts,
-                    ts,
-                    ts,
-                ),
-            )
-
-    captured = {}
-
-    def fake_run_codex_chat(**kwargs):
-        captured.update(kwargs)
-        return {
-            "provider": "codex",
-            "session_id": "tweet-session",
-            "model": kwargs["model"],
-            "answer": "推文 fallback 回答",
-        }
-
-    monkeypatch.setattr(app_module, "run_codex_chat", fake_run_codex_chat)
-    res = client.post(
-        f"/api/news/{item['id']}/chat",
-        json={"question": "这条推文在说什么？"},
-    )
-    assert res.status_code == 200
-    payload = res.get_json()
-    assert payload["ok"] is True
-    assert payload["context_level"] == "summary_context"
-    assert payload["context_label"] == "摘要与元数据"
-    assert captured["context_level"] == "summary_context"
-    assert "来源类型：twitter" in captured["content"]
-    assert "Tweet summary context." in captured["content"]
 
 
 def test_process_pending_jobs_once_twitter_success_and_comment_summary(tmp_path: Path, monkeypatch):
@@ -5097,10 +4445,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.4.0" in app_source
-    assert "News Reader v2.1.4.0" in index_source
-    assert "/static/style.css?v=2.1.4.0" in index_source
-    assert "/static/app.js?v=2.1.4.0" in index_source
+    assert "News Reader v2.1.4.1" in app_source
+    assert "News Reader v2.1.4.1" in index_source
+    assert "/static/style.css?v=2.1.4.1" in index_source
+    assert "/static/app.js?v=2.1.4.1" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -5217,32 +4565,6 @@ def test_settings_shell_uses_visible_labels_and_content_fitted_desktop_height():
     assert "height: calc(100vh - 16px)" in style_source
 
 
-def test_settings_model_form_groups_fields_without_hiding_parameters():
-    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
-    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
-
-    assert 'aria-labelledby="settingsTranslationGroupTitle"' in index_source
-    assert 'class="settings-form-group-title">翻译与总结</h4>' in index_source
-    assert 'aria-labelledby="settingsChatGroupTitle"' in index_source
-    assert 'class="settings-form-group-title">Chat</h4>' in index_source
-    assert '<label for="settingsPiChatProviderSelect">Pi chat provider</label>' in index_source
-    assert '<div class="settings-field-help">默认 ollama，可自定义 provider，如 deepseek</div>' in index_source
-    assert "Pi chat provider（默认 ollama，可自定义 provider，如 deepseek）" not in index_source
-    for element_id in (
-        "settingsTranslationProvider",
-        "settingsTranslationModelSelect",
-        "settingsChatProviderSelect",
-        "settingsCodexChatModelSelect",
-        "settingsPiChatProviderSelect",
-        "settingsPiChatModelSelect",
-    ):
-        assert f'id="{element_id}"' in index_source
-    assert ".settings-form-grid {" in style_source
-    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in style_source
-    assert "grid-template-columns: 1fr" in style_source
-    assert ".settings-field-note {" in style_source
-
-
 def test_scrollbars_are_hidden_but_scrollable():
     path = Path("/Users/x/news-reader/news-reader/static/style.css")
     source = path.read_text(encoding="utf-8")
@@ -5303,140 +4625,6 @@ def test_process_pending_jobs_once_twitter_success_does_not_enqueue_ai_job(tmp_p
     assert detail["ai_status"] == "none"
 
 
-def test_news_chat_errors_and_busy(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Error](https://example.com/chat-error)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    with app_module.db_conn() as conn:
-        ts = app_module.now_ts()
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO article_details(
-                  url, source, title, author, published_at, content,
-                  content_length, raw_json, fetched_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item["url"],
-                    "Reuters",
-                    "Chat Error",
-                    "Reporter",
-                    "2026-06-11 09:00:00",
-                    "Ready detail body",
-                    17,
-                    "{}",
-                    ts,
-                    ts,
-                ),
-            )
-
-    monkeypatch.setattr(app_module, "run_codex_chat", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("codex_timeout")))
-    timeout_res = client.post(f"/api/news/{item['id']}/chat", json={"question": "最新进展？"})
-    assert timeout_res.status_code == 504
-    assert timeout_res.get_json()["error"] == "provider_timeout"
-
-    monkeypatch.setattr(app_module, "run_codex_chat", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("codex_session_invalid")))
-    invalid_res = client.post(f"/api/news/{item['id']}/chat", json={"question": "继续", "session_id": "bad-session"})
-    assert invalid_res.status_code == 409
-    assert invalid_res.get_json()["error"] == "session_invalid"
-
-    lock = app_module.codex_chat_lock(item["id"])
-    assert lock.acquire(blocking=False) is True
-    try:
-        busy_res = client.post(f"/api/news/{item['id']}/chat", json={"question": "继续"})
-    finally:
-        lock.release()
-    assert busy_res.status_code == 409
-    assert busy_res.get_json()["error"] == "provider_busy"
-
-
-def test_news_chat_archive_success_and_append(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Archive](https://example.com/chat-archive)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-
-    monkeypatch.setattr(
-        app_module,
-        "run_codex_chat_archive",
-        lambda **kwargs: {
-            "provider": "codex",
-            "model": kwargs["model"],
-            "summary": "关注财报兑现与全年指引是否同时改善。",
-        },
-    )
-
-    first = client.post(
-        f"/api/news/{item['id']}/chat/archive",
-        json={
-            "messages": [
-                {"role": "user", "content": "我真正要看什么？"},
-                {"role": "assistant", "content": "重点看财报兑现与全年指引。"},
-            ],
-            "model": "gpt-5-codex",
-        },
-    )
-    assert first.status_code == 200
-    first_payload = first.get_json()
-    assert first_payload["ok"] is True
-    assert first_payload["archive_summary"] == "关注财报兑现与全年指引是否同时改善。"
-    assert "【Chat 归档｜" in first_payload["note"]["note"]
-    assert "关注财报兑现与全年指引是否同时改善。" in first_payload["note"]["note"]
-
-    assert client.put(f"/api/news/{item['id']}/note", json={"note": "已有想法"}).status_code == 200
-
-    second = client.post(
-        f"/api/news/{item['id']}/chat/archive",
-        json={
-            "messages": [
-                {"role": "user", "content": "下一步怎么跟？"},
-                {"role": "assistant", "content": "等财报后再看指引是否确认拐点。"},
-            ]
-        },
-    )
-    assert second.status_code == 200
-    second_note = second.get_json()["note"]["note"]
-    assert second_note.startswith("已有想法")
-    assert "\n\n---\n【Chat 归档｜" in second_note
-
-
 def test_news_chat_archive_rejects_missing_assistant(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -5465,366 +4653,6 @@ def test_news_chat_archive_rejects_missing_assistant(tmp_path: Path, monkeypatch
     )
     assert res.status_code == 400
     assert res.get_json()["error"] == "empty_archive_source"
-
-
-def test_news_chat_archive_note_too_long_keeps_old_note(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Archive Long](https://example.com/chat-archive-long)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    long_note = "旧想法" + ("A" * 4988)
-    assert client.put(f"/api/news/{item['id']}/note", json={"note": long_note}).status_code == 200
-
-    monkeypatch.setattr(
-        app_module,
-        "run_codex_chat_archive",
-        lambda **kwargs: {
-            "provider": "codex",
-            "model": kwargs["model"],
-            "summary": "这是一个不会被写入的归档摘要。",
-        },
-    )
-
-    res = client.post(
-        f"/api/news/{item['id']}/chat/archive",
-        json={
-            "messages": [
-                {"role": "user", "content": "总结一下"},
-                {"role": "assistant", "content": "好的。"},
-            ]
-        },
-    )
-    assert res.status_code == 409
-    assert res.get_json()["error"] == "note_too_long"
-    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
-    assert detail["note"]["note"] == long_note
-
-
-def test_news_chat_archive_provider_failure_does_not_write_note(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Archive Fail](https://example.com/chat-archive-fail)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    monkeypatch.setattr(
-        app_module,
-        "run_codex_chat_archive",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("codex_failed")),
-    )
-
-    res = client.post(
-        f"/api/news/{item['id']}/chat/archive",
-        json={
-            "messages": [
-                {"role": "user", "content": "总结一下"},
-                {"role": "assistant", "content": "好的。"},
-            ]
-        },
-    )
-    assert res.status_code == 502
-    assert res.get_json()["error"] == "provider_failed"
-    detail = client.get(f"/api/news/{item['id']}/detail").get_json()
-    assert detail["has_note"] == 0
-    assert detail["note"] is None
-
-
-def test_news_chat_archive_accepts_200_chars(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Archive 200](https://example.com/chat-archive-200)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    summary = "甲" * 150
-    monkeypatch.setattr(
-        app_module,
-        "run_codex_chat_archive",
-        lambda **kwargs: {"provider": "codex", "model": kwargs["model"], "summary": summary},
-    )
-    res = client.post(
-        f"/api/news/{item['id']}/chat/archive",
-        json={
-            "messages": [
-                {"role": "user", "content": "总结一下"},
-                {"role": "assistant", "content": "好的。"},
-            ]
-        },
-    )
-    assert res.status_code == 200
-    assert res.get_json()["archive_summary"] == summary
-
-
-def test_news_chat_archive_follows_pi_provider(tmp_path: Path, monkeypatch):
-    # 归档跟随当前 Chat provider：provider=pi 时归档走 run_pi_chat_archive，不再走 Codex。
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Archive Pi](https://example.com/chat-archive-pi)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    assert app_module.current_chat_provider() == "pi"
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-
-    pi_archive_called = {}
-    codex_archive_called = {}
-
-    def fake_pi_archive(**kwargs):
-        pi_archive_called.update(kwargs)
-        return {"provider": "pi", "model": kwargs["pi_model"], "summary": "Pi 归档结论。"}
-
-    def fake_codex_archive(**kwargs):
-        codex_archive_called.update(kwargs)
-        return {"provider": "codex", "model": kwargs["model"], "summary": "不应走 Codex"}
-
-    monkeypatch.setattr(app_module, "run_pi_chat_archive", fake_pi_archive)
-    monkeypatch.setattr(app_module, "run_codex_chat_archive", fake_codex_archive)
-    res = client.post(
-        f"/api/news/{item['id']}/chat/archive",
-        json={
-            "messages": [
-                {"role": "user", "content": "总结"},
-                {"role": "assistant", "content": "Pi 归档结论。"},
-            ]
-        },
-    )
-    assert res.status_code == 200
-    payload = res.get_json()
-    assert payload["ok"] is True
-    assert payload["provider"] == "pi"
-    assert payload["model"] == "minimax-m3:cloud"
-    assert payload["archive_summary"] == "Pi 归档结论。"
-    assert pi_archive_called, "provider=pi 时归档应走 run_pi_chat_archive"
-    assert not codex_archive_called, "provider=pi 时归档不应再走 Codex"
-
-
-def test_news_chat_archive_pi_timeout_maps_to_provider_timeout(tmp_path: Path, monkeypatch):
-    # provider=pi 时归档超时映射到中性错误码 provider_timeout（504），不引入 provider 专属码。
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Archive Pi Timeout](https://example.com/chat-archive-pi-timeout)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    monkeypatch.setattr(
-        app_module, "run_pi_chat_archive", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("pi_timeout"))
-    )
-    res = client.post(
-        f"/api/news/{item['id']}/chat/archive",
-        json={
-            "messages": [
-                {"role": "user", "content": "总结"},
-                {"role": "assistant", "content": "内容"},
-            ]
-        },
-    )
-    assert res.status_code == 504
-    assert res.get_json()["error"] == "provider_timeout"
-
-
-def test_news_chat_archive_pi_empty_maps_to_empty_summary(tmp_path: Path, monkeypatch):
-    # provider=pi 时归档返回空摘要 → 中性 empty_archive_summary（502）。
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Chat Archive Pi Empty](https://example.com/chat-archive-pi-empty)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    monkeypatch.setattr(
-        app_module, "run_pi_chat_archive", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("pi_empty_archive"))
-    )
-    res = client.post(
-        f"/api/news/{item['id']}/chat/archive",
-        json={
-            "messages": [
-                {"role": "user", "content": "总结"},
-                {"role": "assistant", "content": "内容"},
-            ]
-        },
-    )
-    assert res.status_code == 502
-    assert res.get_json()["error"] == "empty_archive_summary"
-
-
-def test_run_codex_chat_builds_exec_and_resume_commands(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-
-    commands = []
-    timeouts = []
-
-    def fake_run(command, capture_output, text, timeout, cwd):
-        commands.append(command)
-        timeouts.append(timeout)
-        output_path = command[command.index("--output-last-message") + 1]
-        Path(output_path).write_text("回答内容", encoding="utf-8")
-        if "resume" in command:
-            stdout = '{"type":"thread.started","thread_id":"resume-session"}\n{"type":"turn.completed"}\n'
-        else:
-            stdout = '{"type":"thread.started","thread_id":"first-session"}\n{"type":"turn.completed"}\n'
-        return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
-
-    first = app_module.run_codex_chat(
-        question="什么是 codex exec？",
-        title="Test",
-        source="Reuters",
-        published_at="2026-06-11 09:00:00",
-        content="Body",
-        context_level="full_detail",
-        model="gpt-5-codex",
-    )
-    resumed = app_module.run_codex_chat(
-        question="继续说",
-        session_id="first-session",
-        title="Test",
-        source="Reuters",
-        published_at="2026-06-11 09:00:00",
-        content="Body",
-        context_level="full_detail",
-        model="gpt-5-codex",
-    )
-
-    assert first["session_id"] == "first-session"
-    assert resumed["session_id"] == "resume-session"
-    assert commands[0][0:2] == ["codex", "exec"]
-    assert "resume" not in commands[0]
-    assert "--last" not in commands[0]
-    assert commands[0][2].startswith("你是一名新闻研究助手。用户当前围绕一篇新闻提问。")
-    assert "给你的新闻内容主要用于理解提问场景，不代表答案一定存在于文中。" in commands[0][2]
-    assert "如果用户问的是背景、最新进展、实时数据、影响判断或文中没有的细节，应主动搜索最新且可靠的信息后再回答。" in commands[0][2]
-    assert "回答时明确区分哪些信息来自新闻上下文，哪些来自你后续搜索到的信息。" in commands[0][2]
-    assert "新闻标题：Test" in commands[0][2]
-    assert "新闻来源：Reuters" in commands[0][2]
-    assert "发布时间：2026-06-11 09:00:00" in commands[0][2]
-    assert "上下文级别：full_detail" in commands[0][2]
-    assert "以下包含新闻完整正文。回答原文内容、总结或作者观点时，优先基于正文；若用户追问背景、最新进展、实时数据或文外细节，仍应主动搜索补充。" in commands[0][2]
-    assert "新闻上下文：\nBody" in commands[0][2]
-    assert "用户问题：什么是 codex exec？" in commands[0][2]
-    assert commands[1][0:4] == ["codex", "exec", "resume", "first-session"]
-    assert "--last" not in commands[1]
-    assert timeouts == [180, 180]
 
 
 def test_release_notes_api_returns_items(tmp_path: Path, monkeypatch):
@@ -6115,8 +4943,6 @@ def test_feed_source_subkey_settings_roundtrip_normalizes_values(tmp_path: Path,
         json={
             "llm": {
                 "translation": {"provider": "deepseek", "model": ""},
-                "chat": {"provider": "codex"},
-                "codex_chat": {"model": ""},
                 "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"},
             },
             "feed": {"hidden_source_subkeys": ["Reuters / Middle East", "x/MacroMargin", "Bloomberg / bloomberg_tech", "bad", "x/MacroMargin"]},
@@ -6127,121 +4953,6 @@ def test_feed_source_subkey_settings_roundtrip_normalizes_values(tmp_path: Path,
     assert payload["feed"]["hidden_source_subkeys"] == ["reuters/middle-east", "x/macromargin", "bloomberg/tech"]
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved["feed"]["hidden_source_subkeys"] == ["reuters/middle-east", "x/macromargin", "bloomberg/tech"]
-
-
-def test_settings_api_status_and_save(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    db_path = tmp_path / "news_index.sqlite3"
-    settings_path = tmp_path / "app_settings.json"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None)
-
-    class DummyResponse:
-        def __init__(self, payload):
-            self.payload = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-
-        def read(self):
-            return self.payload
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(
-        app_module,
-        "urlopen",
-        lambda request, timeout=0: DummyResponse(
-            {"data": [
-                {"id": "deepseek-v4-pro"},
-                {"id": "deepseek-v4-flash"},
-                {"id": "deepseek-chat"},
-                {"id": "deepseek-reasoner"},
-            ]}
-        ),
-    )
-
-    def fake_subprocess_run(cmd, **kwargs):
-        if cmd[:3] == ["codex", "exec", "--help"]:
-            return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
-        if cmd[:3] == ["codex", "debug", "models"]:
-            return types.SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "models": [
-                            {"slug": "gpt-5.5", "display_name": "GPT-5.5", "description": "Fast", "priority": 0, "visibility": "list"},
-                            {"slug": "hidden-model", "display_name": "Hidden", "description": "Ignore", "priority": 99, "visibility": "hidden"},
-                        ]
-                    },
-                    ensure_ascii=False,
-                ),
-                stderr="",
-            )
-        raise AssertionError(f"unexpected subprocess cmd: {cmd}")
-
-    monkeypatch.setattr(app_module.subprocess, "run", fake_subprocess_run)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-
-    initial = client.get("/api/settings")
-    assert initial.status_code == 200
-    data = initial.get_json()
-    assert data["ok"] is True
-    assert data["api_status"]["deepseek"]["configured"] is True
-    assert data["api_status"]["deepseek"]["models_endpoint_reachable"] is True
-    assert data["api_status"]["codex"]["cli_available"] is True
-    assert data["api_status"]["codex"]["exec_available"] is True
-    assert data["api_status"]["codex"]["models_readable"] is True
-    assert data["model_catalogs"]["translation"]["source"] == "official"
-    assert data["model_catalogs"]["translation"]["resolved_default_model"] == "deepseek-v4-flash"
-    assert data["model_catalogs"]["translation"]["default_label"] == "deepseek-v4-flash"
-    assert data["model_catalogs"]["translation"]["options"][0]["value"] == "deepseek-v4-flash"
-    option_values = {opt["value"] for opt in data["model_catalogs"]["translation"]["options"]}
-    assert "deepseek-chat" not in option_values
-    assert "deepseek-reasoner" not in option_values
-    assert "deepseek-v4-flash" in option_values
-    assert "deepseek-v4-pro" in option_values
-    assert data["model_catalogs"]["codex_chat"]["source"] == "codex_debug"
-    assert data["tracked"]["default_rule_params"]["threshold"] == 6
-    assert data["tracked"]["default_rule_params"]["title_weight"] == 1
-    assert data["model_catalogs"]["codex_chat"]["options"][0] == {
-        "value": "gpt-5.5",
-        "label": "gpt-5.5",
-        "description": "",
-        "source": "codex_debug",
-    }
-    assert data["llm"]["codex_chat"]["model"] == ""
-    dumped = json.dumps(data, ensure_ascii=False)
-    assert "sk-deepseek-test" not in dumped
-
-    save_res = client.put(
-        "/api/settings",
-        json={
-            "llm": {
-                "translation": {"provider": "deepseek", "model": "deepseek-reasoner"},
-                "codex_chat": {"model": "gpt-5-codex"},
-            }
-        },
-    )
-    assert save_res.status_code == 200
-    saved = save_res.get_json()
-    assert saved["llm"]["translation"]["model"] == "deepseek-v4-pro"
-    assert saved["llm"]["codex_chat"]["model"] == "gpt-5-codex"
-    assert any(option["value"] == "gpt-5-codex" for option in saved["model_catalogs"]["codex_chat"]["options"])
-    assert settings_path.exists() is True
-    saved_file = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert saved_file["llm"]["translation"]["model"] == "deepseek-v4-pro"
-    assert saved_file["llm"]["codex_chat"]["model"] == "gpt-5-codex"
 
 
 def test_settings_tracked_default_rule_params_roundtrip_and_new_topic_defaults(tmp_path: Path, monkeypatch):
@@ -6362,67 +5073,60 @@ def test_deepseek_model_catalog_fallback_keeps_saved_model(tmp_path: Path, monke
     assert snapshot["catalog"]["options"][-1]["source"] == "saved"
 
 
-def test_codex_model_catalog_parse_success_and_fallback(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+def test_settings_are_pi_only_and_ignore_unknown_executor_fields(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews"
     daily_dir.mkdir(parents=True)
     db_path = tmp_path / "news_index.sqlite3"
     settings_path = tmp_path / "app_settings.json"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    settings_path.write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "translation": {"provider": "deepseek", "model": "deepseek-saved"},
+                    "legacy_chat": {"provider": "unused"},
+                    "second_executor": {"model": "unused"},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(daily_dir))
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
     monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
     import app as app_module
 
     importlib.reload(app_module)
-    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None)
+    monkeypatch.setattr(app_module, "has_secret", lambda name: False)
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: None)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
 
-    def success_run(cmd, **kwargs):
-        if cmd[:3] == ["codex", "exec", "--help"]:
-            return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
-        if cmd[:3] == ["codex", "debug", "models"]:
-            return types.SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "models": [
-                            {"slug": "gpt-5", "display_name": "GPT-5", "description": "General", "priority": 2, "visibility": "list"},
-                            {"slug": "gpt-5.5", "display_name": "GPT-5.5", "description": "Best", "priority": 0, "visibility": "list"},
-                            {"slug": "internal", "display_name": "Internal", "description": "Hidden", "priority": 1, "visibility": "hidden"},
-                        ]
-                    },
-                    ensure_ascii=False,
-                ),
-                stderr="",
-            )
-        raise AssertionError(f"unexpected subprocess cmd: {cmd}")
+    initial = client.get("/api/settings").get_json()
+    assert set(initial["llm"]) == {"translation", "pi_chat"}
+    assert set(initial["api_status"]) == {"deepseek", "pi"}
+    assert set(initial["model_catalogs"]) == {"translation", "pi_chat"}
+    assert initial["llm"]["translation"]["model"] == "deepseek-saved"
 
-    monkeypatch.setattr(app_module.subprocess, "run", success_run)
-    success_snapshot = app_module.codex_settings_snapshot("gpt-5.5")
-    assert success_snapshot["service"]["cli_available"] is True
-    assert success_snapshot["service"]["exec_available"] is True
-    assert success_snapshot["service"]["models_readable"] is True
-    assert success_snapshot["service"]["used_fallback"] is False
-    assert success_snapshot["catalog"]["source"] == "codex_debug"
-    assert [option["value"] for option in success_snapshot["catalog"]["options"]] == ["gpt-5.5", "gpt-5"]
-    assert [option["label"] for option in success_snapshot["catalog"]["options"]] == ["gpt-5.5", "gpt-5"]
-
-    def fallback_run(cmd, **kwargs):
-        if cmd[:3] == ["codex", "exec", "--help"]:
-            return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
-        if cmd[:3] == ["codex", "debug", "models"]:
-            return types.SimpleNamespace(returncode=1, stdout="", stderr="catalog failed")
-        raise AssertionError(f"unexpected subprocess cmd: {cmd}")
-
-    monkeypatch.setattr(app_module.subprocess, "run", fallback_run)
-    fallback_snapshot = app_module.codex_settings_snapshot("gpt-5-custom-x")
-    assert fallback_snapshot["service"]["cli_available"] is True
-    assert fallback_snapshot["service"]["exec_available"] is True
-    assert fallback_snapshot["service"]["models_readable"] is False
-    assert fallback_snapshot["service"]["used_fallback"] is True
-    assert fallback_snapshot["service"]["last_error"] == "catalog failed"
-    assert fallback_snapshot["catalog"]["source"] == "fallback"
-    assert fallback_snapshot["catalog"]["options"][0]["value"] == "gpt-5.5"
-    assert fallback_snapshot["catalog"]["options"][-1]["value"] == "gpt-5-custom-x"
+    saved = client.put(
+        "/api/settings",
+        json={
+            "llm": {
+                "translation": {"provider": "deepseek", "model": "deepseek-new"},
+                "pi_chat": {"provider": "ollama", "model": "qwen3.5:4b"},
+                "legacy_chat": {"provider": "ignored"},
+                "second_executor": {"model": "ignored"},
+            }
+        },
+    )
+    assert saved.status_code == 200
+    payload = saved.get_json()
+    assert set(payload["llm"]) == {"translation", "pi_chat"}
+    persisted = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert set(persisted["llm"]) == {"translation", "pi_chat"}
+    assert persisted["llm"]["pi_chat"] == {"provider": "ollama", "model": "qwen3.5:4b"}
 
 
 def test_settings_secret_api_save_and_delete(tmp_path: Path, monkeypatch):
@@ -6519,186 +5223,6 @@ def test_settings_secret_api_keychain_failure_does_not_leak_key(tmp_path: Path, 
     assert "sk-sensitive-value" not in dumped
 
 
-def test_saved_models_are_used_by_translation_and_codex_chat(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
-        """## Reuters · World（1条）
-### [Settings Route](https://example.com/settings-route)
-- 发布时间：2026-06-11 09:00:00
-""",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "news_index.sqlite3"
-    settings_path = tmp_path / "app_settings.json"
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-    assert client.post("/api/reindex", json={}).status_code == 200
-    assert client.put(
-        "/api/settings",
-        json={
-            "llm": {
-                "translation": {"provider": "deepseek", "model": "deepseek-translator-x"},
-                "codex_chat": {"model": "gpt-5-codex-x"},
-            }
-        },
-    ).status_code == 200
-
-    item = client.get("/api/news?per=20").get_json()["items"][0]
-    with app_module.db_conn() as conn:
-        ts = app_module.now_ts()
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO article_details(
-                  url, source, title, author, published_at, content,
-                  content_length, raw_json, fetched_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item["url"],
-                    "Reuters",
-                    "Settings Route",
-                    "Reporter",
-                    "2026-06-11 09:00:00",
-                    "Body for settings route tests.",
-                    30,
-                    "{}",
-                    ts,
-                    ts,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO ai_jobs(url, status, attempts, queued_at, updated_at)
-                VALUES (?, 'pending', 0, ?, ?)
-                """,
-                (item["url"], ts, ts),
-            )
-
-    captured = {}
-
-    def fake_generate_article_ai(**kwargs):
-        captured["translation_model"] = kwargs["model"]
-        return {
-            "model": kwargs["model"],
-            "key_points_zh": ["要点一", "要点二", "要点三"],
-            "conclusion_zh": "结论",
-            "body_zh": "中文正文",
-            "raw_json": "{}",
-        }
-
-    monkeypatch.setattr(app_module, "generate_article_ai", fake_generate_article_ai)
-
-    assert app_module.process_pending_ai_once() is True
-    assert captured["translation_model"] == "deepseek-translator-x"
-
-    monkeypatch.setattr(
-        app_module,
-        "run_codex_chat",
-        lambda **kwargs: {
-            "provider": "codex",
-            "session_id": "session-test",
-            "model": kwargs["model"],
-            "answer": "回答",
-        },
-    )
-    chat_res = client.post(f"/api/news/{item['id']}/chat", json={"question": "最新进展？"})
-    assert chat_res.status_code == 200
-    assert chat_res.get_json()["model"] == "gpt-5-codex-x"
-
-
-def test_settings_api_sanitizes_legacy_chat_fields(tmp_path: Path, monkeypatch):
-    daily_dir = tmp_path / "DailyNews" / "2026年6月"
-    daily_dir.mkdir(parents=True)
-    db_path = tmp_path / "news_index.sqlite3"
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {
-                "llm": {
-                    "translation": {"provider": "deepseek", "model": "deepseek-legacy"},
-                    "codex_chat": {"model": "gpt-5-codex-legacy"},
-                    "chat": {
-                        "default_provider": "openai",
-                        "providers": {
-                            "deepseek": {"model": "deepseek-chat-legacy"},
-                            "openai": {"model": "gpt-4.1-legacy"},
-                        },
-                    },
-                }
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
-    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-
-    import app as app_module
-
-    importlib.reload(app_module)
-    app_module.ensure_db()
-    client = app_module.app.test_client()
-
-    payload = client.get("/api/settings").get_json()
-    assert payload["ok"] is True
-    assert payload["llm"]["translation"]["model"] == "deepseek-legacy"
-    assert payload["llm"]["codex_chat"]["model"] == "gpt-5-codex-legacy"
-    assert payload["llm"]["chat"] == {"provider": "codex"}
-    assert payload["llm"]["pi_chat"]["provider"] == "ollama"
-    assert payload["llm"]["pi_chat"]["model"] == "minimax-m3:cloud"
-
-
-
-def test_current_chat_provider_and_pi_config(tmp_path: Path, monkeypatch):
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "qwen3.5:0.8b"}}},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
-    import app as app_module
-
-    importlib.reload(app_module)
-    assert app_module.current_chat_provider() == "pi"
-    assert app_module.current_pi_chat_config() == {"provider": "ollama", "model": "qwen3.5:0.8b"}
-
-
-def _fake_pi_subprocess(*, help_ok=True, models_stdout=None, models_ok=True):
-    def _run(args, **kwargs):
-        class Completed:
-            pass
-        if "--help" in args:
-            Completed.returncode = 0 if help_ok else 1
-            Completed.stdout = "pi help"
-            Completed.stderr = "" if help_ok else "boom"
-            return Completed()
-        if "--list-models" in args:
-            Completed.returncode = 0 if (models_ok and models_stdout is not None) else 1
-            Completed.stdout = models_stdout or ""
-            Completed.stderr = "" if models_ok else "boom"
-            return Completed()
-        Completed.returncode = 0
-        Completed.stdout = ""
-        Completed.stderr = ""
-        return Completed()
-    return _run
-
-
 def test_parse_pi_providers():
     import app as app_module
 
@@ -6741,6 +5265,29 @@ def test_parse_pi_model_catalog():
     providers_two, grouped_two = app_module.parse_pi_model_catalog("deepseek  deepseek-v4-pro  1M  384K  yes  no\n")
     assert providers_two == ["deepseek"]
     assert grouped_two == {"deepseek": ["deepseek-v4-pro"]}
+
+
+def _fake_pi_subprocess(*, help_ok=True, models_stdout=None, models_ok=True):
+    def _run(args, **kwargs):
+        class Completed:
+            pass
+
+        if "--help" in args:
+            Completed.returncode = 0 if help_ok else 1
+            Completed.stdout = "pi help"
+            Completed.stderr = "" if help_ok else "boom"
+            return Completed()
+        if "--list-models" in args:
+            Completed.returncode = 0 if (models_ok and models_stdout is not None) else 1
+            Completed.stdout = models_stdout or ""
+            Completed.stderr = "" if models_ok else "boom"
+            return Completed()
+        Completed.returncode = 0
+        Completed.stdout = ""
+        Completed.stderr = ""
+        return Completed()
+
+    return _run
 
 
 def test_pi_chat_settings_snapshot_detects_providers(tmp_path: Path, monkeypatch):
@@ -6881,18 +5428,17 @@ def test_frontend_pi_chat_provider_model_linkage_contract():
     assert "ollama list" not in app_source
 
 
-def test_backend_pi_catalog_does_not_touch_codex_or_ollama_list():
-    import app as app_module
-    import inspect
-
-    src = inspect.getsource(app_module.pi_chat_settings_snapshot)
-    assert "ollama" not in src.lower().replace("default_pi_chat_provider", "").replace("minimax-m3:cloud", "")
-    assert "pi --list-models" in src
-    assert "codex" not in src.lower()
-    # Codex 目录逻辑保持独立且不变。
-    codex_src = inspect.getsource(app_module.codex_settings_snapshot)
-    assert "codex debug models" in codex_src
-    assert "pi" not in codex_src.lower()
+def test_frontend_settings_expose_translation_and_pi_only():
+    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
+    legacy_model_id = "settings" + "LegacyChatModelSelect"
+    assert 'id="settingsPiChatProviderSelect"' in index_source
+    assert 'id="settingsPiChatModelSelect"' in index_source
+    assert 'id="settingsChatProviderSelect"' not in index_source
+    assert f'id="{legacy_model_id}"' not in index_source
+    assert "chat_providers" not in app_source
+    assert "settingsChatProviderSelect" not in app_source
+    assert legacy_model_id not in app_source
 
 
 def test_parse_pi_stdout_success_text_delta():
@@ -7081,7 +5627,7 @@ def test_news_chat_dispatches_to_pi_when_configured(tmp_path: Path, monkeypatch)
     settings_path = tmp_path / "app_settings.json"
     settings_path.write_text(
         json.dumps(
-            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            {"llm": {"pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -7147,6 +5693,90 @@ def test_news_chat_dispatches_to_pi_when_configured(tmp_path: Path, monkeypatch)
     assert captured["pi_model"] == "minimax-m3:cloud"
 
 
+def test_pi_chat_first_and_follow_up_reuse_the_same_session(tmp_path: Path, monkeypatch):
+    import app as app_module
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout='{"type":"session","id":"pi-chat-session"}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"回答"}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    first = app_module.run_pi_chat(
+        item_id="item-1",
+        question="首问",
+        title="标题",
+        source="Reuters",
+        published_at="2026-06-11 09:00:00",
+        content="English body",
+        context_level="full_detail",
+        pi_provider="ollama",
+        pi_model="minimax-m3:cloud",
+    )
+    second = app_module.run_pi_chat(
+        item_id="item-1",
+        question="追问",
+        title="标题",
+        source="Reuters",
+        published_at="2026-06-11 09:00:00",
+        content="English body",
+        context_level="full_detail",
+        pi_provider="ollama",
+        pi_model="minimax-m3:cloud",
+        session_id=first["session_id"],
+    )
+    assert first["session_id"] == second["session_id"] == "pi-chat-session"
+    assert calls[0][0:4] == ["pi", "-p", "--mode", "json"]
+    assert calls[1][calls[1].index("--session-id") + 1] == "pi-chat-session"
+    assert all("--no-session" not in command for command in calls)
+
+
+def test_news_chat_archive_always_uses_pi_and_appends_note(tmp_path: Path, monkeypatch):
+    daily_dir = tmp_path / "DailyNews" / "2026年6月"
+    daily_dir.mkdir(parents=True)
+    db_path = tmp_path / "news_index.sqlite3"
+    monkeypatch.setenv("NEWS_READER_DAILY_NEWS_DIR", str(tmp_path / "DailyNews"))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    (daily_dir / "dailyFreshNews_2026-06-11.md").write_text(
+        """## Reuters · World（1条）
+### [Chat Archive](https://example.com/chat-archive)
+- 发布时间：2026-06-11 09:00:00
+""",
+        encoding="utf-8",
+    )
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    assert client.post("/api/reindex", json={}).status_code == 200
+    item = client.get("/api/news?per=20").get_json()["items"][0]
+    captured = {}
+
+    def fake_archive(**kwargs):
+        captured.update(kwargs)
+        return {"provider": "pi", "model": kwargs["pi_model"], "summary": "归档结论。"}
+
+    monkeypatch.setattr(app_module, "run_pi_chat_archive", fake_archive)
+    response = client.post(
+        f"/api/news/{item['id']}/chat/archive",
+        json={"messages": [{"role": "user", "content": "总结"}, {"role": "assistant", "content": "结论"}]},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["provider"] == "pi"
+    assert payload["archive_summary"] == "归档结论。"
+    assert captured["pi_provider"] == "ollama"
+    assert captured["pi_model"] == "minimax-m3:cloud"
+    assert "归档结论。" in payload["note"]["note"]
+
+
 def test_news_chat_pi_timeout_maps_to_provider_timeout(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
@@ -7161,7 +5791,7 @@ def test_news_chat_pi_timeout_maps_to_provider_timeout(tmp_path: Path, monkeypat
     settings_path = tmp_path / "app_settings.json"
     settings_path.write_text(
         json.dumps(
-            {"llm": {"chat": {"provider": "pi"}, "pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
+            {"llm": {"pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}},
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -10277,10 +8907,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.4.0" in app_source
-    assert "News Reader v2.1.4.0" in index_source
-    assert "/static/style.css?v=2.1.4.0" in index_source
-    assert "/static/app.js?v=2.1.4.0" in index_source
+    assert "News Reader v2.1.4.1" in app_source
+    assert "News Reader v2.1.4.1" in index_source
+    assert "/static/style.css?v=2.1.4.1" in index_source
+    assert "/static/app.js?v=2.1.4.1" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -11623,52 +10253,6 @@ def _setup_agent_api_fixture(tmp_path: Path, monkeypatch):
     return app_module, client, item, db_path, agent_db_path
 
 
-def test_agent_job_is_async_and_keeps_data_out_of_main_db(tmp_path: Path, monkeypatch):
-    app_module, client, item, db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
-
-    session_before = client.get(f"/api/news/{item['id']}/agent/session").get_json()
-    assert session_before["ok"] is True
-    assert session_before["context_available"] is True
-    assert session_before["session"] is None
-
-    created = client.post(
-        f"/api/news/{item['id']}/agent/jobs",
-        json={
-            "question": "原文中的核心风险是什么？",
-            "quote_text": "The complete original article",
-            "quote_source": "英文原文引用",
-        },
-    )
-    assert created.status_code == 202
-    payload = created.get_json()
-    assert payload["ok"] is True
-    assert payload["job_id"] == payload["job"]["id"]
-    assert payload["job"]["status"] == "queued"
-    assert payload["job"]["provider"] == "codex"
-    assert payload["job"]["quote_source"] == "英文原文引用"
-
-    detail_payload = client.get(f"/api/news/{item['id']}/detail").get_json()
-    assert detail_payload["agent"]["session"]["context_hash"]
-    assert detail_payload["agent"]["jobs"][0]["status"] == "queued"
-    assert detail_payload["agent"]["session"]["context_hash"] == payload["session"]["context_hash"]
-
-    with sqlite3.connect(agent_db_path) as conn:
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"agent_sessions", "agent_jobs", "agent_messages"}.issubset(tables)
-        context_json = conn.execute("SELECT context_json FROM agent_sessions").fetchone()[0]
-        assert "complete original article" in context_json
-        assert "摘要：不应被研究 Agent" not in context_json
-    with sqlite3.connect(db_path) as conn:
-        assert conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_sessions'"
-        ).fetchone() is None
-
-    cleared = client.delete(f"/api/news/{item['id']}/agent/session")
-    assert cleared.status_code == 200
-    assert cleared.get_json()["cleared"] is True
-    assert client.get(f"/api/news/{item['id']}/agent/session").get_json()["session"] is None
-
-
 def test_agent_session_new_and_clear_are_real_and_idempotent(tmp_path: Path, monkeypatch):
     app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
 
@@ -11931,7 +10515,7 @@ const window = {
 const jobPayload = {
   ok: true,
   agent: {
-    session: { id: "session-1", provider: "codex", model: "gpt-test" },
+    session: { id: "session-1", provider: "pi", model: "pi-test" },
     messages: [{ id: "message-1", job_id: "job-1", role: "assistant", content: "完成", status: "succeeded" }],
     jobs: [{ id: "job-1", status: "succeeded", created_at: "2026-08-28T00:00:00Z", answer_text: "完成" }],
   },
@@ -11956,7 +10540,7 @@ function assert(cond, msg) { if (!cond) throw new Error(msg); }
   const item = { id: "news-1", url: "https://example.com/news-1" };
   context.state.selectedId = item.id;
   context.state.itemsById = new Map([[item.id, item]]);
-  context.state.detailChatSession = { id: "session-1", provider: "codex", model: "gpt-test" };
+  context.state.detailChatSession = { id: "session-1", provider: "pi", model: "pi-test" };
   context.state.detailChatStatus = "正在创建后台研究任务…";
   element.value = "请总结";
   await context.sendDetailChatMessage();
@@ -11978,6 +10562,62 @@ function assert(cond, msg) { if (!cond) throw new Error(msg); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_agent_first_and_follow_up_use_one_full_pi_session(tmp_path: Path, monkeypatch):
+    app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_pi = fake_bin / "pi"
+    fake_pi.write_text(
+        "#!/bin/sh\nprintf '%s\\0' \"$@\" >> \"$PI_ARGS_LOG\"\nprintf '%s\\0' '__CALL_END__' >> \"$PI_ARGS_LOG\"\nprintf '%s\\n' '{\"type\":\"session\",\"id\":\"pi-output-session\"}' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"完成\"}}'\n",
+        encoding="utf-8",
+    )
+    fake_pi.chmod(0o755)
+    args_log = tmp_path / "pi-args.log"
+    monkeypatch.setenv("PATH", str(fake_bin))
+    monkeypatch.setenv("PI_ARGS_LOG", str(args_log))
+
+    first = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "首问"})
+    assert first.status_code == 202
+    session_id = first.get_json()["session"]["id"]
+    assert app_module.process_pending_agent_once() is True
+
+    second = client.post(
+        f"/api/news/{item['id']}/agent/jobs",
+        json={"question": "依赖上一轮的追问", "session_id": session_id},
+    )
+    assert second.status_code == 202
+    assert app_module.process_pending_agent_once() is True
+
+    calls: list[list[str]] = [[]]
+    for raw in args_log.read_bytes().split(b"\0"):
+        if not raw:
+            continue
+        value = raw.decode("utf-8")
+        if value == "__CALL_END__":
+            calls.append([])
+        else:
+            calls[-1].append(value)
+    calls = [call for call in calls if call]
+    assert len(calls) == 2
+    expected_executor_id = f"newsreader-agent-full-{session_id}"
+    assert all(call[call.index("--session-id") + 1] == expected_executor_id for call in calls)
+    assert calls[0][calls[0].index("--session-dir") + 1] == calls[1][calls[1].index("--session-dir") + 1]
+    assert "complete original article" in calls[0][-1]
+    assert "首问" in calls[0][-1]
+    assert "complete original article" not in calls[1][-1]
+    assert "首问" not in calls[1][-1]
+    assert calls[1][-1].endswith("本轮用户问题：依赖上一轮的追问")
+    restricted_flags = {
+        "--tools", "--no-extensions", "--no-builtin-tools", "--no-context-files",
+        "--no-skills", "--no-prompt-templates", "--no-themes",
+    }
+    assert not restricted_flags.intersection(calls[0] + calls[1])
+    with sqlite3.connect(agent_db_path) as conn:
+        assert conn.execute(
+            "SELECT executor_session_id FROM agent_sessions WHERE id=?", (session_id,)
+        ).fetchone() == (expected_executor_id,)
 
 
 def test_agent_existing_temp_db_is_migrated_before_session_use(tmp_path: Path, monkeypatch):
@@ -12019,75 +10659,118 @@ def test_agent_existing_temp_db_is_migrated_before_session_use(tmp_path: Path, m
     assert {"agent_sessions", "agent_jobs", "agent_messages"}.issubset(tables)
 
 
-def test_agent_restart_marks_jobs_interrupted_and_retry_is_async(tmp_path: Path, monkeypatch):
-    app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
-    created = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "请概括原文。"})
-    job_id = created.get_json()["job_id"]
-
-    with app_module.agent_db_conn() as conn:
-        with conn:
-            conn.execute(
-                "UPDATE agent_jobs SET status='running', answer_text='部分输出', updated_at=? WHERE id=?",
-                (app_module.now_ts(), job_id),
-            )
-            conn.execute(
-                "UPDATE agent_messages SET status='streaming', content='部分输出', updated_at=? WHERE job_id=? AND role='assistant'",
-                (app_module.now_ts(), job_id),
-            )
-    assert app_module.mark_agent_jobs_interrupted() == 1
-    with sqlite3.connect(agent_db_path) as conn:
-        row = conn.execute("SELECT status, error, answer_text FROM agent_jobs WHERE id=?", (job_id,)).fetchone()
-        message = conn.execute("SELECT status FROM agent_messages WHERE job_id=? AND role='assistant'", (job_id,)).fetchone()
-    assert row == ("interrupted", "service_restarted", "部分输出")
-    assert message[0] == "interrupted"
-
-    # 会话使用创建时的执行器配置；当前设置变化不会把旧会话静默切换到另一组模型。
-    monkeypatch.setattr(app_module, "_agent_provider_model", lambda: ("pi", "other-model", "deepseek"))
-    retry = client.post(f"/api/news/{item['id']}/agent/jobs/{job_id}/retry")
-    assert retry.status_code == 202
-    assert retry.get_json()["job"]["status"] == "queued"
-    assert retry.get_json()["job"]["provider"] == "codex"
-    assert retry.get_json()["job"]["id"] != job_id
-
-
-def test_agent_prompt_and_commands_are_original_only_and_read_only(tmp_path: Path, monkeypatch):
+def test_agent_legacy_pi_session_switches_with_one_time_visible_history(tmp_path: Path, monkeypatch):
     app_module, _client, item, _db_path, _agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
     with app_module.db_conn() as conn:
         detail = conn.execute("SELECT * FROM article_details WHERE url=?", (item["url"],)).fetchone()
     context = app_module.build_agent_context(item, detail)
-    assert context["context_level"] == "full_detail"
-    prompt = app_module.build_agent_prompt(context, "问题", "引用")
-    assert "complete original article" in prompt
-    assert "摘要：不应被研究 Agent" not in prompt
-    assert "外部来源事实" in prompt
+    legacy_id = "newsreader-agent-legacy-session"
+    legacy_runtime = app_module.agent_session_runtime_dir(legacy_id)
+    legacy_runtime.mkdir(parents=True)
+    (legacy_runtime / "old-session.jsonl").write_text("legacy", encoding="utf-8")
 
-    pi_command, _env, runtime_dir = app_module._agent_process_command(
-        {"provider": "pi", "model": "minimax-m3:cloud", "question": "问题", "quote_text": "",},
-        {"id": "session-1", "executor_provider": "ollama", "executor_session_id": ""},
+    command, _env, runtime_dir = app_module._agent_process_command(
+        {"provider": "pi", "model": "minimax-m3:cloud", "question": "新问题", "quote_text": "",},
+        {"id": "session-legacy", "executor_provider": "ollama", "executor_session_id": legacy_id},
         context,
-        [],
+        [{"role": "user", "content": "旧问题"}, {"role": "assistant", "content": "旧回答"}],
     )
-    assert "--session-dir" in pi_command
-    assert str(runtime_dir).startswith(str(tmp_path / "agent-runtime"))
-    assert "--tools" in pi_command
-    assert pi_command[pi_command.index("--tools") + 1] == "web_search,web_fetch"
-    assert "--no-tools" not in pi_command
-    assert not any(tool in pi_command for tool in ("bash", "edit", "write"))
+    assert command[command.index("--session-id") + 1] == "newsreader-agent-full-session-legacy"
+    assert str(runtime_dir).endswith("newsreader-agent-full-session-legacy")
+    assert "complete original article" in command[-1]
+    assert "此前会话记录（仅用于连续对话）" in command[-1]
+    assert "旧问题" in command[-1]
+    assert "旧回答" in command[-1]
+    assert not legacy_runtime.exists()
 
-    codex_command, _env, runtime_dir = app_module._agent_process_command(
-        {"provider": "codex", "model": "gpt-test", "question": "问题", "quote_text": "",},
-        {"id": "session-2", "executor_provider": "", "executor_session_id": ""},
+    pi_session = {
+        "id": "session-legacy",
+        "executor_provider": "ollama",
+        "executor_session_id": "newsreader-agent-full-session-legacy",
+    }
+    follow_up, _env, _runtime_dir = app_module._agent_process_command(
+        {"provider": "pi", "model": "minimax-m3:cloud", "question": "再问", "quote_text": ""},
+        pi_session,
         context,
-        [],
+        [{"role": "user", "content": "旧问题"}, {"role": "assistant", "content": "旧回答"}],
     )
-    assert runtime_dir is None
-    assert "--ephemeral" in codex_command
-    assert codex_command[codex_command.index("--sandbox") + 1] == "read-only"
+    assert follow_up[-1].endswith("本轮用户问题：再问")
+    assert "此前会话记录（仅用于连续对话）" not in follow_up[-1]
+    assert "旧问题" not in follow_up[-1]
+    assert "旧回答" not in follow_up[-1]
 
-    static_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
-    assert "function appendSafeAgentText(container, value)" in static_source
-    assert 'parsed.protocol !== "http:" && parsed.protocol !== "https:"' in static_source
-    assert "detailAgentClearBtn" not in static_source
+
+def test_agent_legacy_pi_migration_persists_and_stops_replaying_history(tmp_path: Path, monkeypatch):
+    app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "_agent_provider_model", lambda: ("pi", "minimax-m3:cloud", "ollama"))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_pi = fake_bin / "pi"
+    fake_pi.write_text(
+        "#!/bin/sh\nprintf '%s\\0' \"$@\" >> \"$PI_ARGS_LOG\"\nprintf '%s\\0' '__CALL_END__' >> \"$PI_ARGS_LOG\"\nprintf '%s\\n' '{\"type\":\"session\",\"id\":\"pi-output-session\"}' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"完成\"}}'\n",
+        encoding="utf-8",
+    )
+    fake_pi.chmod(0o755)
+    args_log = tmp_path / "pi-args.log"
+    monkeypatch.setenv("PATH", str(fake_bin))
+    monkeypatch.setenv("PI_ARGS_LOG", str(args_log))
+
+    first = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "旧问题"})
+    assert first.status_code == 202
+    first_payload = first.get_json()
+    session_id = first_payload["session"]["id"]
+    legacy_id = "newsreader-agent-legacy-session"
+    with sqlite3.connect(agent_db_path) as conn:
+        stamp = app_module.now_ts()
+        with conn:
+            conn.execute(
+                "UPDATE agent_sessions SET executor_session_id=? WHERE id=?",
+                (legacy_id, session_id),
+            )
+            conn.execute(
+                "UPDATE agent_jobs SET status='succeeded', answer_text='旧回答', finished_at=?, updated_at=? WHERE id=?",
+                (stamp, stamp, first_payload["job_id"]),
+            )
+            conn.execute(
+                "UPDATE agent_messages SET content='旧回答', status='succeeded', updated_at=? WHERE job_id=? AND role='assistant'",
+                (stamp, first_payload["job_id"]),
+            )
+
+    second = client.post(
+        f"/api/news/{item['id']}/agent/jobs",
+        json={"question": "新问题", "session_id": session_id},
+    )
+    assert second.status_code == 202
+    assert app_module.process_pending_agent_once() is True
+
+    third = client.post(
+        f"/api/news/{item['id']}/agent/jobs",
+        json={"question": "再问", "session_id": session_id},
+    )
+    assert third.status_code == 202
+    assert app_module.process_pending_agent_once() is True
+
+    calls: list[list[str]] = [[]]
+    for raw in args_log.read_bytes().split(b"\0"):
+        if not raw:
+            continue
+        value = raw.decode("utf-8")
+        if value == "__CALL_END__":
+            calls.append([])
+        else:
+            calls[-1].append(value)
+    calls = [call for call in calls if call]
+    assert len(calls) == 2
+    assert "旧问题" in calls[0][-1]
+    assert "旧回答" in calls[0][-1]
+    assert "此前会话记录（仅用于连续对话）" not in calls[1][-1]
+    assert "旧问题" not in calls[1][-1]
+    assert "旧回答" not in calls[1][-1]
+    with sqlite3.connect(agent_db_path) as conn:
+        stored = conn.execute(
+            "SELECT executor_session_id FROM agent_sessions WHERE id=?", (session_id,)
+        ).fetchone()
+    assert stored == (f"newsreader-agent-full-{session_id}",)
 
 
 def test_agent_ttl_setting_persists_and_ui_exposes_cleanup_controls(tmp_path: Path, monkeypatch):

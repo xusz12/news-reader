@@ -457,18 +457,11 @@ const settingsTranslationProvider = document.getElementById("settingsTranslation
 const settingsTranslationModelSelect = document.getElementById("settingsTranslationModelSelect");
 const settingsTranslationModelCustom = document.getElementById("settingsTranslationModelCustom");
 const settingsTranslationModelCurrent = document.getElementById("settingsTranslationModelCurrent");
-const settingsChatProviderSelect = document.getElementById("settingsChatProviderSelect");
-const settingsChatProviderCurrent = document.getElementById("settingsChatProviderCurrent");
-const settingsCodexChatModelSelect = document.getElementById("settingsCodexChatModelSelect");
-const settingsCodexChatModelCustom = document.getElementById("settingsCodexChatModelCustom");
-const settingsCodexChatModelCurrent = document.getElementById("settingsCodexChatModelCurrent");
 const settingsPiChatProviderSelect = document.getElementById("settingsPiChatProviderSelect");
 const settingsPiChatProviderCustom = document.getElementById("settingsPiChatProviderCustom");
 const settingsPiChatModelSelect = document.getElementById("settingsPiChatModelSelect");
 const settingsPiChatModelCustom = document.getElementById("settingsPiChatModelCustom");
 const settingsPiChatModelCurrent = document.getElementById("settingsPiChatModelCurrent");
-const settingsPiChatProviderField = document.getElementById("settingsPiChatProviderField");
-const settingsPiChatModelField = document.getElementById("settingsPiChatModelField");
 const settingsChatArchiveNote = document.getElementById("settingsChatArchiveNote");
 const settingsAgentTtlSelect = document.getElementById("settingsAgentTtlSelect");
 const settingsAgentClearAllBtn = document.getElementById("settingsAgentClearAllBtn");
@@ -1558,7 +1551,7 @@ function renderSettingsApiStatus() {
   const apiStatus = state.runtimeSettings?.api_status || {};
   [
     ["deepseek", "DeepSeek"],
-    ["codex", "Codex exec"],
+    ["pi", "Pi CLI"],
   ].forEach(([key, label]) => {
     const service = apiStatus[key] || {};
     const row = document.createElement("div");
@@ -1584,8 +1577,7 @@ function renderSettingsApiStatus() {
     } else {
       const cliStatus = service.cli_available ? "CLI 可见" : "CLI 缺失";
       const execStatus = service.exec_available ? "exec 可用" : "exec 不可用";
-      const modelsStatus = service.models_readable ? "models 可读" : "models fallback";
-      summary.textContent = `${cliStatus} · ${execStatus} · ${modelsStatus}`;
+      summary.textContent = `${cliStatus} · ${execStatus}`;
     }
     head.appendChild(summary);
 
@@ -2059,20 +2051,11 @@ function populateSettingsForm() {
     settingsAgentTtlSelect.value = Number(state.runtimeSettings?.agent?.session_ttl_hours) === 24 ? "24" : "72";
   }
   settingsTranslationProvider.value = llm.translation?.provider || "deepseek";
-  if (settingsChatProviderSelect) {
-    settingsChatProviderSelect.value = llm.chat?.provider || "codex";
-  }
   populateModelSelect(
     settingsTranslationModelSelect,
     settingsTranslationModelCustom,
     state.runtimeSettings?.model_catalogs?.translation,
     llm.translation?.model || "",
-  );
-  populateModelSelect(
-    settingsCodexChatModelSelect,
-    settingsCodexChatModelCustom,
-    state.runtimeSettings?.model_catalogs?.codex_chat,
-    llm.codex_chat?.model || "",
   );
   populateModelSelect(
     settingsPiChatProviderSelect,
@@ -2105,37 +2088,11 @@ function populateSettingsForm() {
       settingsTranslationModelCurrent.textContent = `当前：${resolvedDefaultTranslationModel}（默认）`;
     }
   }
-  if (settingsChatProviderCurrent) {
-    const providerLabel = { codex: "Codex", pi: "Pi" }[llm.chat?.provider || "codex"];
-    settingsChatProviderCurrent.textContent = `当前：${providerLabel}`;
-  }
-  if (settingsCodexChatModelCurrent) {
-    const currentCodexModel = (llm.codex_chat?.model || "").trim();
-    settingsCodexChatModelCurrent.textContent = currentCodexModel
-      ? `当前：${currentCodexModel}`
-      : "当前：Codex 默认模型";
-  }
   if (settingsPiChatModelCurrent) {
     const currentPiModel = (llm.pi_chat?.model || "").trim();
     settingsPiChatModelCurrent.textContent = currentPiModel
       ? `当前：${currentPiModel}`
       : "当前：Pi 默认模型";
-  }
-  renderChatProviderFieldVisibility();
-}
-
-function renderChatProviderFieldVisibility() {
-  if (!settingsChatProviderSelect) return;
-  const isPi = settingsChatProviderSelect.value === "pi";
-  if (settingsCodexChatModelSelect) {
-    const field = settingsCodexChatModelSelect.closest(".settings-field");
-    if (field) field.classList.toggle("hidden", isPi);
-  }
-  if (settingsPiChatProviderField) {
-    settingsPiChatProviderField.classList.toggle("hidden", !isPi);
-  }
-  if (settingsPiChatModelField) {
-    settingsPiChatModelField.classList.toggle("hidden", !isPi);
   }
 }
 
@@ -2180,12 +2137,6 @@ function runtimeSettingsSavePayload({ hiddenSourceSubkeys = savedFeedHiddenSourc
       translation: {
         provider: llm.translation?.provider || "deepseek",
         model: llm.translation?.model || "",
-      },
-      chat: {
-        provider: llm.chat?.provider || "codex",
-      },
-      codex_chat: {
-        model: llm.codex_chat?.model || "",
       },
       pi_chat: {
         provider: llm.pi_chat?.provider || "ollama",
@@ -2370,8 +2321,6 @@ async function closeSettingsOverlay() {
 async function saveRuntimeSettings() {
   const draftTranslationProvider = settingsTranslationProvider.value || "deepseek";
   const draftTranslationModel = readModelSetting(settingsTranslationModelSelect, settingsTranslationModelCustom);
-  const draftChatProvider = settingsChatProviderSelect?.value || "codex";
-  const draftCodexChatModel = readModelSetting(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
   const draftPiChatProvider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
   const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
   const draftAgentTtl = Number(settingsAgentTtlSelect?.value) === 24 ? 24 : 72;
@@ -2380,15 +2329,11 @@ async function saveRuntimeSettings() {
   try {
     const feedSourceSaveOk = await flushFeedSourceVisibilitySave({ force: true });
     if (!feedSourceSaveOk) return;
-    const previousProvider = state.runtimeSettings?.llm?.chat?.provider || "codex";
-    const previousCodexModel = state.runtimeSettings?.llm?.codex_chat?.model || "";
     const previousPiProvider = state.runtimeSettings?.llm?.pi_chat?.provider || "";
     const previousPiModel = state.runtimeSettings?.llm?.pi_chat?.model || "";
     const payload = runtimeSettingsSavePayload({ hiddenSourceSubkeys: savedFeedHiddenSourceSubkeys() });
     payload.llm.translation.provider = draftTranslationProvider;
     payload.llm.translation.model = draftTranslationModel;
-    payload.llm.chat.provider = draftChatProvider;
-    payload.llm.codex_chat.model = draftCodexChatModel;
     payload.llm.pi_chat.provider = draftPiChatProvider;
     payload.llm.pi_chat.model = draftPiChatModel;
     payload.agent.session_ttl_hours = draftAgentTtl;
@@ -2404,20 +2349,14 @@ async function saveRuntimeSettings() {
     state.settingsFeedHiddenDraft = null;
     state.settingsFeedSaveDirty = false;
     updateFeedSourceRefreshState();
-    const currentProvider = data.llm?.chat?.provider || "codex";
-    const currentCodexModel = data.llm?.codex_chat?.model || "";
     const currentPiProvider = data.llm?.pi_chat?.provider || "";
     const currentPiModel = data.llm?.pi_chat?.model || "";
-    const providerChanged = currentProvider !== previousProvider;
-    const modelChanged = currentProvider === "codex"
-      ? currentCodexModel !== previousCodexModel
-      : (currentPiModel !== previousPiModel || currentPiProvider !== previousPiProvider);
-    if (providerChanged || modelChanged) {
+    if (currentPiModel !== previousPiModel || currentPiProvider !== previousPiProvider) {
       state.detailChatSessionId = "";
       state.detailChatProvider = "";
       state.detailChatModel = "";
       state.detailChatMessages = [];
-      state.detailChatStatus = `${currentProvider === "pi" ? "Pi" : "Codex"} chat 配置已切换，当前临时对话已清空。`;
+      state.detailChatStatus = "Pi chat 配置已切换，当前临时对话已清空。";
     }
     state.settingsMessage = "保存成功。新请求通常立即生效；终验前建议重启 Flask。";
     state.settingsMessageTone = "ready";
@@ -3469,7 +3408,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.4.0";
+  version.textContent = "News Reader v2.1.4.1";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5379,18 +5318,8 @@ function resetDetailChatState({ keepProvider = false } = {}) {
   if (detailChatInput) detailChatInput.value = "";
 }
 
-function currentCodexChatModel() {
-  return (state.runtimeSettings?.llm?.codex_chat?.model || "").trim();
-}
-
-function currentChatProvider() {
-  return (state.runtimeSettings?.llm?.chat?.provider || "codex").trim();
-}
-
 function currentChatModel() {
-  const provider = currentChatProvider();
-  if (provider === "pi") return (state.runtimeSettings?.llm?.pi_chat?.model || "").trim();
-  return currentCodexChatModel();
+  return (state.runtimeSettings?.llm?.pi_chat?.model || "").trim();
 }
 
 function chatModelLabel(meta) {
@@ -5410,25 +5339,9 @@ function parseKeyPoints(raw) {
   }
 }
 
-function fallbackProviderFromAi(ai) {
-  if (!ai?.raw_json) return "";
-  try {
-    return (JSON.parse(ai.raw_json || "{}")?.provider || "").trim();
-  } catch {
-    return "";
-  }
-}
-
-function isCodexFallbackAi(ai) {
-  const provider = fallbackProviderFromAi(ai);
-  return provider.startsWith("codex-fallback") || (ai?.model || "") === "codex-fallback";
-}
-
 function renderDetailChatMeta(item, session) {
   if (!detailChatMeta) return;
   detailChatMeta.innerHTML = "";
-  const provider = session?.provider || currentChatProvider();
-  const label = provider === "pi" ? "Pi" : "Codex";
 
   const source = document.createElement("span");
   source.className = "detail-chat-source";
@@ -5437,13 +5350,13 @@ function renderDetailChatMeta(item, session) {
 
   const modelBadge = document.createElement("span");
   modelBadge.className = "detail-chat-model-badge ok";
-  modelBadge.textContent = `● ${label}${chatModelLabel(session) ? ` · ${chatModelLabel(session)}` : ""}`;
+  modelBadge.textContent = `● Pi${chatModelLabel(session) ? ` · ${chatModelLabel(session)}` : ""}`;
   detailChatMeta.appendChild(modelBadge);
 
-  if (session?.executor_provider && provider === "pi") {
+  if (session?.executor_provider) {
     const contextBadge = document.createElement("span");
     contextBadge.className = "detail-chat-source";
-    contextBadge.textContent = `只读联网 · ${session.executor_provider}`;
+    contextBadge.textContent = `本机 CLI · ${session.executor_provider}`;
     detailChatMeta.appendChild(contextBadge);
   }
 }
@@ -7495,9 +7408,6 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
   const ai = cached?.ai || null;
   const aiStatus = cached?.ai_status || item.ai_status || "none";
   const isTwitterDetail = item.source_type === "twitter" || detail?.source === "Twitter/X";
-  const fallbackProvider = fallbackProviderFromAi(ai);
-  const isCodexFallback = isCodexFallbackAi(ai);
-  const isCodexFallbackBodyOnly = fallbackProvider === "codex-fallback-body-only";
   const stableHighlightPoints = (
     !isTwitterDetail && aiStatus === "success" && ai
   ) ? parseDetailHighlightPoints(ai.key_points_zh) : [];
@@ -7630,14 +7540,8 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
         detailAiBox.classList.remove("hidden");
       }
 
-      statusEl.textContent = isTwitterDetail
-        ? (isCodexFallback ? "已由 GPT 完成正文翻译" : "中文正文翻译已生成")
-        : isCodexFallbackBodyOnly
-          ? "已由 GPT 完成翻译；结构化 fallback 失败，仅保留正文翻译"
-          : isCodexFallback
-            ? "已由 GPT 完成翻译"
-            : "中文摘要与翻译已生成";
-      statusEl.className = isTwitterDetail ? "detail-status ready" : (isCodexFallbackBodyOnly ? "detail-status pending" : "detail-status ready");
+      statusEl.textContent = isTwitterDetail ? "中文正文翻译已生成" : "中文摘要与翻译已生成";
+      statusEl.className = "detail-status ready";
       activateDetailHighlightBody(contentEl, ai.body_zh, cached?.highlights || []);
       activateDetailHighlightPoints(
         detailAiPoints,
@@ -7653,9 +7557,7 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
       stopDetailPolling();
     } else if (aiStatus === "failed") {
       const err = cached?.ai_job?.last_error || item.ai_error || "中文生成失败";
-      statusEl.textContent = err.includes("CODEX_FALLBACK")
-        ? `DeepSeek 失败，Codex fallback 也失败：${err}`
-        : `中文生成失败，可重试：${err}`;
+      statusEl.textContent = `中文生成失败，可重试：${err}`;
       statusEl.className = "detail-status failed";
       if (isTwitterDetail) {
         activateDetailHighlightTwitterBody(
@@ -10637,18 +10539,6 @@ if (settingsAgentClearAllBtn) {
 if (settingsTranslationModelSelect) {
   settingsTranslationModelSelect.addEventListener("change", () => {
     syncModelCustomVisibility(settingsTranslationModelSelect, settingsTranslationModelCustom);
-  });
-}
-
-if (settingsChatProviderSelect) {
-  settingsChatProviderSelect.addEventListener("change", () => {
-    renderChatProviderFieldVisibility();
-  });
-}
-
-if (settingsCodexChatModelSelect) {
-  settingsCodexChatModelSelect.addEventListener("change", () => {
-    syncModelCustomVisibility(settingsCodexChatModelSelect, settingsCodexChatModelCustom);
   });
 }
 

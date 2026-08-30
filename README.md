@@ -2,7 +2,7 @@
 
 本地新闻阅读器（Web 版），数据源来自 `DailyNews`，用于新闻流扫读、稍后阅读、想法沉淀、提醒、跟踪主题与复盘。
 
-当前稳定版本：`v2.1.4.0`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前稳定版本：`v2.1.4.1`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 核心能力
 
@@ -14,7 +14,7 @@
 - **稍后阅读正文抓取**：后台任务通过 opencli 适配器抓取 Reuters、Bloomberg、TechCrunch、Ars、Twitter/X 等正文，写入本地缓存；非 Twitter/X 正文可继续生成中文内容。
 - **研究工作流**：支持新闻想法、板块想法、独立想法、市场方向标签、提醒、跟踪主题与版本化复盘。
 - **正文内新闻研究 Agent**：每篇新闻使用独立短期原文快照会话；右栏右下角悬浮按钮可打开半栏浮窗，并可放大至整栏，正文滚动和聊天互不重排；支持划线引用提问、后台异步任务、SSE 重连、停止/重试、服务重启恢复提示，以及切换新闻后的继续运行。“新会话”会物理删除本篇旧临时数据后重新开始；设置页仍可清空全部临时会话。
-- **LLM / Chat 集成**：DeepSeek、OpenAI/Codex、Pi 等能力按本地配置、Keychain 密钥和 CLI 可用性启用；新闻翻译、中文要点和末段总结的 DeepSeek 请求显式关闭推理。研究 Agent 的 Pi 仅允许 `web_search`/`web_fetch`，Codex 使用 `--ephemeral` 与只读沙箱。
+- **LLM / Chat 集成**：DeepSeek 负责新闻翻译与结构化中文内容，新闻 Chat、归档和研究 Agent 统一使用本机 Pi CLI。Pi 继承本机配置、rules、extensions、tools、skills 与权限，并通过每篇新闻独立的会话参数保持连续对话；后台 Agent 不额外承诺严格只读，实际能力以本机 CLI 配置为准。
 
 ## 输入数据口径
 
@@ -110,6 +110,6 @@ git diff --check
 - 仓库只提交源代码、静态资源、测试、schema、脚本和文档。
 - 本地运行数据不得提交，包括 `news_index.sqlite3`、`news_reader.db`、`media-cache/`、SQLite `*.sqlite3*` / `*.db*` 临时文件等。
 - 新闻研究 Agent 的会话、消息、任务、原文快照和 Pi 临时 session 保存在独立临时位置；默认 TTL 为 72 小时，可在设置中改为 24 小时。“新会话”会物理删除本篇旧临时数据，设置页可清空全部；运行中的任务不因 TTL 清理，服务重启会将未结束任务标记为中断。这些数据不写入主库、sidecar 或常规备份。
-- Agent 只读联网研究允许公开网页搜索/读取并要求给出 HTTP(S) 来源；不允许登录、发帖、提交表单、文件修改或写入 news-reader。没有联网能力时会明确降级为仅基于原文。
+- Agent 研究会话继承本机 Pi CLI 的实际配置、rules、extensions、tools、skills 与权限；新闻原文、用户引用和历史消息仅作为研究资料，不作为执行指令。外部来源应尽量给出 HTTP(S) 链接，无法联网或无法核实时如实说明。
 - `.gitignore` 若存在用户本地脏改，除非任务明确要求，否则不得顺手纳入提交。
 - release notes 统一更新 [CHANGELOG.md](CHANGELOG.md)，不要再把完整版本历史追加到 README。
