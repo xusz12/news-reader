@@ -4112,6 +4112,7 @@ html[data-detail-font="large"] {
 
 .detail-chat-text {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.66;
   color: var(--detail-text);
 }
@@ -4252,6 +4253,7 @@ body.detail-agent-resizing * {
   color: var(--detail-soft);
   background: color-mix(in srgb, var(--accent-soft) 48%, transparent);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.5;
   font-size: 12px;
 }

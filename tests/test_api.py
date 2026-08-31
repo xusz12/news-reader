@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.4.3" in html
-    assert "/static/style.css?v=2.1.4.3" in html
-    assert "/static/app.js?v=2.1.4.3" in html
+    assert "News Reader v2.1.4.4" in html
+    assert "/static/style.css?v=2.1.4.4" in html
+    assert "/static/app.js?v=2.1.4.4" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -4446,9 +4446,9 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
     assert "News Reader v2.1.4.3" in app_source
-    assert "News Reader v2.1.4.3" in index_source
-    assert "/static/style.css?v=2.1.4.3" in index_source
-    assert "/static/app.js?v=2.1.4.3" in index_source
+    assert "News Reader v2.1.4.4" in index_source
+    assert "/static/style.css?v=2.1.4.4" in index_source
+    assert "/static/app.js?v=2.1.4.4" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -8908,9 +8908,9 @@ def test_frontend_article_highlight_contract_and_version():
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
     assert "News Reader v2.1.4.3" in app_source
-    assert "News Reader v2.1.4.3" in index_source
-    assert "/static/style.css?v=2.1.4.3" in index_source
-    assert "/static/app.js?v=2.1.4.3" in index_source
+    assert "News Reader v2.1.4.4" in index_source
+    assert "/static/style.css?v=2.1.4.4" in index_source
+    assert "/static/app.js?v=2.1.4.4" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10381,6 +10381,14 @@ def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
     messages_rule = messages_rule[:messages_rule.index("}")]
     assert "overflow-y: auto" in style_source[style_source.index(".detail-chat-messages {"):style_source.index(".detail-chat-message {")]
     assert "flex: 1 1 auto" in messages_rule
+    chat_text_rule = style_source[style_source.index(".detail-chat-text {", style_source.index(".detail-chat-message {")):]
+    chat_text_rule = chat_text_rule[:chat_text_rule.index("}")]
+    assert "white-space: pre-wrap" in chat_text_rule
+    assert "overflow-wrap: anywhere" in chat_text_rule
+    quote_rule = style_source[style_source.index(".detail-agent-quote,\n.detail-agent-message-quote {"):]
+    quote_rule = quote_rule[:quote_rule.index("}")]
+    assert "white-space: pre-wrap" in quote_rule
+    assert "overflow-wrap: anywhere" in quote_rule
 
 
 def test_agent_frontend_height_defaults_persistence_resize_and_mobile_contract():
