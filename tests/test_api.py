@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.4.2" in html
-    assert "/static/style.css?v=2.1.4.2" in html
-    assert "/static/app.js?v=2.1.4.2" in html
+    assert "News Reader v2.1.4.3" in html
+    assert "/static/style.css?v=2.1.4.3" in html
+    assert "/static/app.js?v=2.1.4.3" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -4445,10 +4445,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.4.2" in app_source
-    assert "News Reader v2.1.4.2" in index_source
-    assert "/static/style.css?v=2.1.4.2" in index_source
-    assert "/static/app.js?v=2.1.4.2" in index_source
+    assert "News Reader v2.1.4.3" in app_source
+    assert "News Reader v2.1.4.3" in index_source
+    assert "/static/style.css?v=2.1.4.3" in index_source
+    assert "/static/app.js?v=2.1.4.3" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -8907,10 +8907,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.4.2" in app_source
-    assert "News Reader v2.1.4.2" in index_source
-    assert "/static/style.css?v=2.1.4.2" in index_source
-    assert "/static/app.js?v=2.1.4.2" in index_source
+    assert "News Reader v2.1.4.3" in app_source
+    assert "News Reader v2.1.4.3" in index_source
+    assert "/static/style.css?v=2.1.4.3" in index_source
+    assert "/static/app.js?v=2.1.4.3" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10723,6 +10723,223 @@ function assert(cond, msg) { if (!cond) throw new Error(msg); }
   assert(context.state.detailChatStatus === "重试失败，请稍后重试。", `retry failure status=${context.state.detailChatStatus}`);
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 '''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
+
+
+def test_agent_frontend_archive_button_states_and_sync():
+    """Archive only accepts completed visible Agent answers and preserves the session on both outcomes."""
+    app_source = Path("static/app.js").read_text(encoding="utf-8")
+    index_source = Path("static/index.html").read_text(encoding="utf-8")
+    assert 'id="detailChatArchiveBtn"' in index_source
+    assert 'getElementById("detailChatArchiveBtn")' in app_source
+    assert "function detailChatArchiveMessages()" in app_source
+    assert "async function archiveDetailChat()" in app_source
+    assert "archiveDetailChat();" in app_source
+    assert 'class="detail-note-actions detail-agent-actions"' in index_source
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) throw new Error("front-end bootstrap marker missing");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by archive regression test");
+source = source.replace("let state = {", "var state = {");
+
+const noop = () => {};
+let createdId = 0;
+const makeClassList = () => {
+  const names = new Set();
+  return {
+    add(...values) { values.forEach((value) => names.add(value)); },
+    remove(...values) { values.forEach((value) => names.delete(value)); },
+    toggle(value, force) {
+      const next = force === undefined ? !names.has(value) : !!force;
+      if (next) names.add(value); else names.delete(value);
+      return next;
+    },
+    contains(value) { return names.has(value); },
+  };
+};
+const makeElement = (id) => {
+  const element = {
+    id,
+    value: "",
+    disabled: false,
+    hidden: false,
+    className: "",
+    classList: makeClassList(),
+    style: {
+      height: "",
+      removeProperty(name) { this[name] = ""; },
+    },
+    dataset: {},
+    children: [],
+    options: [],
+    textContent: "",
+    innerHTML: "",
+    appendChild(child) { this.children.push(child); return child; },
+    removeChild(child) { this.children = this.children.filter((entry) => entry !== child); },
+    replaceChildren(...children) { this.children = children; },
+    setAttribute(name, value) { this[name] = value; },
+    removeAttribute(name) { delete this[name]; },
+    addEventListener(name, handler) { this[`on${name}`] = handler; },
+    removeEventListener: noop,
+    focus: noop,
+    blur: noop,
+    click() { this.onclick?.({}); },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    getBoundingClientRect() { return { height: 387 }; },
+    setPointerCapture: noop,
+    releasePointerCapture: noop,
+  };
+  return element;
+};
+const elements = new Map();
+const elementFor = (id) => {
+  if (!elements.has(id)) elements.set(id, makeElement(id));
+  return elements.get(id);
+};
+const document = {
+  getElementById: elementFor,
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  createElement: () => makeElement(`created-${++createdId}`),
+  createTextNode: () => makeElement(`text-${++createdId}`),
+  addEventListener: noop,
+  body: elementFor("body"),
+  documentElement: elementFor("documentElement"),
+};
+class IntersectionObserver { observe() {} disconnect() {} }
+class EventSource { close() {} }
+const localStorage = { getItem: () => null, setItem: noop };
+const window = {
+  addEventListener: noop,
+  removeEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  getComputedStyle: () => ({ paddingTop: "0px", paddingBottom: "0px", borderTopWidth: "0px", borderBottomWidth: "0px" }),
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  EventSource,
+  localStorage,
+};
+
+let archiveMode = "pending";
+let archiveCalls = 0;
+let archivePayload = null;
+let releaseArchive = null;
+const fetch = async (url, init = {}) => {
+  if (!url.includes("/chat/archive")) {
+    return { ok: false, status: 500, json: async () => ({ ok: false, error: "unexpected_fetch" }) };
+  }
+  archiveCalls += 1;
+  archivePayload = JSON.parse(init.body);
+  if (archiveMode === "pending") {
+    return new Promise((resolve) => {
+      releaseArchive = () => resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          provider: "pi",
+          model: "pi-test",
+          has_note: 1,
+          note: { note: "旧想法\n\n---\n【Chat 归档】\n归档结论" },
+          note_preview: "旧想法 归档结论",
+        }),
+      });
+    });
+  }
+  return { ok: false, status: 502, json: async () => ({ ok: false, error: "provider_failed" }) };
+};
+const context = {
+  console, document, window, localStorage, IntersectionObserver, EventSource, fetch,
+  URL, URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+ (async () => {
+const item = { id: "news-1", url: "https://example.com/news-1", has_note: 0, note_preview: "" };
+context.state.selectedId = item.id;
+context.state.itemsById = new Map([[item.id, item]]);
+context.state.detailChatPanelOpen = true;
+context.state.detailChatSession = { id: "session-1", provider: "pi", model: "pi-test" };
+context.state.runtimeSettings = { llm: { pi_chat: { model: "pi-test" } } };
+context.state.detailCacheByUrl = new Map([[item.url, { note: { note: "旧想法" }, has_note: 1 }]]);
+let rerenderCount = 0;
+let noteRefreshCount = 0;
+context.rerenderOne = () => { rerenderCount += 1; };
+context.refreshDetailNoteUI = () => { noteRefreshCount += 1; };
+const archiveButton = elements.get("detailChatArchiveBtn");
+const input = elements.get("detailChatInput");
+const sendButton = elements.get("detailChatSendBtn");
+
+context.state.detailChatMessages = [];
+context.state.detailChatJobs = [];
+context.renderDetailChat(item);
+assert(archiveButton.disabled, "empty session enabled archive");
+
+context.state.detailChatMessages = [{ role: "user", content: "问题" }];
+context.renderDetailChat(item);
+assert(archiveButton.disabled, "user-only session enabled archive");
+
+context.state.detailChatMessages = [
+  { role: "user", content: "问题", job_id: "job-1" },
+  { role: "assistant", content: "回答", job_id: "job-1" },
+];
+context.renderDetailChat(item);
+assert(!archiveButton.disabled, "completed answer did not enable archive");
+
+context.state.detailChatJobs = [{ id: "job-2", status: "running" }];
+context.renderDetailChat(item);
+assert(archiveButton.disabled, "running job enabled archive");
+assert(input.disabled && sendButton.disabled, "running job left composer enabled");
+context.state.detailChatJobs = [];
+
+const messagesBefore = JSON.stringify(context.state.detailChatMessages);
+const sessionBefore = JSON.stringify(context.state.detailChatSession);
+const firstArchive = context.archiveDetailChat();
+await Promise.resolve();
+assert(context.state.detailChatArchiving, "archive did not enter busy state");
+assert(archiveButton.disabled && input.disabled && sendButton.disabled, "archive busy state left controls enabled");
+const duplicateArchive = context.archiveDetailChat();
+await duplicateArchive;
+assert(archiveCalls === 1, "archive allowed a duplicate request");
+releaseArchive();
+await firstArchive;
+assert(archiveCalls === 1, `archive calls=${archiveCalls}`);
+assert(archivePayload.model === "pi-test", "archive did not use the current Pi model");
+assert(JSON.stringify(archivePayload.messages) === JSON.stringify([
+  { role: "user", content: "问题" },
+  { role: "assistant", content: "回答" },
+]), `archive payload=${JSON.stringify(archivePayload)}`);
+assert(context.state.detailChatArchiving === false, "archive remained busy after success");
+assert(context.state.detailChatStatus === "已归档到想法。", `success status=${context.state.detailChatStatus}`);
+assert(context.state.detailChatSession.id === "session-1", "archive replaced the Agent session");
+assert(JSON.stringify(context.state.detailChatSession) === sessionBefore, "archive changed session state");
+assert(JSON.stringify(context.state.detailChatMessages) === messagesBefore, "archive changed Agent messages");
+assert(item.has_note === 1 && item.note_preview === "旧想法 归档结论", "archive did not sync item preview");
+assert(context.state.detailCacheByUrl.get(item.url).note.note.includes("归档结论"), "archive did not sync detail note");
+assert(rerenderCount === 1 && noteRefreshCount === 1, "archive did not refresh list/detail note UI");
+
+archiveMode = "failure";
+const noteBeforeFailure = context.state.detailCacheByUrl.get(item.url).note.note;
+await context.archiveDetailChat();
+assert(archiveCalls === 2, `failure calls=${archiveCalls}`);
+assert(context.state.detailChatArchiving === false, "failed archive remained busy");
+assert(context.state.detailChatStatus === "Pi 归档失败，请稍后重试。", `failure status=${context.state.detailChatStatus}`);
+assert(context.state.detailChatSession.id === "session-1", "failed archive changed the Agent session");
+assert(JSON.stringify(context.state.detailChatMessages) === messagesBefore, "failed archive changed Agent messages");
+assert(context.state.detailCacheByUrl.get(item.url).note.note === noteBeforeFailure, "failed archive changed the existing note");
+assert(rerenderCount === 1 && noteRefreshCount === 1, "failed archive refreshed UI as if written");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+''';
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
 
 

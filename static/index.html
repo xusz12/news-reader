@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.4.2</title>
+    <title>News Reader v2.1.4.3</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.4.2" />
+    <link rel="stylesheet" href="/static/style.css?v=2.1.4.3" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.4.2</span>
+          <span class="topbar-version">v2.1.4.3</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -243,6 +243,7 @@
             <div id="detailAgentQuotePreview" class="detail-agent-quote hidden"></div>
             <textarea id="detailChatInput" class="detail-note-input detail-chat-input" rows="3" maxlength="4000" placeholder="围绕这条新闻提问；需要时 Agent 会搜索公开资料补充。"></textarea>
             <div class="detail-note-actions detail-agent-actions">
+              <button id="detailChatArchiveBtn" class="detail-retry-btn" type="button">归档</button>
               <button id="detailAgentStopBtn" class="detail-retry-btn hidden" type="button">停止生成</button>
               <button id="detailChatSendBtn" class="detail-retry-btn" type="button">发送</button>
             </div>
@@ -956,6 +957,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.4.2"></script>
+    <script src="/static/app.js?v=2.1.4.3"></script>
   </body>
 </html>

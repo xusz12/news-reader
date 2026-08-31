@@ -3415,7 +3415,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.4.2";
+  version.textContent = "News Reader v2.1.4.3";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5681,9 +5681,16 @@ function renderDetailChat(item) {
   }
   detailAgentLauncher?.setAttribute("aria-expanded", "true");
   renderDetailChatMeta(item, session);
-  detailChatInput.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
-  detailChatSendBtn.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
-  if (detailAgentNewBtn) detailAgentNewBtn.disabled = !!activeJob || state.detailChatSending || !contextAvailable;
+  const archiveMessages = detailChatArchiveMessages();
+  const archiveEnabled = !activeJob
+    && !state.detailChatSending
+    && !state.detailChatArchiving
+    && archiveMessages.some((message) => message.role === "assistant");
+  const composerBusy = state.detailChatSending || state.detailChatArchiving;
+  detailChatInput.disabled = !!activeJob || composerBusy || !contextAvailable;
+  detailChatSendBtn.disabled = !!activeJob || composerBusy || !contextAvailable;
+  if (detailChatArchiveBtn) detailChatArchiveBtn.disabled = !archiveEnabled;
+  if (detailAgentNewBtn) detailAgentNewBtn.disabled = !!activeJob || composerBusy || !contextAvailable;
   if (detailAgentStopBtn) {
     detailAgentStopBtn.classList.toggle("hidden", !activeJob);
     detailAgentStopBtn.disabled = state.detailChatSending;
@@ -5754,6 +5761,76 @@ function renderDetailChat(item) {
     detailChatMessages.appendChild(card);
   });
   if (activeJob) startDetailAgentStream(item, activeJob.id);
+}
+
+function detailChatArchiveMessages() {
+  return (state.detailChatMessages || [])
+    .filter((message) => message?.role === "user" || message?.role === "assistant")
+    .map((message) => ({
+      role: message.role,
+      content: typeof message.content === "string" ? message.content.trim() : "",
+    }))
+    .filter((message) => message.content);
+}
+
+async function archiveNewsChat(item, requestPayload) {
+  const res = await fetch(`/api/news/${encodeURIComponent(item.id)}/chat/archive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestPayload),
+  });
+  const payload = await res.json().catch(() => ({ ok: false, error: "archive_request_failed" }));
+  if (!res.ok || !payload.ok) {
+    const error = new Error(payload.error || "archive_request_failed");
+    error.detail = payload.detail || "";
+    throw error;
+  }
+  return payload;
+}
+
+async function archiveDetailChat() {
+  if (!state.selectedId || state.detailChatSending || state.detailChatArchiving || activeDetailAgentJob()) return;
+  const item = state.itemsById.get(state.selectedId);
+  if (!item) return;
+  const messages = detailChatArchiveMessages();
+  if (!messages.some((message) => message.role === "assistant")) return;
+
+  state.detailChatArchiving = true;
+  state.detailChatStatus = "正在归档到想法…";
+  renderDetailChat(item);
+
+  try {
+    const payload = await archiveNewsChat(item, {
+      messages,
+      model: currentChatModel(),
+    });
+    const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
+    cached.has_note = payload.has_note;
+    cached.note = payload.note;
+    cached.note_preview = payload.note_preview || "";
+    if (item.url) state.detailCacheByUrl.set(item.url, cached);
+    item.has_note = payload.has_note;
+    item.note_preview = payload.note_preview || "";
+    state.itemsById.set(item.id, item);
+    rerenderOne(item.id);
+    refreshDetailNoteUI(item);
+    state.detailChatStatus = "已归档到想法。";
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "archive_request_failed";
+    const labelMap = {
+      empty_archive_source: "没有可归档回答。",
+      empty_archive_summary: "没有生成可归档结论。",
+      invalid_archive_summary: "归档结果无效，请重试。",
+      note_too_long: "想法过长，无法追加归档。",
+      provider_busy: "Pi 当前正忙，请稍后重试。",
+      provider_timeout: "Pi 归档超时，请稍后重试。",
+      provider_failed: "Pi 归档失败，请稍后重试。",
+    };
+    state.detailChatStatus = labelMap[code] || "归档失败，请稍后重试。";
+  } finally {
+    state.detailChatArchiving = false;
+    renderDetailChat(item);
+  }
 }
 
 async function sendDetailChatMessage() {
@@ -11435,6 +11512,12 @@ if (detailChatBackBtn) {
 if (detailChatSendBtn) {
   detailChatSendBtn.addEventListener("click", () => {
     sendDetailChatMessage();
+  });
+}
+
+if (detailChatArchiveBtn) {
+  detailChatArchiveBtn.addEventListener("click", () => {
+    archiveDetailChat();
   });
 }
 
