@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.4.4" in html
-    assert "/static/style.css?v=2.1.4.4" in html
-    assert "/static/app.js?v=2.1.4.4" in html
+    assert "News Reader v2.1.4.5" in html
+    assert "/static/style.css?v=2.1.4.5" in html
+    assert "/static/app.js?v=2.1.4.5" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -4440,15 +4440,15 @@ def test_frontend_feed_source_visibility_uses_debounced_save_and_close_refresh()
 
 
 def test_frontend_is_v2120_without_later_visual_experiments():
-    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
-    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
-    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+    app_source = Path("static/app.js").read_text(encoding="utf-8")
+    index_source = Path("static/index.html").read_text(encoding="utf-8")
+    style_source = Path("static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.4.3" in app_source
-    assert "News Reader v2.1.4.4" in index_source
-    assert "/static/style.css?v=2.1.4.4" in index_source
-    assert "/static/app.js?v=2.1.4.4" in index_source
+    assert "News Reader v2.1.4.5" in app_source
+    assert "News Reader v2.1.4.5" in index_source
+    assert "/static/style.css?v=2.1.4.5" in index_source
+    assert "/static/app.js?v=2.1.4.5" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -8902,15 +8902,15 @@ def test_twitter_detail_highlights_use_stable_article_detail_and_gate_ordinary_n
 
 
 def test_frontend_article_highlight_contract_and_version():
-    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
-    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
-    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
+    app_source = Path("static/app.js").read_text(encoding="utf-8")
+    index_source = Path("static/index.html").read_text(encoding="utf-8")
+    style_source = Path("static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.4.3" in app_source
-    assert "News Reader v2.1.4.4" in index_source
-    assert "/static/style.css?v=2.1.4.4" in index_source
-    assert "/static/app.js?v=2.1.4.4" in index_source
+    assert "News Reader v2.1.4.5" in app_source
+    assert "News Reader v2.1.4.5" in index_source
+    assert "/static/style.css?v=2.1.4.5" in index_source
+    assert "/static/app.js?v=2.1.4.5" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10314,9 +10314,9 @@ def test_agent_session_new_and_clear_are_real_and_idempotent(tmp_path: Path, mon
 
 
 def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
-    app_source = Path("/Users/x/news-reader/news-reader/static/app.js").read_text(encoding="utf-8")
-    style_source = Path("/Users/x/news-reader/news-reader/static/style.css").read_text(encoding="utf-8")
-    index_source = Path("/Users/x/news-reader/news-reader/static/index.html").read_text(encoding="utf-8")
+    app_source = Path("static/app.js").read_text(encoding="utf-8")
+    style_source = Path("static/style.css").read_text(encoding="utf-8")
+    index_source = Path("static/index.html").read_text(encoding="utf-8")
 
     assert "[404, 405].includes(status)" in app_source
     assert '"agent_api_unavailable"' in app_source
@@ -10366,7 +10366,7 @@ def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
     assert "state.detailChatPanelMaximized" in app_source
     actions_rule = style_source[style_source.rindex(".detail-agent-actions {"):]
     actions_rule = actions_rule[:actions_rule.index("}")]
-    assert "justify-content: flex-start" in actions_rule
+    assert "justify-content: flex-end" in actions_rule
     assert "--agent-panel-bg: #f7fbff" in style_source
     assert "--agent-panel-bg: #172033" in style_source
     assert "html[data-theme=\"eink\"] .detail-agent-panel" in style_source
@@ -10389,6 +10389,61 @@ def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
     quote_rule = quote_rule[:quote_rule.index("}")]
     assert "white-space: pre-wrap" in quote_rule
     assert "overflow-wrap: anywhere" in quote_rule
+
+
+def test_agent_frontend_traffic_lights_and_right_aligned_actions_contract():
+    """v2.1.4.5 keeps Agent behavior while making the controls compact and unambiguous."""
+    app_source = Path("static/app.js").read_text(encoding="utf-8")
+    index_source = Path("static/index.html").read_text(encoding="utf-8")
+    style_source = Path("static/style.css").read_text(encoding="utf-8")
+
+    assert "News Reader v2.1.4.5" in index_source
+    assert "/static/style.css?v=2.1.4.5" in index_source
+    assert "/static/app.js?v=2.1.4.5" in index_source
+    assert 'version.textContent = "News Reader v2.1.4.5"' in app_source
+
+    collapse = '<button id="detailChatBackBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-collapse" type="button" aria-label="收起 Agent 浮窗" title="收起 Agent 浮窗"></button>'
+    expand = '<button id="detailAgentExpandBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-expand" type="button" aria-label="放大 Agent 浮窗" title="放大 Agent 浮窗"></button>'
+    new_session = '<button id="detailAgentNewBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-new" type="button" aria-label="新会话" title="新会话"></button>'
+    assert collapse in index_source
+    assert expand in index_source
+    assert new_session in index_source
+    assert index_source.index('id="detailChatBackBtn"') < index_source.index('id="detailAgentExpandBtn"')
+    assert index_source.index('id="detailAgentExpandBtn"') < index_source.index('id="detailAgentNewBtn"')
+    assert '>收起</button>' not in index_source
+    assert '>放大</button>' not in index_source
+    assert '>还原</button>' not in index_source
+    assert '>新会话</button>' not in index_source
+
+    assert 'const expandLabel = maximized ? "还原 Agent 浮窗" : "放大 Agent 浮窗";' in app_source
+    assert 'detailAgentExpandBtn.textContent' not in app_source
+    assert 'detailAgentExpandBtn.setAttribute("aria-label", expandLabel);' in app_source
+    assert 'detailAgentExpandBtn.title = expandLabel;' in app_source
+
+    actions_rule = style_source[style_source.rindex(".detail-agent-actions {"):]
+    actions_rule = actions_rule[:actions_rule.index("}")]
+    assert "justify-content: flex-end" in actions_rule
+    header_rule = style_source[style_source.index(".detail-agent-header-actions {"):]
+    header_rule = header_rule[:header_rule.index("}")]
+    assert "flex: 0 0 auto" in header_rule
+    assert "flex-wrap: nowrap" in header_rule
+    assert ".detail-agent-header > :first-child" in style_source
+    assert ".detail-agent-window-control::before" in style_source
+    assert ".detail-agent-window-control-collapse::before" in style_source
+    assert ".detail-agent-window-control-expand::before" in style_source
+    assert ".detail-agent-window-control-new::before" in style_source
+    assert "background: #ff5f57" in style_source
+    assert "background: #febc2e" in style_source
+    assert "background: #28c840" in style_source
+    assert ".detail-agent-window-control:focus-visible" in style_source
+    assert ".detail-agent-window-control:disabled" in style_source
+    assert "html[data-theme=\"eink\"] .detail-agent-window-control::before" in style_source
+    assert 'html[data-theme="eink"] .detail-agent-window-control-collapse::before' in style_source
+    assert 'html[data-theme="eink"] .detail-agent-window-control-expand::before' in style_source
+    assert 'html[data-theme="eink"] .detail-agent-window-control-new::before' in style_source
+    assert 'content: "−"' in style_source
+    assert 'content: "↕"' in style_source
+    assert 'content: "+"' in style_source
 
 
 def test_agent_frontend_height_defaults_persistence_resize_and_mobile_contract():

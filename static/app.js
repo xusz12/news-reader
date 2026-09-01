@@ -3415,7 +3415,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.4.3";
+  version.textContent = "News Reader v2.1.4.5";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5675,9 +5675,9 @@ function renderDetailChat(item) {
   detailChatBody.classList.toggle("is-maximized", maximized);
   syncDetailAgentPanelHeight();
   if (detailAgentExpandBtn) {
-    detailAgentExpandBtn.textContent = maximized ? "还原" : "放大";
-    detailAgentExpandBtn.setAttribute("aria-label", maximized ? "还原 Agent 浮窗" : "放大 Agent 浮窗");
-    detailAgentExpandBtn.title = maximized ? "还原 Agent 浮窗" : "放大 Agent 浮窗";
+    const expandLabel = maximized ? "还原 Agent 浮窗" : "放大 Agent 浮窗";
+    detailAgentExpandBtn.setAttribute("aria-label", expandLabel);
+    detailAgentExpandBtn.title = expandLabel;
   }
   detailAgentLauncher?.setAttribute("aria-expanded", "true");
   renderDetailChatMeta(item, session);

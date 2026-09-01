@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.1.4.4</title>
+    <title>News Reader v2.1.4.5</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.1.4.4" />
+    <link rel="stylesheet" href="/static/style.css?v=2.1.4.5" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.1.4.4</span>
+          <span class="topbar-version">v2.1.4.5</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -232,9 +232,9 @@
               <div id="detailChatMeta" class="detail-meta detail-chat-meta"></div>
             </div>
             <div class="detail-agent-header-actions">
-              <button id="detailAgentExpandBtn" class="detail-retry-btn" type="button" aria-label="放大 Agent 浮窗">放大</button>
-              <button id="detailAgentNewBtn" class="detail-retry-btn" type="button">新会话</button>
-              <button id="detailChatBackBtn" class="detail-retry-btn" type="button">收起</button>
+              <button id="detailChatBackBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-collapse" type="button" aria-label="收起 Agent 浮窗" title="收起 Agent 浮窗"></button>
+              <button id="detailAgentExpandBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-expand" type="button" aria-label="放大 Agent 浮窗" title="放大 Agent 浮窗"></button>
+              <button id="detailAgentNewBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-new" type="button" aria-label="新会话" title="新会话"></button>
             </div>
           </div>
           <div id="detailChatStatus" class="detail-status muted">可围绕这篇新闻提问或开展联网研究。</div>
@@ -957,6 +957,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.1.4.4"></script>
+    <script src="/static/app.js?v=2.1.4.5"></script>
   </body>
 </html>
