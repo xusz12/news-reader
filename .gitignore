@@ -5,3 +5,10 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 app_settings.json
+
+# Local design and experiment artifacts
+.impeccable/
+tmp/
+scripts/experiment_*.py
+PRODUCT.md
+DESIGN.md
