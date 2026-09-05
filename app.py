@@ -10639,14 +10639,35 @@ def api_review_progress(chain_id: int):
 
     conn = db_conn()
     try:
-        row = conn.execute("SELECT status FROM review_chains WHERE id=?", (chain_id,)).fetchone()
-        if not row:
-            return jsonify({"ok": False, "error": "review_not_found"}), 404
-        if row["status"] == "done":
-            return jsonify({"ok": False, "error": "review_already_done"}), 409
+        auto_postponed = False
+        old_plan_review_date = ""
+        new_plan_review_date = ""
+        moved_reminder_ids: list[int] = []
+        try:
+            # Serialize the read/decision/write sequence so two simultaneous progress
+            # submissions cannot both observe the same overdue plan and extend it twice.
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status, plan_review_date FROM review_chains WHERE id=?",
+                (chain_id,),
+            ).fetchone()
+            if not row:
+                conn.rollback()
+                return jsonify({"ok": False, "error": "review_not_found"}), 404
+            if row["status"] == "done":
+                conn.rollback()
+                return jsonify({"ok": False, "error": "review_already_done"}), 409
 
-        ts = now_ts()
-        with conn:
+            ts = now_ts()
+            today = _today_str()
+            old_plan_review_date = (row["plan_review_date"] or "").strip()
+            auto_postponed = row["status"] == "active" and old_plan_review_date <= today
+            new_plan_review_date = old_plan_review_date
+            if auto_postponed:
+                new_plan_review_date = (
+                    datetime.strptime(today, "%Y-%m-%d") + timedelta(days=15)
+                ).strftime("%Y-%m-%d")
+
             cur = conn.execute(
                 """INSERT INTO review_events
                    (chain_id, event_type, event_text, event_date, version_id, metadata_json, created_at)
@@ -10668,11 +10689,61 @@ def api_review_progress(chain_id: int):
                     (chain_id, event_id, title[:REVIEW_EVIDENCE_MAX_LEN],
                      (ev.get("news_summary") or "").strip()[:REVIEW_EVIDENCE_MAX_LEN], url, ts),
                 )
-            conn.execute("UPDATE review_chains SET updated_at=? WHERE id=?", (ts, chain_id))
+
+            if auto_postponed:
+                matching_reminders = conn.execute(
+                    """SELECT id, remind_at
+                       FROM news_reminders
+                       WHERE review_chain_id=? AND status='active' AND event_date=?
+                       ORDER BY id ASC""",
+                    (chain_id, old_plan_review_date),
+                ).fetchall()
+                for reminder in matching_reminders:
+                    try:
+                        canonical_remind_at = parse_reminder_remind_at(reminder["remind_at"])
+                    except ValueError as exc:
+                        raise sqlite3.IntegrityError("invalid_remind_at") from exc
+                    moved_reminder_ids.append(int(reminder["id"]))
+                    conn.execute(
+                        """UPDATE news_reminders
+                           SET event_date=?, remind_at=?, updated_at=?
+                           WHERE id=?""",
+                        (
+                            new_plan_review_date,
+                            f"{new_plan_review_date}{canonical_remind_at[10:]}",
+                            ts,
+                            reminder["id"],
+                        ),
+                    )
+
+                conn.execute(
+                    "UPDATE review_chains SET plan_review_date=?, updated_at=? WHERE id=?",
+                    (new_plan_review_date, ts, chain_id),
+                )
+            else:
+                conn.execute("UPDATE review_chains SET updated_at=? WHERE id=?", (ts, chain_id))
+
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            return jsonify({"ok": False, "error": "review_progress_failed"}), 500
+        except Exception:
+            conn.rollback()
+            raise
 
         row = conn.execute("SELECT * FROM review_chains WHERE id=?", (chain_id,)).fetchone()
         detail = _serialize_review_chain_detail(row, conn)
-        return jsonify({"ok": True, "review": detail})
+        return jsonify(
+            {
+                "ok": True,
+                "review": detail,
+                "auto_postponed": auto_postponed,
+                "old_plan_review_date": old_plan_review_date,
+                "new_plan_review_date": new_plan_review_date,
+                "moved_reminder_count": len(moved_reminder_ids),
+                "moved_reminder_ids": moved_reminder_ids,
+            }
+        )
     finally:
         conn.close()
 

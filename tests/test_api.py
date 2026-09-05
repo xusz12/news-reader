@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.1.4.5" in html
-    assert "/static/style.css?v=2.1.4.5" in html
-    assert "/static/app.js?v=2.1.4.5" in html
+    assert "News Reader v2.1.4.6" in html
+    assert "/static/style.css?v=2.1.4.6" in html
+    assert "/static/app.js?v=2.1.4.6" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -4445,10 +4445,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.1.4.5" in app_source
-    assert "News Reader v2.1.4.5" in index_source
-    assert "/static/style.css?v=2.1.4.5" in index_source
-    assert "/static/app.js?v=2.1.4.5" in index_source
+    assert "News Reader v2.1.4.6" in app_source
+    assert "News Reader v2.1.4.6" in index_source
+    assert "/static/style.css?v=2.1.4.6" in index_source
+    assert "/static/app.js?v=2.1.4.6" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -7568,6 +7568,216 @@ def test_review_progress(tmp_path: Path, monkeypatch):
     assert review["evidence"][0]["news_title"] == "新政策发布"
 
 
+def test_review_progress_overdue_renews_plan_and_only_matching_reminder(tmp_path: Path, monkeypatch):
+    """An overdue progress save renews the plan and only moves its bound due reminder."""
+    client, app_module = _setup_review_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "_today_str", lambda: "2026-09-04")
+    idea_id = _create_standalone_idea(client)
+    created = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "到期判断", "criteria": "标准", "plan_review_date": "2020-01-01",
+    })
+    chain_id = created.get_json()["review"]["id"]
+
+    matching = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2020-01-01", "remind_at": "2020-01-01T14:30",
+    }).get_json()["reminder_id"]
+    other_date = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2020-01-02", "remind_at": "2020-01-02T16:45",
+    }).get_json()["reminder_id"]
+    completed = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2020-01-01", "remind_at": "2020-01-01T17:00",
+    }).get_json()["reminder_id"]
+    dismissed = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2020-01-01", "remind_at": "2020-01-01T18:15",
+    }).get_json()["reminder_id"]
+
+    db_path = tmp_path / "news_index.sqlite3"
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("UPDATE news_reminders SET status='done' WHERE id=?", (completed,))
+        conn.execute("UPDATE news_reminders SET status='dismissed' WHERE id=?", (dismissed,))
+        cursor = conn.execute(
+            """INSERT INTO news_reminders
+               (item_id, item_title_snapshot, item_url_snapshot, event_title, event_date,
+                remind_at, note, status, review_chain_id, created_at, updated_at)
+               VALUES (NULL, ?, '', ?, ?, ?, '', 'active', NULL, ?, ?)""",
+            ("无绑定提醒", "无绑定提醒", "2020-01-01", "2020-01-01 19:20:00", "2026-09-04 10:00:00", "2026-09-04 10:00:00"),
+        )
+        unrelated = cursor.lastrowid
+
+    response = client.post(f"/api/reviews/{chain_id}/progress", json={
+        "event_text": "新增到期证据",
+        "event_date": "2026-08-20",
+    })
+    assert response.status_code == 200
+    data = response.get_json()
+    expected_new_date = "2026-09-19"
+    assert data["auto_postponed"] is True
+    assert data["old_plan_review_date"] == "2020-01-01"
+    assert data["new_plan_review_date"] == expected_new_date
+    assert data["moved_reminder_count"] == 1
+    assert data["moved_reminder_ids"] == [matching]
+
+    review = data["review"]
+    assert review["plan_review_date"] == expected_new_date
+    event_types = [event["event_type"] for event in review["events"]]
+    assert event_types.count("progress") == 1
+    assert "postponed" not in event_types
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = {
+            row["id"]: dict(row)
+            for row in conn.execute(
+                "SELECT id, event_date, remind_at, status FROM news_reminders WHERE review_chain_id=? ORDER BY id",
+                (chain_id,),
+            )
+        }
+        unrelated_row = conn.execute(
+            "SELECT event_date, remind_at, status, review_chain_id FROM news_reminders WHERE id=?",
+            (unrelated,),
+        ).fetchone()
+    assert rows[matching]["event_date"] == expected_new_date
+    assert rows[matching]["remind_at"] == f"{expected_new_date} 14:30:00"
+    assert rows[matching]["status"] == "active"
+    assert rows[other_date] == {
+        "id": other_date, "event_date": "2020-01-02", "remind_at": "2020-01-02 16:45:00", "status": "active",
+    }
+    assert rows[completed] == {
+        "id": completed, "event_date": "2020-01-01", "remind_at": "2020-01-01 17:00:00", "status": "done",
+    }
+    assert rows[dismissed] == {
+        "id": dismissed, "event_date": "2020-01-01", "remind_at": "2020-01-01 18:15:00", "status": "dismissed",
+    }
+    assert tuple(unrelated_row) == ("2020-01-01", "2020-01-01 19:20:00", "active", None)
+
+
+def test_review_progress_no_reminder_and_future_plan_do_not_move_reminders(tmp_path: Path, monkeypatch):
+    """No reminder is created, and a future review records progress without renewal."""
+    client, app_module = _setup_review_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "_today_str", lambda: "2026-09-04")
+
+    overdue_idea = _create_standalone_idea(client, "无提醒到期想法")
+    overdue = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(overdue_idea),
+        "judgment": "无提醒到期判断", "plan_review_date": "2020-01-01",
+    }).get_json()["review"]["id"]
+    overdue_response = client.post(f"/api/reviews/{overdue}/progress", json={
+        "event_text": "记录到期进展", "event_date": "2026-09-04",
+    })
+    assert overdue_response.status_code == 200
+    overdue_data = overdue_response.get_json()
+    assert overdue_data["auto_postponed"] is True
+    assert overdue_data["moved_reminder_count"] == 0
+    assert overdue_data["review"]["plan_review_date"] == "2026-09-19"
+    assert not client.get("/api/reminders?filter=all").get_json()["items"]
+
+    future_idea = _create_standalone_idea(client, "未到期想法")
+    future = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(future_idea),
+        "judgment": "未到期判断", "plan_review_date": "2099-01-01",
+    }).get_json()["review"]["id"]
+    future_reminder = client.post(f"/api/reviews/{future}/reminders", json={
+        "event_date": "2099-01-01", "remind_at": "2099-01-01T08:15",
+    }).get_json()["reminder_id"]
+    future_response = client.post(f"/api/reviews/{future}/progress", json={
+        "event_text": "提前记录进展", "event_date": "2026-09-04",
+    })
+    assert future_response.status_code == 200
+    future_data = future_response.get_json()
+    assert future_data["auto_postponed"] is False
+    assert future_data["old_plan_review_date"] == "2099-01-01"
+    assert future_data["new_plan_review_date"] == "2099-01-01"
+    assert future_data["moved_reminder_count"] == 0
+    assert not any(event["event_type"] == "postponed" for event in future_data["review"]["events"])
+
+    with sqlite3.connect(str(tmp_path / "news_index.sqlite3")) as conn:
+        reminder = conn.execute(
+            "SELECT event_date, remind_at, status FROM news_reminders WHERE id=?", (future_reminder,)
+        ).fetchone()
+    assert reminder == ("2099-01-01", "2099-01-01 08:15:00", "active")
+
+
+def test_review_progress_repeated_same_day_does_not_renew_again(tmp_path: Path, monkeypatch):
+    """Once the first save makes the plan future, another same-day save is not a second renewal."""
+    client, app_module = _setup_review_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "_today_str", lambda: "2026-09-04")
+    idea_id = _create_standalone_idea(client)
+    chain_id = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "重复记录判断", "plan_review_date": "2020-01-01",
+    }).get_json()["review"]["id"]
+    reminder_id = client.post(f"/api/reviews/{chain_id}/reminders", json={
+        "event_date": "2020-01-01", "remind_at": "2020-01-01T09:05",
+    }).get_json()["reminder_id"]
+
+    first = client.post(f"/api/reviews/{chain_id}/progress", json={
+        "event_text": "第一次进展", "event_date": "2026-09-04",
+    })
+    assert first.status_code == 200
+    first_data = first.get_json()
+    assert first_data["auto_postponed"] is True
+    assert first_data["new_plan_review_date"] == "2026-09-19"
+
+    second = client.post(f"/api/reviews/{chain_id}/progress", json={
+        "event_text": "同日补充进展", "event_date": "2026-09-04",
+    })
+    assert second.status_code == 200
+    second_data = second.get_json()
+    assert second_data["auto_postponed"] is False
+    assert second_data["old_plan_review_date"] == "2026-09-19"
+    assert second_data["new_plan_review_date"] == "2026-09-19"
+    assert second_data["moved_reminder_count"] == 0
+    assert sum(event["event_type"] == "progress" for event in second_data["review"]["events"]) == 2
+    assert not any(event["event_type"] == "postponed" for event in second_data["review"]["events"])
+
+    with sqlite3.connect(str(tmp_path / "news_index.sqlite3")) as conn:
+        reminder = conn.execute(
+            "SELECT event_date, remind_at FROM news_reminders WHERE id=?", (reminder_id,)
+        ).fetchone()
+    assert reminder == ("2026-09-19", "2026-09-19 09:05:00")
+
+
+def test_review_progress_rolls_back_all_writes_when_reminder_move_fails(tmp_path: Path, monkeypatch):
+    """A failed matching-reminder move rolls back progress, evidence, event, and plan changes."""
+    client, app_module = _setup_review_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "_today_str", lambda: "2026-09-04")
+    idea_id = _create_standalone_idea(client)
+    chain_id = client.post("/api/reviews", json={
+        "source_type": "standalone_idea", "source_key": str(idea_id),
+        "judgment": "回滚判断", "plan_review_date": "2020-01-01",
+    }).get_json()["review"]["id"]
+
+    db_path = tmp_path / "news_index.sqlite3"
+    with sqlite3.connect(str(db_path)) as conn:
+        cursor = conn.execute(
+            """INSERT INTO news_reminders
+               (item_id, item_title_snapshot, item_url_snapshot, event_title, event_date,
+                remind_at, note, status, review_chain_id, created_at, updated_at)
+               VALUES (NULL, ?, '', ?, ?, ?, '', 'active', ?, ?, ?)""",
+            ("回滚提醒", "回滚提醒", "2020-01-01", "not-a-time", chain_id, "2026-09-04 10:00:00", "2026-09-04 10:00:00"),
+        )
+        reminder_id = cursor.lastrowid
+
+    response = client.post(f"/api/reviews/{chain_id}/progress", json={
+        "event_text": "不应持久化的进展",
+        "event_date": "2026-09-04",
+        "evidence": [{"news_title": "不应持久化的证据", "news_url": "https://example.com/rollback"}],
+    })
+    assert response.status_code == 500
+    assert response.get_json() == {"error": "review_progress_failed", "ok": False}
+
+    detail = client.get(f"/api/reviews/{chain_id}").get_json()["review"]
+    assert detail["plan_review_date"] == "2020-01-01"
+    assert len(detail["events"]) == 1
+    assert not detail["evidence"]
+    with sqlite3.connect(str(db_path)) as conn:
+        reminder = conn.execute(
+            "SELECT event_date, remind_at, status FROM news_reminders WHERE id=?", (reminder_id,)
+        ).fetchone()
+    assert reminder == ("2020-01-01", "not-a-time", "active")
+
+
 def test_review_revise(tmp_path: Path, monkeypatch):
     client, _ = _setup_review_env(tmp_path, monkeypatch)
     idea_id = _create_standalone_idea(client)
@@ -7910,6 +8120,191 @@ def test_review_progress_with_evidence_complete(tmp_path: Path, monkeypatch):
     # Evidence should be linked to the progress event
     event_id = review["events"][-1]["id"]
     assert all(ev["event_id"] == event_id for ev in review["evidence"])
+
+
+def test_review_progress_frontend_refreshes_review_list_and_badges():
+    """Saving progress must reload the review list and both navigation counters."""
+    script = r'''
+const fs = require("fs");
+const vm = require("vm");
+let source = fs.readFileSync("static/app.js", "utf8");
+if (!source.includes("\nautoReindexAndLoad();")) {
+  throw new Error("front-end bootstrap marker missing");
+}
+source = source.replace("let state = {", "var state = {");
+source = source.replace("\nautoReindexAndLoad();", "\n// bootstrap skipped by review progress refresh test");
+
+const noop = () => {};
+const elementMap = new Map();
+function makeElement(id = "") {
+  const listeners = new Map();
+  const classList = {
+    add: noop,
+    remove: noop,
+    toggle: noop,
+    contains: () => false,
+  };
+  const base = {
+    id,
+    value: "",
+    disabled: false,
+    hidden: false,
+    textContent: "",
+    innerHTML: "",
+    className: "",
+    children: [],
+    options: [],
+    dataset: {},
+    style: {},
+    classList,
+    parentElement: null,
+    parentNode: null,
+    addEventListener(type, handler) { listeners.set(type, handler); },
+    removeEventListener: noop,
+    appendChild(child) { this.children.push(child); return child; },
+    insertBefore(child) { this.children.push(child); return child; },
+    removeChild: noop,
+    replaceChildren() { this.children = []; },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    setAttribute: noop,
+    removeAttribute: noop,
+    focus: noop,
+    blur: noop,
+    click() {
+      const handler = listeners.get("click");
+      return handler ? handler() : undefined;
+    },
+    remove: noop,
+    getBoundingClientRect: () => ({ top: 0, left: 0, right: 300, bottom: 300, width: 300, height: 300 }),
+  };
+  return new Proxy(base, {
+    get(target, prop) {
+      if (prop === "_listeners") return listeners;
+      if (prop in target) return target[prop];
+      if (["parentElement", "parentNode", "firstChild", "firstElementChild"].includes(prop)) return null;
+      if (["clientWidth", "clientHeight", "scrollWidth", "scrollHeight", "scrollTop", "scrollLeft", "offsetWidth", "offsetHeight"].includes(prop)) return 0;
+      if (prop === "length") return 0;
+      if (prop === Symbol.iterator) return function* () {};
+      return noop;
+    },
+    set(target, prop, value) { target[prop] = value; return true; },
+  });
+}
+function elementFor(id) {
+  if (!elementMap.has(id)) elementMap.set(id, makeElement(id));
+  return elementMap.get(id);
+}
+const document = {
+  getElementById: elementFor,
+  querySelector: () => elementFor("query"),
+  querySelectorAll: () => [],
+  createElement: (tag) => makeElement(tag),
+  addEventListener: noop,
+  body: elementFor("body"),
+  documentElement: elementFor("documentElement"),
+};
+const localStorage = { getItem: () => null, setItem: noop, removeItem: noop };
+let nextTimerId = 0;
+const window = {
+  addEventListener: noop,
+  matchMedia: () => ({ matches: false, addEventListener: noop, removeEventListener: noop }),
+  requestAnimationFrame: (callback) => callback(),
+  setTimeout,
+  clearTimeout,
+  setInterval: () => ++nextTimerId,
+  clearInterval,
+  confirm: () => false,
+  innerWidth: 1200,
+  innerHeight: 800,
+  localStorage,
+};
+class IntersectionObserver { observe() {} disconnect() {} }
+
+const calls = [];
+const updatedReview = {
+  id: 7,
+  status: "active",
+  effective_status: "in_progress",
+  source_type: "standalone_idea",
+  source_note: "想法",
+  source_tag_label: "",
+  source_snapshot: {},
+  current_judgment: "判断",
+  current_version: 1,
+  plan_review_date: "2026-09-19",
+  result: "",
+  completed_at: "",
+  versions: [],
+  events: [],
+  evidence: [],
+};
+const response = (payload) => ({ ok: true, status: 200, json: async () => payload });
+const fetch = async (url, init = {}) => {
+  calls.push({ url, init });
+  if (url === "/api/reviews/7/progress") {
+    return response({
+      ok: true,
+      review: updatedReview,
+      auto_postponed: true,
+      old_plan_review_date: "2020-01-01",
+      new_plan_review_date: "2026-09-19",
+      moved_reminder_count: 1,
+    });
+  }
+  if (url.startsWith("/api/reviews?")) {
+    return response({ items: [updatedReview], total: 1, page: 1, pages: 1, has_more: false });
+  }
+  if (url === "/api/nav-summary") {
+    return response({ ok: true, summary: { feed_unread: 0, read_later_unread: 0, pending_review: 0 } });
+  }
+  if (url === "/api/reminders/summary") {
+    return response({ ok: true, summary: { total: 1, active_total: 1, due_total: 0, done_total: 0, dismissed_total: 0 } });
+  }
+  return response({ ok: true, items: [], summary: {}, page: 1, pages: 1, total: 0, has_more: false });
+};
+
+const context = {
+  console, document, window, localStorage, IntersectionObserver, fetch,
+  URL, URLSearchParams, Date, Map, Set, JSON, encodeURIComponent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "static/app.js" });
+
+(async () => {
+  context.state.collection = "reviews";
+  context.state.currentReview = { ...updatedReview, plan_review_date: "2020-01-01" };
+  const save = elementFor("reviewProgressSaveBtn")._listeners.get("click");
+  if (!save) throw new Error("review progress save handler missing");
+  elementFor("reviewProgressText").value = "新增进展";
+  elementFor("reviewProgressDate").value = "2026-09-04";
+  await save();
+
+  const progressCalls = calls.filter((call) => call.url === "/api/reviews/7/progress");
+  if (progressCalls.length !== 1) throw new Error(`progress calls=${progressCalls.length}`);
+  const body = JSON.parse(progressCalls[0].init.body);
+  if (body.event_text !== "新增进展" || body.event_date !== "2026-09-04") {
+    throw new Error(`unexpected progress body=${JSON.stringify(body)}`);
+  }
+  if (calls.filter((call) => call.url.startsWith("/api/reviews?")).length < 1) {
+    throw new Error("review list was not refreshed");
+  }
+  if (calls.filter((call) => call.url === "/api/nav-summary").length < 1) {
+    throw new Error("navigation summary was not refreshed");
+  }
+  if (calls.filter((call) => call.url === "/api/reminders/summary").length < 1) {
+    throw new Error("reminder summary was not refreshed");
+  }
+  if (!elementFor("listHint").textContent.includes("已记录进展，下次复盘：2026-09-19")) {
+    throw new Error(`unexpected success hint=${elementFor("listHint").textContent}`);
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+'''
+    subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
 
 
 def test_review_news_reminders_migration_compatible(tmp_path: Path, monkeypatch):
@@ -8907,10 +9302,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.1.4.5" in app_source
-    assert "News Reader v2.1.4.5" in index_source
-    assert "/static/style.css?v=2.1.4.5" in index_source
-    assert "/static/app.js?v=2.1.4.5" in index_source
+    assert "News Reader v2.1.4.6" in app_source
+    assert "News Reader v2.1.4.6" in index_source
+    assert "/static/style.css?v=2.1.4.6" in index_source
+    assert "/static/app.js?v=2.1.4.6" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -9194,6 +9589,27 @@ if (criteriaEls.length !== 1) {
 }
 if (criteriaEls[0].textContent !== "成立标准：标准") {
   throw new Error(`unexpected criteria text: ${criteriaEls[0].textContent}`);
+}
+
+context.renderReviewTimeline({
+  versions: [],
+  events: [
+    { event_type: "progress", event_date: "2026-09-04", event_text: "新增进展" },
+    {
+      event_type: "postponed",
+      event_date: "2026-09-04",
+      event_text: "记录进展后自动顺延 15 天",
+      metadata: { old_date: "2020-01-01", new_date: "2026-09-19" },
+    },
+  ],
+});
+const eventCards = queryAll(detailReviewTimeline, ".event-card");
+if (eventCards.length !== 1) {
+  throw new Error(`legacy postponed event should be hidden, got ${eventCards.length} cards`);
+}
+const eventTexts = queryAll(detailReviewTimeline, ".review-timeline-event-text");
+if (eventTexts.length !== 1 || eventTexts[0].textContent !== "新增进展") {
+  throw new Error(`unexpected visible review events: ${eventTexts.map((el) => el.textContent).join("|")}`);
 }
 '''
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
@@ -10392,15 +10808,15 @@ def test_agent_frontend_diagnoses_stale_backend_and_contains_composer():
 
 
 def test_agent_frontend_traffic_lights_and_right_aligned_actions_contract():
-    """v2.1.4.5 keeps Agent behavior while making the controls compact and unambiguous."""
+    """v2.1.4.6 keeps Agent behavior while making the controls compact and unambiguous."""
     app_source = Path("static/app.js").read_text(encoding="utf-8")
     index_source = Path("static/index.html").read_text(encoding="utf-8")
     style_source = Path("static/style.css").read_text(encoding="utf-8")
 
-    assert "News Reader v2.1.4.5" in index_source
-    assert "/static/style.css?v=2.1.4.5" in index_source
-    assert "/static/app.js?v=2.1.4.5" in index_source
-    assert 'version.textContent = "News Reader v2.1.4.5"' in app_source
+    assert "News Reader v2.1.4.6" in index_source
+    assert "/static/style.css?v=2.1.4.6" in index_source
+    assert "/static/app.js?v=2.1.4.6" in index_source
+    assert 'version.textContent = "News Reader v2.1.4.6"' in app_source
 
     collapse = '<button id="detailChatBackBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-collapse" type="button" aria-label="收起 Agent 浮窗" title="收起 Agent 浮窗"></button>'
     expand = '<button id="detailAgentExpandBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-expand" type="button" aria-label="放大 Agent 浮窗" title="放大 Agent 浮窗"></button>'

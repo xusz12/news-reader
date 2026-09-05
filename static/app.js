@@ -3415,7 +3415,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.1.4.5";
+  version.textContent = "News Reader v2.1.4.6";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -8941,14 +8941,17 @@ function renderReviewTimeline(review) {
     });
   }
 
-  // Events
-  if (review.events && review.events.length) {
+  // Events. Automatic renewal is reflected by the plan date and reminder; it is
+  // not a separate progress event. Hide legacy renewal events as well so old
+  // records do not reintroduce the removed timeline copy.
+  const visibleEvents = (review.events || []).filter((e) => e.event_type !== "postponed");
+  if (visibleEvents.length) {
     const eventsHeader = document.createElement("div");
     eventsHeader.className = "review-timeline-header";
     eventsHeader.textContent = "进展事件";
     timeline.appendChild(eventsHeader);
 
-    review.events.forEach((e) => {
+    visibleEvents.forEach((e) => {
       const card = document.createElement("div");
       card.className = "review-timeline-card event-card";
       const header = document.createElement("div");
@@ -9498,7 +9501,13 @@ async function reviewProgress(chainId, payload) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) throw new Error(data.error || "review_progress_failed");
-  return data.review;
+  return {
+    review: data.review,
+    auto_postponed: Boolean(data.auto_postponed),
+    old_plan_review_date: data.old_plan_review_date || "",
+    new_plan_review_date: data.new_plan_review_date || data.review?.plan_review_date || "",
+    moved_reminder_count: Number(data.moved_reminder_count || 0),
+  };
 }
 
 async function reviewRevise(chainId, payload) {
@@ -12345,9 +12354,38 @@ if (reviewProgressSaveBtn) {
     setButtonBusy(reviewProgressSaveBtn, true, "保存中…");
     setInlineFeedback(detailReviewProgressForm, "正在保存进展…", { tone: "pending" });
     try {
-      const updated = await reviewProgress(review.id, { event_text: text, event_date: date });
+      const result = await reviewProgress(review.id, { event_text: text, event_date: date });
+      const updated = result.review;
       renderReviewDetail(updated);
-      setHint("进展已记录");
+
+      let refreshFailed = false;
+      try {
+        // The review may leave the current pending filter after auto-renewal. Refresh
+        // the list and counters, then restore the just-updated detail in the right pane.
+        await loadFirstPage();
+      } catch {
+        refreshFailed = true;
+      }
+      if (state.collection === "reviews") {
+        state.selectedReviewId = updated.id;
+        detailEmpty.classList.add("hidden");
+        detailReviewBody.classList.remove("hidden");
+        renderReviewDetail(updated);
+        syncReviewRowSelection();
+        openDetailOnMobile();
+        updateWorkspaceLayout();
+      }
+      const navRefresh = await Promise.allSettled([
+        refreshNavSummary(),
+        refreshReminderSummary(),
+      ]);
+      if (navRefresh.some((entry) => entry.status === "rejected")) refreshFailed = true;
+
+      const nextDate = result.new_plan_review_date || updated.plan_review_date || "-";
+      const successHint = result.auto_postponed
+        ? `已记录进展，下次复盘：${nextDate}`
+        : "进展已记录";
+      setHint(refreshFailed ? `${successHint}，列表或角标刷新失败，请稍后刷新。` : successHint);
     } catch (err) {
       setInlineFeedback(
         detailReviewProgressForm,
