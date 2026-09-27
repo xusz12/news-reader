@@ -39,6 +39,9 @@ from llm_client import (
 from parser import parse_daily_errors
 from scanner import apply_schema, list_daily_files, reindex
 from secret_store import SecretStoreError, delete_secret, has_secret, read_secret, write_secret
+from updater import STATE_PATH as UPDATE_STATE_PATH
+from updater import git_state as update_git_state
+
 from settings import (
     DEFAULT_PI_CHAT_MODEL,
     DEFAULT_PI_CHAT_PROVIDER,
@@ -58,6 +61,16 @@ DAILY_NEWS_DIR = resolve_daily_news_dir()
 DAILY_BRIEFING_DIR = resolve_daily_briefing_dir()
 DB_PATH = resolve_db_path()
 CHANGELOG_PATH = BASE_DIR / "CHANGELOG.md"
+VERSION_PATH = BASE_DIR / "version.json"
+UPDATE_REPOSITORY_URL = "https://github.com/xusz12/news-reader.git"
+UPDATE_CHECK_URL = "https://api.github.com/repos/xusz12/news-reader/tags?per_page=100"
+UPDATE_CHECK_TTL = 300
+UPDATE_TOKEN_TTL = 600
+UPDATE_CHECK_LOCK = threading.Lock()
+UPDATE_CHECK_CACHE: dict | None = None
+UPDATE_TOKENS: dict[str, dict] = {}
+UPDATE_LAUNCH_LOCK = threading.Lock()
+UPDATE_PROCESS: subprocess.Popen | None = None
 
 
 def resolve_media_cache_dir() -> Path:
@@ -7450,6 +7463,131 @@ def api_error_stats():
         return jsonify({"ok": False, "error": "invalid_day"}), 400
     days = load_error_stats(day)
     return jsonify({"ok": True, "day": day, "days": days})
+
+
+def _version_manifest() -> dict:
+    try:
+        payload = json.loads(VERSION_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = {}
+    version = payload.get("version") if isinstance(payload, dict) else None
+    return {"version": version if isinstance(version, str) else "v0.0.0", "repository": UPDATE_REPOSITORY_URL}
+
+
+def _current_commit() -> str:
+    try:
+        result = subprocess.run(["git", "-C", str(BASE_DIR), "rev-parse", "HEAD"], text=True,
+                                capture_output=True, check=False, timeout=3)
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _stable_version(tag: object) -> tuple[int, ...] | None:
+    if not isinstance(tag, str) or not re.fullmatch(r"v\d+(?:\.\d+){2,3}", tag):
+        return None
+    return tuple(int(part) for part in tag[1:].split("."))
+
+
+def _fetch_update_check() -> dict:
+    global UPDATE_CHECK_CACHE
+    now = time.time()
+    with UPDATE_CHECK_LOCK:
+        if UPDATE_CHECK_CACHE and now - UPDATE_CHECK_CACHE.get("checked_at", 0) < UPDATE_CHECK_TTL:
+            return dict(UPDATE_CHECK_CACHE["payload"])
+        req = Request(UPDATE_CHECK_URL, headers={"Accept": "application/vnd.github+json", "User-Agent": "news-reader-updater"})
+        with urlopen(req, timeout=8) as response:
+            tags = json.loads(response.read().decode("utf-8"))
+        if not isinstance(tags, list):
+            raise ValueError("invalid_update_manifest")
+        stable = []
+        for item in tags:
+            if not isinstance(item, dict):
+                continue
+            tag = item.get("name")
+            parsed = _stable_version(tag)
+            commit = ((item.get("commit") or {}).get("sha") if isinstance(item.get("commit"), dict) else "")
+            if parsed and isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+                stable.append({"tag": tag, "version": tag, "commit": commit.lower(), "numeric": parsed})
+        stable.sort(key=lambda x: x["numeric"], reverse=True)
+        manifest = _version_manifest()
+        current = manifest["version"]
+        current_commit = _current_commit()
+        latest = stable[0] if stable else None
+        payload = {
+            "ok": True, "current_version": current, "current_commit": current_commit,
+            "latest": {k: v for k, v in latest.items() if k != "numeric"} if latest else None,
+            "available": bool(latest and latest["numeric"] > (_stable_version(current) or (0,))),
+            "checked_at": int(now), "repository": UPDATE_REPOSITORY_URL,
+            "managed_launcher": os.getenv("NEWS_READER_MANAGED") == "1",
+        }
+        UPDATE_CHECK_CACHE = {"checked_at": now, "payload": payload}
+        return dict(payload)
+
+
+@app.get("/api/version")
+def api_version():
+    manifest = _version_manifest()
+    return jsonify({"ok": True, **manifest, "commit": _current_commit()})
+
+
+@app.get("/api/update/check")
+def api_update_check():
+    try:
+        payload = _fetch_update_check()
+    except (OSError, ValueError, HTTPError, URLError, TimeoutError) as exc:
+        return jsonify({"ok": False, "error": "update_check_failed", "detail": trim_settings_error(exc)}), 502
+    token = uuid.uuid4().hex
+    UPDATE_TOKENS[token] = {"expires_at": time.time() + UPDATE_TOKEN_TTL, "payload": payload}
+    return jsonify({**payload, "check_token": token, "token_expires_in": UPDATE_TOKEN_TTL})
+
+
+@app.get("/api/update/status")
+def api_update_status():
+    try:
+        payload = json.loads(UPDATE_STATE_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        payload = {"status": "idle"}
+    except (OSError, ValueError):
+        return jsonify({"ok": False, "error": "update_status_unavailable"}), 503
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "update_status_unavailable"}), 503
+    return jsonify({"ok": True, **payload})
+
+
+@app.post("/api/update/apply")
+def api_update_apply():
+    body = request.get_json(silent=True) or {}
+    token = body.get("check_token")
+    if not isinstance(token, str):
+        return jsonify({"ok": False, "error": "missing_check_token"}), 400
+    record = UPDATE_TOKENS.pop(token, None)
+    if not record or record["expires_at"] < time.time():
+        return jsonify({"ok": False, "error": "expired_check_token"}), 409
+    payload = record["payload"]
+    latest = payload.get("latest") or {}
+    if not payload.get("available"):
+        return jsonify({"ok": False, "error": "no_update_available"}), 409
+    if os.getenv("NEWS_READER_MANAGED") != "1":
+        return jsonify({"ok": False, "error": "managed_launcher_required"}), 409
+    if payload.get("current_commit") != _current_commit():
+        return jsonify({"ok": False, "error": "current_commit_changed"}), 409
+    if any(body.get(key) != latest.get(key) for key in ("tag", "version", "commit")):
+        return jsonify({"ok": False, "error": "update_target_mismatch"}), 409
+    run_id = uuid.uuid4().hex
+    command = [sys.executable, str(BASE_DIR / "updater.py"), "--repo", str(BASE_DIR), "--run-id", run_id,
+               "--tag", latest["tag"], "--version", latest["version"], "--commit", latest["commit"],
+               "--pid", str(os.getpid()), "--health-url", f"http://127.0.0.1:{os.getenv('NEWS_READER_PORT', '8080')}/api/version"]
+    global UPDATE_PROCESS
+    with UPDATE_LAUNCH_LOCK:
+        if UPDATE_PROCESS is not None and UPDATE_PROCESS.poll() is None:
+            return jsonify({"ok": False, "error": "update_in_progress"}), 409
+        try:
+            UPDATE_PROCESS = subprocess.Popen(command, cwd=BASE_DIR, start_new_session=True,
+                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            return jsonify({"ok": False, "error": "updater_launch_failed"}), 503
+    return jsonify({"ok": True, "status": "updating", "target": latest, "run_id": run_id}), 202
 
 
 @app.get("/api/release-notes")

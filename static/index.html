@@ -912,6 +912,17 @@
             <div id="settingsFeedSourceSubkeys" class="settings-feed-source-list"></div>
           </section>
           <section id="settingsSectionRelease" class="settings-card settings-release-card settings-section-panel hidden">
+          <div class="settings-update-card" aria-live="polite">
+            <div class="settings-release-header">
+              <h3 class="settings-card-title">应用更新</h3>
+              <span id="settingsUpdateStatus" class="settings-release-note">尚未检查</span>
+            </div>
+            <div id="settingsUpdateSummary" class="settings-update-summary">检查固定仓库的稳定版本；更新前会再次绑定目标版本和提交。</div>
+            <div class="settings-update-actions">
+              <button id="settingsUpdateCheckBtn" class="detail-retry-btn" type="button">检查更新</button>
+              <button id="settingsUpdateApplyBtn" class="detail-retry-btn hidden" type="button">确认并更新</button>
+            </div>
+          </div>
           <div class="settings-release-header">
             <h3 class="settings-card-title">更新记录</h3>
             <span class="settings-release-note">数据源：CHANGELOG / What's Changed</span>

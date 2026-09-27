@@ -5932,3 +5932,7 @@ html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-status="fail
   background: #ffffff;
   border: 2px dashed #111827;
 }
+.settings-update-card { margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.settings-update-summary { color: var(--muted); line-height: 1.5; margin: 8px 0 12px; }
+.settings-update-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 390px) { .settings-update-actions { flex-direction: column; } .settings-update-actions button { width: 100%; } }

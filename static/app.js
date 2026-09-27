@@ -122,6 +122,9 @@ let state = {
   settingsSection: "services",
   runtimeSettings: null,
   releaseNotes: [],
+  updateCheck: null,
+  updateApplying: false,
+  updateStatus: null,
   settingsFeedHiddenDraft: null,
   settingsFeedHiddenSaved: null,
   settingsFeedSaveTimer: null,
@@ -475,6 +478,10 @@ const settingsAgentClearAllBtn = document.getElementById("settingsAgentClearAllB
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
 const settingsFeedSourceSubkeys = document.getElementById("settingsFeedSourceSubkeys");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
+const settingsUpdateStatus = document.getElementById("settingsUpdateStatus");
+const settingsUpdateSummary = document.getElementById("settingsUpdateSummary");
+const settingsUpdateCheckBtn = document.getElementById("settingsUpdateCheckBtn");
+const settingsUpdateApplyBtn = document.getElementById("settingsUpdateApplyBtn");
 const detailCloseBtn = document.getElementById("detailCloseBtn");
 const detailAiBox = document.getElementById("detailAiBox");
 const detailAiPoints = document.getElementById("detailAiPoints");
@@ -1532,6 +1539,69 @@ async function fetchReleaseNotes() {
   return Array.isArray(data.items) ? data.items : [];
 }
 
+async function readUpdateStatus() {
+  const response = await fetch("/api/update/status", { cache: "no-store" });
+  const data = await response.json();
+  if (!response.ok || !data.ok) throw new Error(data.error || "update_status_failed");
+  state.updateStatus = data;
+  if (["healthy", "failed", "rolled_back", "rollback_failed"].includes(data.status)) state.updateApplying = false;
+  renderSettingsOverlay();
+  return data;
+}
+
+async function pollUpdateStatus(runId) {
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    try {
+      const data = await readUpdateStatus();
+      if (data.run_id !== runId) {
+        state.updateStatus = null;
+        state.updateApplying = true;
+        renderSettingsOverlay();
+      } else if (["healthy", "failed", "rolled_back", "rollback_failed"].includes(data.status)) return;
+    } catch { /* The service may be unavailable during the restart. */ }
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  }
+  state.updateApplying = false;
+  state.settingsMessage = "仍无法确认服务状态，请检查更新状态或手动检查服务。";
+  state.settingsMessageTone = "failed";
+  renderSettingsOverlay();
+}
+
+async function checkForUpdate() {
+  const res = await fetch("/api/update/check");
+  const data = await res.json();
+  if (!res.ok || !data.ok) throw new Error(data.error || "update_check_failed");
+  state.updateCheck = data;
+  state.updateStatus = null;
+  renderSettingsOverlay();
+  return data;
+}
+
+function renderUpdateCard() {
+  if (!settingsUpdateStatus || !settingsUpdateSummary || !settingsUpdateApplyBtn) return;
+  const check = state.updateCheck;
+  settingsUpdateApplyBtn.classList.toggle("hidden", !(check?.available && check?.latest?.tag && check?.managed_launcher) || state.updateApplying);
+  settingsUpdateApplyBtn.disabled = state.updateApplying;
+  const progress = state.updateStatus;
+  if (progress && progress.status !== "idle") {
+    const labels = {
+      validating: "正在检查本地状态", fetching: "正在获取目标版本", stopping_old: "正在停止旧服务", merging: "正在安全更新",
+      updated: "代码更新完成", starting_new: "正在启动新服务", checking_health: "正在检查新服务",
+      healthy: "更新完成", rolling_back: "新服务异常，正在恢复旧版", rolled_back: "更新失败，旧版已恢复",
+      rollback_failed: "更新失败，自动恢复失败", failed: "更新失败",
+    };
+    settingsUpdateStatus.textContent = labels[progress.status] || progress.status;
+    settingsUpdateSummary.textContent = [progress.error, progress.rollback_error].filter(Boolean).join("；") ||
+      `目标 ${progress.version || ""} · ${(progress.commit || "").slice(0, 8)}`;
+    settingsUpdateApplyBtn.classList.add("hidden");
+    return;
+  }
+  if (!check) { settingsUpdateStatus.textContent = "尚未检查"; settingsUpdateSummary.textContent = "检查固定仓库的稳定版本；更新前会再次绑定目标版本和提交。"; return; }
+  settingsUpdateStatus.textContent = check.available ? "发现新版本" : "已是最新版本";
+  if (check.available) settingsUpdateSummary.textContent = `当前 ${check.current_version}（${(check.current_commit || "").slice(0, 8)}），最新 ${check.latest.version}（${check.latest.commit.slice(0, 8)}）。${check.managed_launcher ? "确认后将安全更新并重启。" : "请先用 python3 updater.py --serve 启动服务，当前只能检查。"}`;
+  else settingsUpdateSummary.textContent = `当前 ${check.current_version}（${(check.current_commit || "").slice(0, 8)}），未发现更高稳定版本。`;
+}
+
 async function saveApiSecret(provider, key) {
   const res = await fetch(`/api/settings/secrets/${provider}`, {
     method: "PUT",
@@ -2112,6 +2182,7 @@ function renderSettingsOverlay() {
   renderSettingsSections();
   renderSettingsApiStatus();
   renderReleaseNotes();
+  renderUpdateCard();
   renderFeedSourceSettings();
   populateSettingsForm();
   if (settingsSaveBtn) settingsSaveBtn.disabled = state.settingsSaving;
@@ -2289,6 +2360,7 @@ async function openSettingsOverlay() {
     state.runtimeSettings = runtimeSettings;
     state.releaseNotes = releaseNotes;
     resetFeedSourceVisibilityDraftState(runtimeSettings?.feed?.hidden_source_subkeys);
+    readUpdateStatus().catch(() => {});
   } catch {
     state.settingsMessage = "读取设置失败，请稍后重试。";
     state.settingsMessageTone = "failed";
@@ -10700,6 +10772,34 @@ if (settingsBackdrop) {
 
 if (settingsCloseBtn) {
   settingsCloseBtn.addEventListener("click", closeSettingsOverlay);
+}
+
+if (settingsUpdateCheckBtn) {
+  settingsUpdateCheckBtn.addEventListener("click", async () => {
+    settingsUpdateCheckBtn.disabled = true;
+    settingsUpdateStatus.textContent = "检查中…";
+    try { await checkForUpdate(); }
+    catch { state.settingsMessage = "检查更新失败，请稍后重试。"; state.settingsMessageTone = "failed"; renderSettingsOverlay(); }
+    finally { settingsUpdateCheckBtn.disabled = false; }
+  });
+}
+if (settingsUpdateApplyBtn) {
+  settingsUpdateApplyBtn.addEventListener("click", async () => {
+    const check = state.updateCheck;
+    if (!check?.available || !check.check_token || !check.latest) return;
+    if (!window.confirm(`确认更新到 ${check.latest.version}？应用将重启。`)) return;
+    state.updateApplying = true; renderSettingsOverlay();
+    try {
+      const latest = check.latest;
+      const res = await fetch("/api/update/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ check_token: check.check_token, tag: latest.tag, version: latest.version, commit: latest.commit }) });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "update_apply_failed");
+      state.settingsMessage = "更新已启动，正在监测重启和健康状态。"; state.settingsMessageTone = "pending";
+      state.updateStatus = null;
+      pollUpdateStatus(data.run_id);
+    } catch { state.settingsMessage = "更新启动失败，当前版本未改变。"; state.settingsMessageTone = "failed"; state.updateApplying = false; }
+    renderSettingsOverlay();
+  });
 }
 
 if (settingsSaveBtn) {
