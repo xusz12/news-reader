@@ -1,5 +1,10 @@
 # Changelog
 
+### 2026-09-28 — v2.2.1 跨机器启动兼容修复
+- 启动脚本在启动服务前检查 Flask / OpenAI 运行依赖；缺少依赖时给出可复制的 requirements 安装命令，不再误报服务健康检查失败。
+- 修复 macOS zsh 下 `status` 只读变量冲突，并保留 launcher 的真实退出码；同步发布版本、页面版本文案与 CSS/JS cache-bust。
+
+
 ### 2026-09-27 — feat: macOS Finder 一键启动与受控生命周期
 - 新增根目录 `启动NewsReader.command` 与轻量 supervisor；默认监听 `127.0.0.1:8080`，保留 `NEWS_READER_HOST` / `NEWS_READER_PORT` 覆盖，并仅在本次服务实例、版本 commit 与静态资源通过健康检查后打开浏览器。
 - 对同项目重复双击复用现有受控实例；通过私有 Unix socket 协调受控更新后的服务重启及失败回退。关闭启动器时仅清理其自有服务进程组，更新中的安全交易完成后再退出；不接管仅因端口响应而发现的外部服务。

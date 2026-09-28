@@ -409,3 +409,48 @@ os.execv(os.environ["TEST_REAL_GIT"], [os.environ["TEST_REAL_GIT"], *sys.argv[1:
             sentinel.wait(timeout=5)
     assert not thread.is_alive()
     assert result == [0]
+
+
+def _run_startup_script_with_fake_python(tmp_path: Path, *, preflight_status: int, launcher_status: int):
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(
+        """#!/bin/sh
+if [ \"$1\" = \"-\" ]; then
+    cat >/dev/null
+    exit %d
+fi
+exit %d
+""" % (preflight_status, launcher_status),
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    env = os.environ.copy()
+    env.update({
+        "NEWS_READER_PYTHON": str(fake_python),
+        "NEWS_READER_NO_ALERT": "1",
+    })
+    return subprocess.run(
+        ["zsh", str(PROJECT_ROOT / "启动NewsReader.command")],
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_startup_script_reports_missing_dependencies_before_health_check(tmp_path: Path):
+    result = _run_startup_script_with_fake_python(tmp_path, preflight_status=1, launcher_status=99)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "pip install -r" in output
+    assert "health check" not in output
+    assert "read-only variable: status" not in output
+
+
+def test_startup_script_uses_non_reserved_exit_code_variable(tmp_path: Path):
+    result = _run_startup_script_with_fake_python(tmp_path, preflight_status=0, launcher_status=7)
+    output = result.stdout + result.stderr
+    assert result.returncode == 7
+    assert "退出码 7" in output
+    assert "read-only variable: status" not in output

@@ -2,7 +2,7 @@
 
 本地新闻阅读器（Web 版），数据源来自 `DailyNews`，用于新闻流扫读、稍后阅读、想法沉淀、提醒、跟踪主题与复盘。
 
-当前稳定版本：`v2.2.0`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前稳定版本：`v2.2.1`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 核心能力
 
@@ -49,7 +49,7 @@
 
 ## 运行方式
 
-macOS 日常使用推荐在 Finder 中双击项目根目录的 `启动NewsReader.command`。它会以项目目录为工作目录启动受控 supervisor，确认本次启动的服务实例及静态资源健康后才打开浏览器。默认访问地址为 `http://127.0.0.1:8080`。终端中也可运行：
+macOS 日常使用推荐在 Finder 中双击项目根目录的 `启动NewsReader.command`。它会先检查 Flask / OpenAI 等 Python 运行依赖；若缺少依赖，会直接给出可复制的 `pip install -r requirements.txt` 命令，不会误报为服务健康检查失败。依赖满足后，它以项目目录为工作目录启动受控 supervisor，确认本次启动的服务实例及静态资源健康后才打开浏览器。默认访问地址为 `http://127.0.0.1:8080`。终端中也可运行：
 
 ```bash
 cd /Users/x/news-reader/news-reader
