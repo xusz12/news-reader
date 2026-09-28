@@ -41,6 +41,7 @@ from scanner import apply_schema, list_daily_files, reindex
 from secret_store import SecretStoreError, delete_secret, has_secret, read_secret, write_secret
 from updater import STATE_PATH as UPDATE_STATE_PATH
 from updater import git_state as update_git_state
+from updater import local_health_url, request_supervisor
 
 from settings import (
     DEFAULT_PI_CHAT_MODEL,
@@ -7528,7 +7529,11 @@ def _fetch_update_check() -> dict:
 @app.get("/api/version")
 def api_version():
     manifest = _version_manifest()
-    return jsonify({"ok": True, **manifest, "commit": _current_commit()})
+    payload = {"ok": True, **manifest, "commit": _current_commit()}
+    instance_id = os.getenv("NEWS_READER_INSTANCE_ID")
+    if instance_id:
+        payload["instance_id"] = instance_id
+    return jsonify(payload)
 
 
 @app.get("/api/update/check")
@@ -7575,18 +7580,38 @@ def api_update_apply():
     if any(body.get(key) != latest.get(key) for key in ("tag", "version", "commit")):
         return jsonify({"ok": False, "error": "update_target_mismatch"}), 409
     run_id = uuid.uuid4().hex
-    command = [sys.executable, str(BASE_DIR / "updater.py"), "--repo", str(BASE_DIR), "--run-id", run_id,
-               "--tag", latest["tag"], "--version", latest["version"], "--commit", latest["commit"],
-               "--pid", str(os.getpid()), "--health-url", f"http://127.0.0.1:{os.getenv('NEWS_READER_PORT', '8080')}/api/version"]
-    global UPDATE_PROCESS
-    with UPDATE_LAUNCH_LOCK:
-        if UPDATE_PROCESS is not None and UPDATE_PROCESS.poll() is None:
-            return jsonify({"ok": False, "error": "update_in_progress"}), 409
+    try:
+        port = int((os.getenv("NEWS_READER_PORT") or "8080").strip())
+    except ValueError:
+        port = 8080
+    health_url = local_health_url(os.getenv("NEWS_READER_HOST") or "127.0.0.1", port)
+    if os.getenv("NEWS_READER_SUPERVISOR_SOCKET"):
         try:
-            UPDATE_PROCESS = subprocess.Popen(command, cwd=BASE_DIR, start_new_session=True,
-                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError:
+            response = request_supervisor(
+                "start_update", pid=os.getpid(), run_id=run_id,
+                tag=latest["tag"], version=latest["version"],
+                commit=latest["commit"], health_url=health_url,
+                instance_id=os.getenv("NEWS_READER_INSTANCE_ID", ""),
+            )
+        except RuntimeError:
             return jsonify({"ok": False, "error": "updater_launch_failed"}), 503
+        if response.get("ok") is not True:
+            error = response.get("error") or "updater_launch_failed"
+            status = 409 if error == "update_in_progress" else 503
+            return jsonify({"ok": False, "error": error}), status
+    else:
+        command = [sys.executable, str(BASE_DIR / "updater.py"), "--repo", str(BASE_DIR), "--run-id", run_id,
+                   "--tag", latest["tag"], "--version", latest["version"], "--commit", latest["commit"],
+                   "--pid", str(os.getpid()), "--health-url", health_url]
+        global UPDATE_PROCESS
+        with UPDATE_LAUNCH_LOCK:
+            if UPDATE_PROCESS is not None and UPDATE_PROCESS.poll() is None:
+                return jsonify({"ok": False, "error": "update_in_progress"}), 409
+            try:
+                UPDATE_PROCESS = subprocess.Popen(command, cwd=BASE_DIR, start_new_session=True,
+                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                return jsonify({"ok": False, "error": "updater_launch_failed"}), 503
     return jsonify({"ok": True, "status": "updating", "target": latest, "run_id": run_id}), 202
 
 

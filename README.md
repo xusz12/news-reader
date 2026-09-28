@@ -2,7 +2,7 @@
 
 本地新闻阅读器（Web 版），数据源来自 `DailyNews`，用于新闻流扫读、稍后阅读、想法沉淀、提醒、跟踪主题与复盘。
 
-当前稳定版本：`v2.1.4.6`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前稳定版本：`v2.2.0`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 核心能力
 
@@ -49,12 +49,31 @@
 
 ## 运行方式
 
+macOS 日常使用推荐在 Finder 中双击项目根目录的 `启动NewsReader.command`。它会以项目目录为工作目录启动受控 supervisor，确认本次启动的服务实例及静态资源健康后才打开浏览器。默认访问地址为 `http://127.0.0.1:8080`。终端中也可运行：
+
+```bash
+cd /Users/x/news-reader/news-reader
+./启动NewsReader.command
+# 等价的受控命令行入口
+python3 updater.py --serve
+```
+
+受控入口保留 `NEWS_READER_HOST` / `NEWS_READER_PORT` 覆盖，例如：
+
+```bash
+NEWS_READER_HOST=localhost NEWS_READER_PORT=8081 ./启动NewsReader.command
+```
+
+同一项目再次双击会复用并打开由该 supervisor 管理、且通过本次实例标识健康校验的服务，不会再启动第二个服务。若端口被其它进程占用，启动会明确失败，不会仅凭旧服务仍可响应就误判为本次启动成功。关闭启动终端或发送中断/终止信号时，supervisor 只清理由自身启动的服务进程组；若更新正在进行，会等更新成功或安全回退后再退出。
+
+仍可直接运行不受控入口：
+
 ```bash
 cd /Users/x/news-reader/news-reader
 python3 app.py
 ```
 
-可通过以下环境变量覆盖本地路径与监听参数：
+直接运行 `app.py` 不启用受控更新；设置页确认更新会返回 `managed_launcher_required`，不会改动 Git。可通过以下环境变量覆盖本地路径与监听参数：
 
 - `NEWS_READER_HOST`：覆盖监听 host。
 - `NEWS_READER_PORT`：覆盖监听 port。
@@ -117,8 +136,8 @@ git diff --check
 
 ## 内置安全更新
 
-设置 → 更新中的“检查更新”只读取固定的 HTTPS 仓库 `https://github.com/xusz12/news-reader.git` 的稳定 `v2.1.4` 或 `v2.1.4.6` 形式 tag，预发布 tag 会被忽略。检查结果会生成短期一次性令牌；只有用户确认同一 tag、版本和 commit 后才会启动更新。
+设置 → 更新中的“检查更新”只读取固定的 HTTPS 仓库 `https://github.com/xusz12/news-reader.git` 的稳定 `vN.N.N` 或 `vN.N.N.N` 形式 tag，预发布 tag 会被忽略。检查结果会生成短期一次性令牌；只有用户确认同一 tag、版本和 commit 后才会启动更新。
 
 更新器拒绝 dirty 工作树、detached HEAD、历史分叉及非当前提交后代，只执行指定 tag 的 `git fetch` 和 `git merge --ff-only`，不执行 `reset --hard`、`git clean`、普通 `pull`，也不修改 `origin`。更新过程使用文件锁和状态文件，受控启动器会停止旧进程、启动新进程并检查 `/api/version` 的 commit；直接 `python3 app.py` 仍只启动当前版本，不执行自动更新。
 
-受控启动请使用 `python3 updater.py --serve`（可设置 `NEWS_READER_PORT`）。直接 `python3 app.py` 仅允许检查更新；确认更新会返回 `managed_launcher_required`，不会触碰 Git。更新进度与失败原因可在设置页查看，或读取只读 `/api/update/status`。新版本健康检查还验证首页、JavaScript 与样式资源；失败时仅在工作树保持干净、分支/HEAD 未被外部修改时执行 `git reset --keep` 回到旧 commit 并重新启动旧服务，无法安全回退时保留明确诊断状态，绝不覆盖用户修改。
+Finder `.command` 与 `python3 updater.py --serve` 使用同一受控 supervisor。它持有单实例锁并跟踪自己启动的服务；更新器提交快进后请求 supervisor 重启新版本，健康失败时先安全回退再由 supervisor 恢复旧版本。健康 URL 匹配实际监听 host/port，通配监听地址使用本机 loopback 探测；每次服务启动另带独立实例标识，避免把端口上旧服务误认为新服务。更新进度与失败原因可在设置页查看，或读取只读 `/api/update/status`。新版本健康检查验证 `/api/version` 的 commit、首页、JavaScript 与样式资源；失败时仅在工作树保持干净、分支/HEAD 未被外部修改时执行 `git reset --keep` 回到旧 commit 并重新启动旧服务，无法安全回退时保留明确诊断状态，绝不覆盖用户修改。
