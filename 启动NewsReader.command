@@ -11,29 +11,76 @@ show_startup_error() {
   fi
 }
 
-PYTHON_BIN="${NEWS_READER_PYTHON:-python3}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  show_startup_error "NewsReader 启动失败：找不到 $PYTHON_BIN。请先安装 Python 3.10+，或设置 NEWS_READER_PYTHON 指向可用的 Python。"
-  exit 1
-fi
+PYTHON_BIN=""
+PYTHON_VALIDATION_OUTPUT=""
 
-if "$PYTHON_BIN" - <<'PY'
-import importlib.util
+validate_python_candidate() {
+  local candidate="$1"
+  local resolved_candidate=""
+  local validation_output=""
+  local validation_status=0
+
+  if [[ "$candidate" == */* ]]; then
+    resolved_candidate="$candidate"
+  else
+    resolved_candidate="$(command -v "$candidate" 2>/dev/null || true)"
+  fi
+  if [[ -z "$resolved_candidate" || ! -x "$resolved_candidate" ]]; then
+    return 1
+  fi
+
+  validation_output=$("$resolved_candidate" - <<'PY' 2>&1
 import sys
 
-required = (("flask", "Flask"), ("openai", "openai"))
-missing = [display_name for module_name, display_name in required
-           if importlib.util.find_spec(module_name) is None]
+missing = []
+try:
+    import flask
+except Exception:
+    missing.append("Flask")
+try:
+    import openai
+except Exception:
+    missing.append("openai")
 if missing:
-    print("缺少 Python 依赖：" + ", ".join(missing), file=sys.stderr)
+    print("缺少或无法导入 Python 依赖：" + ", ".join(missing), file=sys.stderr)
     raise SystemExit(1)
 PY
-then
-  :
+)
+  validation_status=$?
+  if (( validation_status == 0 )); then
+    PYTHON_BIN="$resolved_candidate"
+    return 0
+  fi
+
+  PYTHON_VALIDATION_OUTPUT="$validation_output"
+  return 1
+}
+
+if [[ -n "${NEWS_READER_PYTHON:-}" ]]; then
+  if ! validate_python_candidate "$NEWS_READER_PYTHON"; then
+    [[ -n "$PYTHON_VALIDATION_OUTPUT" ]] && print -u2 -- "$PYTHON_VALIDATION_OUTPUT"
+    show_startup_error "NewsReader 启动前检查失败：NEWS_READER_PYTHON 指向的 Python 缺少 Flask 或 openai。请运行：$NEWS_READER_PYTHON -m pip install -r \"$SCRIPT_DIR/requirements.txt\"，然后重新双击此文件。"
+    exit 1
+  fi
 else
-  dependency_status=$?
-  show_startup_error "NewsReader 启动前检查失败。请在终端运行：$PYTHON_BIN -m pip install -r \"$SCRIPT_DIR/requirements.txt\"，然后重新双击此文件。"
-  exit "$dependency_status"
+  typeset -a python_candidates
+  python_candidates=(
+    "$SCRIPT_DIR/.venv/bin/python"
+    "$HOME/.venvs/news-reader/bin/python"
+    "$(command -v python3 2>/dev/null || true)"
+  )
+
+  for python_candidate in "${python_candidates[@]}"; do
+    [[ -n "$python_candidate" ]] || continue
+    if validate_python_candidate "$python_candidate"; then
+      break
+    fi
+  done
+
+  if [[ -z "$PYTHON_BIN" ]]; then
+    show_startup_error "NewsReader 启动失败：未找到可用的 Python 环境（需要可执行且已安装 Flask、openai）。请运行：python3 -m pip install -r \"$SCRIPT_DIR/requirements.txt\"，或设置 NEWS_READER_PYTHON 指向依赖完整的 Python。"
+    exit 1
+  fi
 fi
 
 # Preserve the historical remote-access behavior without making every direct

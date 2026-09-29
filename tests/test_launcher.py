@@ -531,3 +531,203 @@ def test_startup_script_preserves_explicit_host_over_tailscale(tmp_path: Path):
     )
     assert result.returncode == 0
     assert result.captured_host == "127.0.0.1"
+
+
+def _make_fake_python(path: Path, *, preflight_status: int, marker: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-\" ]; then\n"
+        "    cat >/dev/null\n"
+        f"    exit {preflight_status}\n"
+        "fi\n"
+        f"printf '%s' '{path}' > \"{marker}\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _run_startup_script_with_python_candidates(
+    tmp_path: Path,
+    *,
+    local_preflight_status: int | None = None,
+    home_preflight_status: int | None = None,
+    system_preflight_status: int | None = 0,
+    local_executable: bool = True,
+    explicit_python: Path | None = None,
+    explicit_preflight_status: int | None = None,
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    script = project / "启动NewsReader.command"
+    shutil.copy2(PROJECT_ROOT / "启动NewsReader.command", script)
+    script.chmod(0o755)
+    (project / "launcher.py").write_text("# fake launcher\n", encoding="utf-8")
+
+    home = tmp_path / "home"
+    selected = tmp_path / "selected-python"
+    if local_preflight_status is not None:
+        local_candidate = project / ".venv" / "bin" / "python"
+        _make_fake_python(
+            local_candidate,
+            preflight_status=local_preflight_status,
+            marker=selected,
+        )
+        if not local_executable:
+            local_candidate.chmod(0o644)
+    if home_preflight_status is not None:
+        _make_fake_python(
+            home / ".venvs" / "news-reader" / "bin" / "python",
+            preflight_status=home_preflight_status,
+            marker=selected,
+        )
+
+    fake_bin = tmp_path / "bin"
+    if system_preflight_status is not None:
+        _make_fake_python(
+            fake_bin / "python3",
+            preflight_status=system_preflight_status,
+            marker=selected,
+        )
+    if explicit_python is not None:
+        _make_fake_python(
+            explicit_python,
+            preflight_status=explicit_preflight_status or 0,
+            marker=selected,
+        )
+
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(home),
+        "NEWS_READER_NO_ALERT": "1",
+        "PATH": f"{fake_bin}{os.pathsep}/usr/bin:/bin",
+    })
+    env.pop("NEWS_READER_HOST", None)
+    if explicit_python is not None:
+        env["NEWS_READER_PYTHON"] = str(explicit_python)
+    else:
+        env.pop("NEWS_READER_PYTHON", None)
+
+    result = subprocess.run(
+        ["zsh", str(script)],
+        cwd=project,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    result.selected_python = selected.read_text() if selected.exists() else None
+    return result
+
+
+def test_startup_script_prefers_project_venv_python(tmp_path: Path):
+    result = _run_startup_script_with_python_candidates(
+        tmp_path,
+        local_preflight_status=0,
+        home_preflight_status=0,
+        system_preflight_status=0,
+    )
+    assert result.returncode == 0
+    assert result.selected_python == str(tmp_path / "project" / ".venv" / "bin" / "python")
+
+
+def test_startup_script_falls_back_to_home_venv_after_local_dependency_failure(tmp_path: Path):
+    result = _run_startup_script_with_python_candidates(
+        tmp_path,
+        local_preflight_status=1,
+        home_preflight_status=0,
+        system_preflight_status=0,
+    )
+    assert result.returncode == 0
+    assert result.selected_python == str(tmp_path / "home" / ".venvs" / "news-reader" / "bin" / "python")
+
+
+def test_startup_script_falls_back_to_system_python_after_both_venvs_fail(tmp_path: Path):
+    result = _run_startup_script_with_python_candidates(
+        tmp_path,
+        local_preflight_status=1,
+        home_preflight_status=1,
+        system_preflight_status=0,
+    )
+    assert result.returncode == 0
+    assert result.selected_python == str(tmp_path / "bin" / "python3")
+
+
+def test_startup_script_skips_non_executable_local_python(tmp_path: Path):
+    result = _run_startup_script_with_python_candidates(
+        tmp_path,
+        local_preflight_status=0,
+        system_preflight_status=0,
+        local_executable=False,
+    )
+    assert result.returncode == 0
+    assert result.selected_python == str(tmp_path / "bin" / "python3")
+
+
+def test_startup_script_rejects_import_broken_dependencies(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    script = project / "启动NewsReader.command"
+    shutil.copy2(PROJECT_ROOT / "启动NewsReader.command", script)
+    script.chmod(0o755)
+    launcher_marker = tmp_path / "launcher-called"
+    (project / "launcher.py").write_text(
+        f"from pathlib import Path\nPath({str(launcher_marker)!r}).touch()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "flask.py").write_text("raise ImportError('broken Flask')\n", encoding="utf-8")
+    (tmp_path / "openai.py").write_text("raise RuntimeError('broken openai')\n", encoding="utf-8")
+
+    env = os.environ.copy()
+    env.update({
+        "NEWS_READER_PYTHON": sys.executable,
+        "NEWS_READER_NO_ALERT": "1",
+        "PYTHONPATH": str(tmp_path),
+    })
+    result = subprocess.run(
+        ["zsh", str(script)],
+        cwd=project,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "Flask" in output
+    assert "openai" in output
+    assert "pip install -r" in output
+    assert not launcher_marker.exists()
+
+
+def test_startup_script_does_not_fallback_after_explicit_python_dependency_failure(tmp_path: Path):
+    explicit = tmp_path / "explicit-python"
+    result = _run_startup_script_with_python_candidates(
+        tmp_path,
+        local_preflight_status=0,
+        home_preflight_status=0,
+        system_preflight_status=0,
+        explicit_python=explicit,
+        explicit_preflight_status=1,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert result.selected_python is None
+    assert "NEWS_READER_PYTHON" in output
+    assert "pip install -r" in output
+
+
+def test_startup_script_reports_install_hint_when_all_python_candidates_fail(tmp_path: Path):
+    result = _run_startup_script_with_python_candidates(
+        tmp_path,
+        local_preflight_status=1,
+        home_preflight_status=1,
+        system_preflight_status=1,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert result.selected_python is None
+    assert "未找到可用的 Python 环境" in output
+    assert "pip install -r" in output
