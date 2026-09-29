@@ -49,7 +49,7 @@
 
 ## 运行方式
 
-macOS 日常使用推荐在 Finder 中双击项目根目录的 `启动NewsReader.command`。它会先检查 Flask / OpenAI 等 Python 运行依赖；若缺少依赖，会直接给出可复制的 `pip install -r requirements.txt` 命令，不会误报为服务健康检查失败。依赖满足后，它以项目目录为工作目录启动受控 supervisor，确认本次启动的服务实例及静态资源健康后才打开浏览器。默认访问地址为 `http://127.0.0.1:8080`。终端中也可运行：
+macOS 日常使用推荐在 Finder 中双击项目根目录的 `启动NewsReader.command`。它会先检查 Flask / OpenAI 等 Python 运行依赖；若缺少依赖，会直接给出可复制的 `pip install -r requirements.txt` 命令，不会误报为服务健康检查失败。依赖满足后，它以项目目录为工作目录启动受控 supervisor，确认本次启动的服务实例及静态资源健康后才打开浏览器。若未显式设置 `NEWS_READER_HOST` 且本机已安装并连接 Tailscale，会自动使用 Tailscale IPv4 监听；未检测到可用地址时回退到 `127.0.0.1`。默认访问地址（无可用 Tailscale 时）为 `http://127.0.0.1:8080`。终端中也可运行：
 
 ```bash
 cd /Users/x/news-reader/news-reader
@@ -77,7 +77,7 @@ python3 app.py
 
 - `NEWS_READER_HOST`：覆盖监听 host。
 - `NEWS_READER_PORT`：覆盖监听 port。
-- `NEWS_READER_DB_PATH`：覆盖 SQLite 数据库路径。
+- `NEWS_READER_DB_PATH`：覆盖 SQLite 数据库路径。未设置时，若项目父目录已有历史 `news_index.sqlite3`，优先继续使用该数据库；否则使用项目目录下的 `news_index.sqlite3`。
 - `NEWS_READER_DAILY_NEWS_DIR`：覆盖 DailyNews 输入目录。
 - `NEWS_READER_DAILY_BRIEFING_DIR`：覆盖 Daily Briefing 输入目录。
 - `NEWS_READER_APP_SETTINGS_PATH`：覆盖应用运行设置文件路径。
@@ -85,7 +85,7 @@ python3 app.py
 - `NEWS_READER_AGENT_DB_PATH`：覆盖新闻研究 Agent 独立临时 SQLite 路径；默认与主数据库同目录，文件不进入 Git 或常规新闻库备份。
 - `NEWS_READER_AGENT_RUNTIME_DIR`：覆盖 Pi 研究会话临时目录；默认位于系统临时目录并按会话 TTL 清理。
 
-访问地址取决于 host/port；本机常用形式为 `http://127.0.0.1:<port>`。
+访问地址取决于 host/port；显式设置 `NEWS_READER_HOST` 的优先级高于 Tailscale 自动检测。本机无 Tailscale 时常用形式为 `http://127.0.0.1:<port>`。
 
 ## Tailscale
 
@@ -96,7 +96,7 @@ cd /Users/x/news-reader/news-reader
 scripts/start-tailscale.sh
 ```
 
-脚本会先读取终端环境变量 `DEEPSEEK_API_KEY`；若不存在，再从 macOS Keychain 的 `DEEPSEEK_API_KEY` service 读取；两者都没有时会报错退出。密钥满足后，脚本会读取/校验 Tailscale IPv4，使用该 IP 绑定 `NEWS_READER_HOST`，并直接执行 `python3 app.py` 启动 news-reader；运行脚本后无需再单独启动服务。
+脚本会先读取终端环境变量 `DEEPSEEK_API_KEY`；若不存在，再从 macOS Keychain 的 `DEEPSEEK_API_KEY` service 读取；两者都没有时会报错退出。密钥满足后，脚本会读取/校验 Tailscale IPv4，使用该 IP 绑定 `NEWS_READER_HOST`，并直接执行 `python3 app.py` 启动 news-reader；运行脚本后无需再单独启动服务。Finder 一键启动脚本也会执行同样的 Tailscale IPv4 自动检测，但仍通过受控 supervisor 启动；显式 `NEWS_READER_HOST` 会覆盖自动检测。
 
 ## 配置与 Keychain
 

@@ -9,7 +9,24 @@ DEFAULT_DAILY_NEWS_DIR = Path(
     "/Users/x/Library/Mobile Documents/iCloud~md~obsidian/Documents/DailyNews"
 )
 DEFAULT_DAILY_BRIEFING_DIR = DEFAULT_DAILY_NEWS_DIR / "briefings" / "daily"
-DEFAULT_DB_PATH = Path(__file__).resolve().parent / "news_index.sqlite3"
+PROJECT_DB_PATH = Path(__file__).resolve().parent / "news_index.sqlite3"
+LEGACY_DB_PATH = Path(__file__).resolve().parent.parent / "news_index.sqlite3"
+
+
+def resolve_default_db_path() -> Path:
+    """Keep using the database from pre-repository project layouts when present.
+
+    Older installations stored ``news_index.sqlite3`` beside the repository
+    directory (for example ``~/news-reader/news_index.sqlite3``), while a
+    fresh clone has no such file and should remain self-contained.
+    """
+    if LEGACY_DB_PATH.is_file():
+        return LEGACY_DB_PATH
+    return PROJECT_DB_PATH
+
+
+# Kept as a public compatibility constant for callers that import it.
+DEFAULT_DB_PATH = resolve_default_db_path()
 DEFAULT_APP_SETTINGS_PATH = Path(__file__).resolve().parent / "app_settings.json"
 
 DEFAULT_PI_CHAT_PROVIDER = "ollama"
@@ -60,7 +77,7 @@ def resolve_daily_briefing_dir() -> Path:
 
 def resolve_db_path() -> Path:
     raw = os.environ.get("NEWS_READER_DB_PATH", "").strip()
-    return Path(raw) if raw else DEFAULT_DB_PATH
+    return Path(raw) if raw else resolve_default_db_path()
 
 
 def resolve_app_settings_path() -> Path:

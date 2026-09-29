@@ -1,5 +1,9 @@
 # Changelog
 
+### 待发布 — v2.2.2 数据库路径与 Tailscale 启动修复
+- 兼容历史安装布局：项目父目录存在 `news_index.sqlite3` 时继续使用旧数据库；新克隆没有历史数据库时仍使用项目目录数据库，也可通过 `NEWS_READER_DB_PATH` 显式指定。
+- Finder 一键启动在未显式设置 host 时自动检测可用的 Tailscale IPv4；检测失败回退到 `127.0.0.1`，并继续使用受控 supervisor。
+
 ### 2026-09-28 — v2.2.1 跨机器启动兼容修复
 - 启动脚本在启动服务前检查 Flask / OpenAI 运行依赖；缺少依赖时给出可复制的 requirements 安装命令，不再误报服务健康检查失败。
 - 修复 macOS zsh 下 `status` 只读变量冲突，并保留 launcher 的真实退出码；同步发布版本、页面版本文案与 CSS/JS cache-bust。

@@ -36,6 +36,26 @@ else
   exit "$dependency_status"
 fi
 
+# Preserve the historical remote-access behavior without making every direct
+# launcher invocation expose the service. An explicit host always wins; when
+# it is absent, use a valid Tailscale IPv4 and otherwise keep loopback.
+if [[ -z "${NEWS_READER_HOST:-}" ]] && command -v tailscale >/dev/null 2>&1; then
+  tailscale_host="$(tailscale ip -4 2>/dev/null)"
+  tailscale_status=$?
+  tailscale_host="$(print -r -- "$tailscale_host" | awk 'NF { print $1; exit }')"
+  if (( tailscale_status == 0 )) && [[ -n "$tailscale_host" ]] && awk -F. '
+    NF == 4 {
+      for (i = 1; i <= NF; i++) {
+        if ($i !~ /^[0-9]+$/ || $i > 255) exit 1
+      }
+      exit 0
+    }
+    { exit 1 }
+  ' <<< "$tailscale_host"; then
+    export NEWS_READER_HOST="$tailscale_host"
+  fi
+fi
+
 "$PYTHON_BIN" "$SCRIPT_DIR/launcher.py"
 exit_code=$?
 if (( exit_code != 0 )); then

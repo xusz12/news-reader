@@ -411,14 +411,26 @@ os.execv(os.environ["TEST_REAL_GIT"], [os.environ["TEST_REAL_GIT"], *sys.argv[1:
     assert result == [0]
 
 
-def _run_startup_script_with_fake_python(tmp_path: Path, *, preflight_status: int, launcher_status: int):
+def _run_startup_script_with_fake_python(
+    tmp_path: Path,
+    *,
+    preflight_status: int,
+    launcher_status: int,
+    tailscale_output: str | None = None,
+    tailscale_status: int = 0,
+    explicit_host: str | None = None,
+):
     fake_python = tmp_path / "fake-python"
+    captured_host = tmp_path / "captured-host"
+    captured_port = tmp_path / "captured-port"
     fake_python.write_text(
         """#!/bin/sh
 if [ \"$1\" = \"-\" ]; then
     cat >/dev/null
     exit %d
 fi
+printf '%%s' \"${NEWS_READER_HOST-}\" > \"$TEST_CAPTURE_HOST\"
+printf '%%s' \"${NEWS_READER_PORT-}\" > \"$TEST_CAPTURE_PORT\"
 exit %d
 """ % (preflight_status, launcher_status),
         encoding="utf-8",
@@ -428,8 +440,29 @@ exit %d
     env.update({
         "NEWS_READER_PYTHON": str(fake_python),
         "NEWS_READER_NO_ALERT": "1",
+        "TEST_CAPTURE_HOST": str(captured_host),
+        "TEST_CAPTURE_PORT": str(captured_port),
     })
-    return subprocess.run(
+    if explicit_host is not None:
+        env["NEWS_READER_HOST"] = explicit_host
+    else:
+        env.pop("NEWS_READER_HOST", None)
+    if tailscale_output is not None or tailscale_status != 0:
+        fake_tailscale = tmp_path / "tailscale"
+        fake_tailscale.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"${TEST_TAILSCALE_OUTPUT-}\"\n"
+            f"exit {tailscale_status}\n",
+            encoding="utf-8",
+        )
+        fake_tailscale.chmod(0o755)
+        env["TEST_TAILSCALE_OUTPUT"] = tailscale_output or ""
+        env["PATH"] = f"{tmp_path}{os.pathsep}{env['PATH']}"
+    else:
+        env["PATH"] = os.pathsep.join(
+            part for part in env["PATH"].split(os.pathsep) if Path(part) != tmp_path
+        )
+    result = subprocess.run(
         ["zsh", str(PROJECT_ROOT / "启动NewsReader.command")],
         cwd=PROJECT_ROOT,
         env=env,
@@ -437,6 +470,9 @@ exit %d
         capture_output=True,
         check=False,
     )
+    result.captured_host = captured_host.read_text() if captured_host.exists() else None
+    result.captured_port = captured_port.read_text() if captured_port.exists() else None
+    return result
 
 
 def test_startup_script_reports_missing_dependencies_before_health_check(tmp_path: Path):
@@ -454,3 +490,44 @@ def test_startup_script_uses_non_reserved_exit_code_variable(tmp_path: Path):
     assert result.returncode == 7
     assert "退出码 7" in output
     assert "read-only variable: status" not in output
+
+
+def test_startup_script_uses_tailscale_ipv4_when_host_is_not_explicit(tmp_path: Path):
+    result = _run_startup_script_with_fake_python(
+        tmp_path, preflight_status=0, launcher_status=0, tailscale_output="100.64.12.34",
+    )
+    assert result.returncode == 0
+    assert result.captured_host == "100.64.12.34"
+    assert result.captured_port == ""
+
+
+def test_startup_script_falls_back_to_loopback_when_tailscale_is_unavailable(tmp_path: Path):
+    result = _run_startup_script_with_fake_python(
+        tmp_path, preflight_status=0, launcher_status=0, tailscale_output="not-an-ip",
+    )
+    assert result.returncode == 0
+    assert result.captured_host is None or result.captured_host == ""
+
+
+def test_startup_script_ignores_tailscale_output_when_command_fails(tmp_path: Path):
+    result = _run_startup_script_with_fake_python(
+        tmp_path,
+        preflight_status=0,
+        launcher_status=0,
+        tailscale_output="100.64.12.34",
+        tailscale_status=7,
+    )
+    assert result.returncode == 0
+    assert result.captured_host is None or result.captured_host == ""
+
+
+def test_startup_script_preserves_explicit_host_over_tailscale(tmp_path: Path):
+    result = _run_startup_script_with_fake_python(
+        tmp_path,
+        preflight_status=0,
+        launcher_status=0,
+        tailscale_output="100.64.12.34",
+        explicit_host="127.0.0.1",
+    )
+    assert result.returncode == 0
+    assert result.captured_host == "127.0.0.1"
