@@ -2799,9 +2799,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.2.1" in html
-    assert "/static/style.css?v=2.2.1" in html
-    assert "/static/app.js?v=2.2.1" in html
+    assert "News Reader v2.2.3" in html
+    assert "/static/style.css?v=2.2.3" in html
+    assert "/static/app.js?v=2.2.3" in html
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -4445,10 +4445,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.2.1" in app_source
-    assert "News Reader v2.2.1" in index_source
-    assert "/static/style.css?v=2.2.1" in index_source
-    assert "/static/app.js?v=2.2.1" in index_source
+    assert "News Reader v2.2.3" in app_source
+    assert "News Reader v2.2.3" in index_source
+    assert "/static/style.css?v=2.2.3" in index_source
+    assert "/static/app.js?v=2.2.3" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -9302,10 +9302,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.2.1" in app_source
-    assert "News Reader v2.2.1" in index_source
-    assert "/static/style.css?v=2.2.1" in index_source
-    assert "/static/app.js?v=2.2.1" in index_source
+    assert "News Reader v2.2.3" in app_source
+    assert "News Reader v2.2.3" in index_source
+    assert "/static/style.css?v=2.2.3" in index_source
+    assert "/static/app.js?v=2.2.3" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10813,10 +10813,10 @@ def test_agent_frontend_traffic_lights_and_right_aligned_actions_contract():
     index_source = Path("static/index.html").read_text(encoding="utf-8")
     style_source = Path("static/style.css").read_text(encoding="utf-8")
 
-    assert "News Reader v2.2.1" in index_source
-    assert "/static/style.css?v=2.2.1" in index_source
-    assert "/static/app.js?v=2.2.1" in index_source
-    assert 'version.textContent = "News Reader v2.2.1"' in app_source
+    assert "News Reader v2.2.3" in index_source
+    assert "/static/style.css?v=2.2.3" in index_source
+    assert "/static/app.js?v=2.2.3" in index_source
+    assert 'version.textContent = "News Reader v2.2.3"' in app_source
 
     collapse = '<button id="detailChatBackBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-collapse" type="button" aria-label="收起 Agent 浮窗" title="收起 Agent 浮窗"></button>'
     expand = '<button id="detailAgentExpandBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-expand" type="button" aria-label="放大 Agent 浮窗" title="放大 Agent 浮窗"></button>'

@@ -1,6 +1,10 @@
 # Changelog
 
-### 待发布 — v2.2.2 数据库路径与 Tailscale 启动修复
+### 2026-09-29 — v2.2.3 启动依赖检测与跨环境兼容修复
+- 启动脚本按显式 Python、项目虚拟环境、用户级虚拟环境、系统 `python3` 顺序选择首个可执行且能导入 Flask/OpenAI 的环境；显式指定环境依赖不完整时直接给出安装提示。
+- 保留 Tailscale 自动访问、数据库路径兼容与受控 launcher/supervisor 启动链路，不要求用户手动激活虚拟环境。
+
+### 2026-09-29 — v2.2.2 数据库路径与 Tailscale 启动修复
 - 兼容历史安装布局：项目父目录存在 `news_index.sqlite3` 时继续使用旧数据库；新克隆没有历史数据库时仍使用项目目录数据库，也可通过 `NEWS_READER_DB_PATH` 显式指定。
 - Finder 一键启动在未显式设置 host 时自动检测可用的 Tailscale IPv4；检测失败回退到 `127.0.0.1`，并继续使用受控 supervisor。
 
