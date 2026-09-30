@@ -4655,7 +4655,46 @@ def test_news_chat_archive_rejects_missing_assistant(tmp_path: Path, monkeypatch
     assert res.get_json()["error"] == "empty_archive_source"
 
 
-def test_release_notes_api_returns_items(tmp_path: Path, monkeypatch):
+def test_release_notes_parser_scans_all_sections_and_filters_invalid_entries(tmp_path: Path, monkeypatch):
+    import app as app_module
+
+    importlib.reload(app_module)
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        """# Changelog
+
+### 待发布 — 内置安全更新
+- 这不是一个已发布版本。
+
+### 2026-09-30 — v2.2.5 最新发布
+- 当前版本正文。
+
+### 2026-09-29 — v2.2.5 重复记录
+- 重复版本应只展示一次。
+
+### 2026-09-28 — v2.2.4 空记录
+
+## What's Changed
+
+### 2026-09-27 — v2.2.3 历史版本
+- 历史正文。
+
+## 其他章节
+- 不属于版本记录。
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_module, "CHANGELOG_PATH", changelog)
+
+    notes = app_module.parse_release_notes()
+
+    assert [note["version"] for note in notes] == ["v2.2.5", "v2.2.3"]
+    assert notes[0]["date"] == "2026-09-30"
+    assert notes[0]["lines"] == ["当前版本正文。"]
+    assert notes[1]["lines"] == ["历史正文。"]
+
+
+def test_release_notes_api_returns_current_version_first(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews" / "2026年6月"
     daily_dir.mkdir(parents=True)
     db_path = tmp_path / "news_index.sqlite3"
@@ -4673,7 +4712,11 @@ def test_release_notes_api_returns_items(tmp_path: Path, monkeypatch):
     assert payload["ok"] is True
     assert payload["items"]
     first = payload["items"][0]
-    assert "date" in first and "title" in first and "category" in first
+    manifest = json.loads((Path(app_module.BASE_DIR) / "version.json").read_text(encoding="utf-8"))
+    assert first["version"] == manifest["version"]
+    assert first["date"]
+    assert first["lines"]
+    assert "title" in first and "category" in first
     assert first["category"] in {"NEW", "IMPROVE", "FIX"}
 
 def test_feed_source_subkey_visibility_settings_only_filter_feed(tmp_path: Path, monkeypatch):

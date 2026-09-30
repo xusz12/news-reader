@@ -1863,25 +1863,42 @@ def categorize_release_note(title: str) -> str:
 
 
 def parse_release_notes() -> list[dict]:
+    """Parse versioned entries from the whole CHANGELOG in file order.
+
+    CHANGELOG.md is the single source for the settings-page release notes.  Do
+    not depend on a particular section heading: version entries may be placed
+    before or after ``## What's Changed`` as the file evolves.
+    """
     if not CHANGELOG_PATH.exists():
         return []
+
     lines = CHANGELOG_PATH.read_text(encoding="utf-8").splitlines()
     notes: list[dict] = []
-    in_changes = False
+    seen_versions: set[str] = set()
     current: dict | None = None
+
+    def finalize_current() -> None:
+        nonlocal current
+        if current is None:
+            return
+        version = str(current.get("version") or "").lower()
+        # Only publish standard version entries with actual release content.
+        # This excludes headings such as "待发布" and empty placeholders.
+        if version and current["lines"] and version not in seen_versions:
+            notes.append(current)
+            seen_versions.add(version)
+        current = None
 
     for raw_line in lines:
         line = raw_line.rstrip()
-        if not in_changes:
-            if line.strip() == "## What's Changed":
-                in_changes = True
-            continue
-        if line.startswith("## ") and line.strip() != "## What's Changed":
-            break
-        match = RELEASE_NOTE_HEADING_RE.match(line)
-        if match:
-            if current:
-                notes.append(current)
+        # A level-2/3 heading always terminates the previous entry.  A
+        # non-version heading is intentionally ignored rather than becoming a
+        # release note itself.
+        if re.match(r"^#{2,3}\s+", line):
+            match = RELEASE_NOTE_HEADING_RE.match(line)
+            finalize_current()
+            if not match:
+                continue
             title = match.group("title").strip()
             version_match = VERSION_RE.search(title)
             current = {
@@ -1892,9 +1909,7 @@ def parse_release_notes() -> list[dict]:
                 "lines": [],
             }
             continue
-        if current is None:
-            continue
-        if not line.strip():
+        if current is None or not line.strip():
             continue
         cleaned = line.strip()
         if cleaned.startswith("- "):
@@ -1902,8 +1917,7 @@ def parse_release_notes() -> list[dict]:
         cleaned = cleaned.replace("**", "")
         current["lines"].append(cleaned)
 
-    if current:
-        notes.append(current)
+    finalize_current()
     return notes
 
 
