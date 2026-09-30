@@ -3487,7 +3487,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.2.3";
+  version.textContent = "News Reader v2.2.5";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
