@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.2.5</title>
+    <title>News Reader v2.2.6</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.2.5" />
+    <link rel="stylesheet" href="/static/style.css?v=2.2.6&build=db-picker" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.2.5</span>
+          <span class="topbar-version">v2.2.6</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -828,6 +828,9 @@
             <button id="settingsNavServices" class="settings-nav-btn" type="button" data-section="services" aria-label="服务管理" title="服务管理">
               <span class="settings-nav-label">服务</span>
             </button>
+            <button id="settingsNavDatabase" class="settings-nav-btn" type="button" data-section="database" aria-label="数据库位置" title="数据库位置">
+              <span class="settings-nav-label">数据库</span>
+            </button>
             <button id="settingsNavModels" class="settings-nav-btn" type="button" data-section="models" aria-label="模型管理" title="模型管理">
               <span class="settings-nav-label">模型</span>
             </button>
@@ -842,6 +845,28 @@
           <section id="settingsSectionServices" class="settings-card settings-section-panel">
             <h3 class="settings-card-title">服务管理</h3>
             <div id="settingsApiStatus" class="settings-api-status"></div>
+          </section>
+          <section id="settingsSectionDatabase" class="settings-card settings-section-panel hidden">
+            <h3 class="settings-card-title">数据库位置</h3>
+            <div class="settings-field-note">这里只能选择已经存在、可读写且能正常打开的 SQLite 文件。保存后下次启动生效；不会迁移、合并、导入或复制数据。</div>
+            <div class="settings-form settings-database-form">
+              <div class="settings-database-current" role="status" aria-live="polite">
+                <div class="settings-database-current-label">当前实际使用数据库</div>
+                <div id="settingsDatabaseActualPath" class="settings-database-current-path"></div>
+                <div id="settingsDatabaseStatus" class="settings-field-help"></div>
+              </div>
+              <div class="settings-field">
+                <label for="settingsDatabasePathInput">下次启动使用的数据库</label>
+                <div class="settings-database-picker-row">
+                  <input id="settingsDatabasePathInput" class="settings-input" type="text" autocomplete="off" placeholder="选择或输入已有 SQLite 文件的完整路径" />
+                  <button id="settingsDatabaseBrowseBtn" class="detail-retry-btn" type="button">选择文件…</button>
+                </div>
+                <div id="settingsDatabasePathHelp" class="settings-field-help"></div>
+              </div>
+              <div class="settings-actions">
+                <button id="settingsDatabaseSaveBtn" class="detail-retry-btn" type="button">保存数据库位置</button>
+              </div>
+            </div>
           </section>
           <section id="settingsSectionModels" class="settings-card settings-section-panel hidden">
             <h3 class="settings-card-title">模型管理</h3>
@@ -968,6 +993,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.2.5"></script>
+    <script src="/static/app.js?v=2.2.6&build=db-picker"></script>
   </body>
 </html>

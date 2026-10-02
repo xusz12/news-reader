@@ -62,6 +62,9 @@ DEFAULT_APP_SETTINGS = {
     "agent": {
         "session_ttl_hours": 72,
     },
+    "database": {
+        "path": "",
+    },
 }
 
 
@@ -75,9 +78,20 @@ def resolve_daily_briefing_dir() -> Path:
     return Path(raw) if raw else DEFAULT_DAILY_BRIEFING_DIR
 
 
+def resolve_configured_db_path() -> Path | None:
+    """Return the database path saved in app settings, if one is configured."""
+    configured = load_app_settings().get("database", {}).get("path", "")
+    if not isinstance(configured, str) or not configured.strip():
+        return None
+    return Path(configured.strip()).expanduser()
+
+
 def resolve_db_path() -> Path:
     raw = os.environ.get("NEWS_READER_DB_PATH", "").strip()
-    return Path(raw) if raw else resolve_default_db_path()
+    if raw:
+        return Path(raw).expanduser()
+    configured = resolve_configured_db_path()
+    return configured if configured is not None else resolve_default_db_path()
 
 
 def resolve_app_settings_path() -> Path:
@@ -123,7 +137,7 @@ def load_app_settings() -> dict:
 
     llm = payload.get("llm") if isinstance(payload, dict) else None
     if not isinstance(llm, dict):
-        return base
+        llm = {}
 
     translation = llm.get("translation")
     if isinstance(translation, dict):
@@ -163,6 +177,12 @@ def load_app_settings() -> dict:
         ttl = agent.get("session_ttl_hours")
         if ttl in (24, 72):
             base["agent"]["session_ttl_hours"] = ttl
+
+    database = payload.get("database") if isinstance(payload, dict) else None
+    if isinstance(database, dict):
+        configured_path = database.get("path")
+        if isinstance(configured_path, str):
+            base["database"]["path"] = configured_path.strip()
 
     return base
 

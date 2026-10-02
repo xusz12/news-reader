@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import pytest
 import sqlite3
 import subprocess
+import sys
 import textwrap
 import types
 from datetime import datetime, timedelta
@@ -2799,9 +2801,18 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.2.5" in html
-    assert "/static/style.css?v=2.2.5" in html
-    assert "/static/app.js?v=2.2.5" in html
+    assert "News Reader v2.2.6" in html
+    assert "/static/style.css?v=2.2.6" in html
+    assert "/static/app.js?v=2.2.6" in html
+    assert 'id="settingsDatabaseBrowseBtn"' in html
+    assert 'class="settings-database-current-path"' in html
+    app_source = Path("static/app.js").read_text(encoding="utf-8")
+    assert "const contentType = res.headers?.get?.(\"content-type\") || \"\";" in app_source
+    assert "数据库选择接口尚未加载，请重启 NewsReader 服务后刷新页面。" in app_source
+    save_start = app_source.index("async function saveRuntimeSettings()")
+    save_source = app_source[save_start:]
+    assert save_source.index("const draftDatabasePath") < save_source.index("state.settingsSaving = true")
+    assert "payload.database.path = draftDatabasePath;" in save_source
 
 
 def test_news_section_order_date_asc_and_intra_date_asc_for_feed(tmp_path: Path, monkeypatch):
@@ -4445,10 +4456,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.2.5" in app_source
-    assert "News Reader v2.2.5" in index_source
-    assert "/static/style.css?v=2.2.5" in index_source
-    assert "/static/app.js?v=2.2.5" in index_source
+    assert "News Reader v2.2.6" in app_source
+    assert "News Reader v2.2.6" in index_source
+    assert "/static/style.css?v=2.2.6" in index_source
+    assert "/static/app.js?v=2.2.6" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -4666,18 +4677,21 @@ def test_release_notes_parser_scans_all_sections_and_filters_invalid_entries(tmp
 ### 待发布 — 内置安全更新
 - 这不是一个已发布版本。
 
-### 2026-09-30 — v2.2.5 最新发布
+### 2026-10-02 — v2.2.6 最新发布
 - 当前版本正文。
 
-### 2026-09-29 — v2.2.5 重复记录
+### 2026-10-01 — v2.2.6 重复记录
 - 重复版本应只展示一次。
 
-### 2026-09-28 — v2.2.4 空记录
+### 2026-09-30 — v2.2.4 空记录
 
 ## What's Changed
 
-### 2026-09-27 — v2.2.3 历史版本
+### 2026-09-29 — v2.2.5 历史版本
 - 历史正文。
+
+### 2026-09-27 — v2.2.3 更早历史版本
+- 更早历史正文。
 
 ## 其他章节
 - 不属于版本记录。
@@ -4688,8 +4702,8 @@ def test_release_notes_parser_scans_all_sections_and_filters_invalid_entries(tmp
 
     notes = app_module.parse_release_notes()
 
-    assert [note["version"] for note in notes] == ["v2.2.5", "v2.2.3"]
-    assert notes[0]["date"] == "2026-09-30"
+    assert [note["version"] for note in notes] == ["v2.2.6", "v2.2.5", "v2.2.3"]
+    assert notes[0]["date"] == "2026-10-02"
     assert notes[0]["lines"] == ["当前版本正文。"]
     assert notes[1]["lines"] == ["历史正文。"]
 
@@ -9345,10 +9359,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.2.5" in app_source
-    assert "News Reader v2.2.5" in index_source
-    assert "/static/style.css?v=2.2.5" in index_source
-    assert "/static/app.js?v=2.2.5" in index_source
+    assert "News Reader v2.2.6" in app_source
+    assert "News Reader v2.2.6" in index_source
+    assert "/static/style.css?v=2.2.6" in index_source
+    assert "/static/app.js?v=2.2.6" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10856,10 +10870,10 @@ def test_agent_frontend_traffic_lights_and_right_aligned_actions_contract():
     index_source = Path("static/index.html").read_text(encoding="utf-8")
     style_source = Path("static/style.css").read_text(encoding="utf-8")
 
-    assert "News Reader v2.2.5" in index_source
-    assert "/static/style.css?v=2.2.5" in index_source
-    assert "/static/app.js?v=2.2.5" in index_source
-    assert 'version.textContent = "News Reader v2.2.5"' in app_source
+    assert "News Reader v2.2.6" in index_source
+    assert "/static/style.css?v=2.2.6" in index_source
+    assert "/static/app.js?v=2.2.6" in index_source
+    assert 'version.textContent = "News Reader v2.2.6"' in app_source
 
     collapse = '<button id="detailChatBackBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-collapse" type="button" aria-label="收起 Agent 浮窗" title="收起 Agent 浮窗"></button>'
     expand = '<button id="detailAgentExpandBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-expand" type="button" aria-label="放大 Agent 浮窗" title="放大 Agent 浮窗"></button>'
@@ -11695,3 +11709,346 @@ def test_agent_ttl_setting_persists_and_ui_exposes_cleanup_controls(tmp_path: Pa
     assert 'id="detailAgentClearBtn"' not in index_source
     assert "payload.agent.session_ttl_hours = draftAgentTtl;" in app_source
     assert "clearAllAgentSessions();" in app_source
+
+
+
+def test_database_frontend_save_survives_redraw_and_connects_selected_db_in_fresh_process(tmp_path: Path, monkeypatch):
+    """Exercise real picker/save JS, persisted API settings, and a fresh DB connection."""
+    project_root = Path(__file__).resolve().parents[1]
+    initial_db = tmp_path / "initial.sqlite3"
+    selected_db = tmp_path / "selected folder" / "selected.sqlite3"
+    selected_db.parent.mkdir()
+    for path, label in ((initial_db, "initial"), (selected_db, "selected")):
+        with sqlite3.connect(path) as conn:
+            conn.execute("CREATE TABLE switch_marker (value TEXT)")
+            conn.execute("INSERT INTO switch_marker VALUES (?)", (label,))
+    settings_path = tmp_path / "app_settings.json"
+    settings_path.write_text(json.dumps({"database": {"path": str(initial_db)}}), encoding="utf-8")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_AGENT_DB_PATH", str(tmp_path / "agent.sqlite3"))
+    monkeypatch.setenv("NEWS_READER_MEDIA_CACHE_DIR", str(tmp_path / "media-cache"))
+    monkeypatch.delenv("NEWS_READER_DB_PATH", raising=False)
+
+    script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert/strict");
+const source = fs.readFileSync("static/app.js", "utf8");
+const args = JSON.parse(process.argv[1]);
+const callbacks = {};
+const button = (name) => ({ addEventListener: (_event, callback) => { callbacks[name] = callback; } });
+const input = { value: "" };
+const savedPayloads = [];
+const state = { runtimeSettings: null };
+const context = {
+  state,
+  document: { activeElement: null },
+  settingsDatabasePathInput: input,
+  settingsDatabaseActualPath: {}, settingsDatabasePathHelp: {}, settingsDatabaseStatus: {},
+  settingsDatabaseBrowseBtn: button("browse"), settingsDatabaseSaveBtn: button("save"),
+  settingsTranslationProvider: { value: "deepseek" },
+  settingsTranslationModelSelect: {}, settingsTranslationModelCustom: {},
+  settingsPiChatProviderSelect: {}, settingsPiChatProviderCustom: {},
+  settingsPiChatModelSelect: {}, settingsPiChatModelCustom: {},
+  settingsAgentTtlSelect: { value: "72" },
+  readModelSetting: () => "",
+  savedFeedHiddenSourceSubkeys: () => [],
+  normalizeFeedHiddenSourceSubkeys: (value) => value || [],
+  updateFeedSourceRefreshState: () => {},
+  // Simulate a second redraw while the async feed-settings save completes.
+  flushFeedSourceVisibilitySave: async () => { context.renderDatabaseSettings(); return true; },
+  renderSettingsOverlay: () => context.renderDatabaseSettings(),
+  fetch: async (url, options) => {
+    if (url === "/api/settings/database/pick") {
+      return { ok: true, status: 200, headers: { get: () => "application/json" },
+        text: async () => JSON.stringify({ ok: true, path: args.selected }) };
+    }
+    assert.equal(url, "/api/settings");
+    assert.equal(options.method, "PUT");
+    const payload = JSON.parse(options.body);
+    savedPayloads.push(payload);
+    return { ok: true, json: async () => ({ ok: true, ...payload,
+      database: { ...state.runtimeSettings.database, configured_path: payload.database.path } }) };
+  },
+};
+vm.createContext(context);
+for (const [start, end] of [
+  ["function renderDatabaseSettings()", "function renderSettingsOverlay()"],
+  ["function runtimeSettingsSavePayload(", "async function flushFeedSourceVisibilitySave("],
+  ["async function saveRuntimeSettings()", "function stopDetailPolling()"],
+  ["if (settingsDatabaseSaveBtn) {\n  settingsDatabaseSaveBtn.addEventListener", "if (settingsAgentClearAllBtn) {"],
+]) {
+  const startIndex = source.indexOf(start);
+  const endIndex = source.indexOf(end, startIndex);
+  assert(startIndex >= 0 && endIndex > startIndex, `missing source boundary: ${start}`);
+  vm.runInContext(source.slice(startIndex, endIndex), context);
+}
+const reset = (configured, overridden = false) => {
+  state.runtimeSettings = { database: { configured_path: configured, path: args.initial,
+    environment_override: overridden }, llm: { translation: { provider: "deepseek" } } };
+  state.settingsSaving = false;
+  context.renderSettingsOverlay();
+};
+(async () => {
+  reset(args.initial);
+  await callbacks.browse();
+  assert.equal(input.value, args.selected);
+  // Save button, not the text input, has focus; this reproduces the original bug.
+  context.document.activeElement = context.settingsDatabaseSaveBtn;
+  await callbacks.save();
+  assert.equal(savedPayloads[0].database.path, args.selected);
+  assert.equal(input.value, args.selected);
+  reset("");
+  input.value = `  ${args.selected}  `;
+  await callbacks.save();
+  assert.equal(savedPayloads[1].database.path, args.selected);
+  reset(args.initial);
+  input.value = "";
+  await callbacks.save();
+  assert.equal(savedPayloads[2].database.path, "");
+  reset(args.initial, true);
+  input.value = args.selected;
+  await callbacks.save();
+  assert.equal(savedPayloads[3].database.path, args.initial);
+  console.log(JSON.stringify(savedPayloads[0]));
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+"""
+    frontend = subprocess.run(
+        ["node", "-e", textwrap.dedent(script), json.dumps({"initial": str(initial_db), "selected": str(selected_db)})],
+        cwd=project_root, capture_output=True, text=True, timeout=15, check=True,
+    )
+    payload = json.loads(frontend.stdout)
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    with app_module.db_conn() as conn:
+        assert conn.execute("SELECT value FROM switch_marker").fetchone()[0] == "initial"
+    saved = client.put("/api/settings", json=payload)
+    assert saved.status_code == 200
+    assert saved.get_json()["database"]["configured_path"] == str(selected_db.resolve())
+    assert json.loads(settings_path.read_text())["database"]["path"] == str(selected_db.resolve())
+    # A browser refresh retains the choice but cannot switch a running process.
+    refreshed = client.get("/api/settings").get_json()["database"]
+    assert refreshed["configured_path"] == str(selected_db.resolve())
+    assert refreshed["path"] == str(initial_db.resolve())
+    with app_module.db_conn() as conn:
+        assert conn.execute("SELECT value FROM switch_marker").fetchone()[0] == "initial"
+
+    fresh_process = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent("""
+            import json
+            from app import DB_PATH, db_conn, database_runtime_snapshot
+            with db_conn() as conn:
+                marker = conn.execute("SELECT value FROM switch_marker").fetchone()[0]
+            print(json.dumps({"path": str(DB_PATH.resolve()), "marker": marker,
+                              "database": database_runtime_snapshot()}))
+        """)],
+        cwd=project_root, env=os.environ.copy(), capture_output=True, text=True, timeout=15, check=True,
+    )
+    restarted = json.loads(fresh_process.stdout)
+    assert restarted["path"] == str(selected_db.resolve())
+    assert restarted["marker"] == "selected"
+    assert restarted["database"]["path"] == str(selected_db.resolve())
+    assert restarted["database"]["configured_path"] == str(selected_db.resolve())
+
+
+def test_database_settings_roundtrip_and_restart_uses_saved_existing_sqlite(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    initial_db = tmp_path / "initial.sqlite3"
+    selected_db = tmp_path / "selected.sqlite3"
+    with sqlite3.connect(selected_db) as conn:
+        conn.execute("CREATE TABLE marker (id INTEGER PRIMARY KEY)")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(initial_db))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    current = client.get("/api/settings").get_json()
+    assert current["database"]["path"] == str(initial_db)
+    assert current["database"]["environment_override"] is True
+    assert current["database"]["editable"] is False
+
+    monkeypatch.delenv("NEWS_READER_DB_PATH", raising=False)
+    payload = {key: current[key] for key in ("llm", "feed", "agent")}
+    payload["database"] = {"path": str(selected_db)}
+    saved = client.put("/api/settings", json=payload)
+    assert saved.status_code == 200
+    assert saved.get_json()["database"]["configured_path"] == str(selected_db)
+    assert saved.get_json()["database"]["path"] == str(initial_db)
+
+    importlib.reload(app_module)
+    assert app_module.DB_PATH == selected_db
+    assert app_module.MEDIA_CACHE_DIR == selected_db.parent / "media-cache"
+    assert app_module.AGENT_DB_PATH == selected_db.parent / "agent_sessions.sqlite3"
+
+    project_root = Path(__file__).resolve().parents[1]
+    child_env = os.environ.copy()
+    child_env.pop("NEWS_READER_DB_PATH", None)
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        [str(project_root), child_env.get("PYTHONPATH", "")]
+    ).strip(os.pathsep)
+    fresh_process = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from app import DB_PATH; print(DB_PATH.expanduser().resolve())",
+        ],
+        cwd=project_root,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert Path(fresh_process.stdout.strip()) == selected_db.resolve()
+
+
+def test_default_database_is_created_when_no_database_exists(tmp_path: Path, monkeypatch):
+    import settings as settings_module
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_db = project_dir / "news_index.sqlite3"
+    legacy_db = tmp_path / "legacy-news.sqlite3"
+    monkeypatch.setattr(settings_module, "PROJECT_DB_PATH", project_db)
+    monkeypatch.setattr(settings_module, "LEGACY_DB_PATH", legacy_db)
+    monkeypatch.delenv("NEWS_READER_DB_PATH", raising=False)
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(tmp_path / "settings.json"))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    assert app_module.DB_PATH == project_db
+    assert not project_db.exists()
+    app_module.ensure_db()
+    assert project_db.is_file()
+    with sqlite3.connect(project_db) as conn:
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='items'").fetchone()
+
+
+def test_database_settings_reject_invalid_existing_file(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    db_path = tmp_path / "news.sqlite3"
+    sqlite3.connect(db_path).close()
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    current = client.get("/api/settings").get_json()
+    monkeypatch.delenv("NEWS_READER_DB_PATH", raising=False)
+    payload = {key: current[key] for key in ("llm", "feed", "agent")}
+    payload["database"] = {"path": str(tmp_path / "missing.sqlite3")}
+    response = client.put("/api/settings", json=payload)
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "database_path_must_exist"
+
+    payload["database"] = {"path": str(tmp_path)}
+    response = client.put("/api/settings", json=payload)
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "database_path_must_exist"
+
+    invalid = tmp_path / "not-sqlite.db"
+    invalid.write_text("not a sqlite database", encoding="utf-8")
+    payload["database"] = {"path": str(invalid)}
+    response = client.put("/api/settings", json=payload)
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "database_path_not_sqlite"
+
+
+def test_database_native_picker_returns_validated_path(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    initial_db = tmp_path / "initial.sqlite3"
+    selected_db = tmp_path / "selected.sqlite3"
+    with sqlite3.connect(selected_db) as conn:
+        conn.execute("CREATE TABLE marker (id INTEGER PRIMARY KEY)")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(initial_db))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    monkeypatch.delenv("NEWS_READER_DB_PATH", raising=False)
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/usr/bin/osascript")
+
+    def fake_run(command, **kwargs):
+        assert command[0] == "osascript"
+        assert kwargs["check"] is False
+        return types.SimpleNamespace(returncode=0, stdout=f"{selected_db}\n")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    response = client.post("/api/settings/database/pick")
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "path": str(selected_db.resolve())}
+
+
+def test_database_native_picker_returns_json_on_unexpected_failure(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    initial_db = tmp_path / "initial.sqlite3"
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(initial_db))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    monkeypatch.delenv("NEWS_READER_DB_PATH", raising=False)
+    monkeypatch.setattr(app_module, "choose_existing_database_path", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    response = client.post("/api/settings/database/pick")
+    assert response.status_code == 500
+    assert response.content_type.startswith("application/json")
+    assert response.get_json() == {"ok": False, "error": "database_picker_failed"}
+
+
+def test_database_native_picker_is_blocked_by_environment_override(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    initial_db = tmp_path / "initial.sqlite3"
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(initial_db))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    response = client.post("/api/settings/database/pick")
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "database_path_controlled_by_environment"
+
+
+def test_database_settings_reject_unwritable_file(tmp_path: Path, monkeypatch):
+    settings_path = tmp_path / "app_settings.json"
+    db_path = tmp_path / "news.sqlite3"
+    selected_db = tmp_path / "selected.sqlite3"
+    sqlite3.connect(db_path).close()
+    with sqlite3.connect(selected_db) as conn:
+        conn.execute("CREATE TABLE marker (id INTEGER PRIMARY KEY)")
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    app_module.ensure_db()
+    client = app_module.app.test_client()
+    current = client.get("/api/settings").get_json()
+    monkeypatch.delenv("NEWS_READER_DB_PATH", raising=False)
+    payload = {key: current[key] for key in ("llm", "feed", "agent")}
+    payload["database"] = {"path": str(selected_db)}
+    monkeypatch.setattr(app_module.os, "access", lambda path, mode: False)
+    response = client.put("/api/settings", json=payload)
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "database_path_not_readable"

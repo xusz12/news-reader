@@ -710,6 +710,43 @@ body.search-bar-open .topbar-search {
   line-height: 1.45;
 }
 
+.settings-database-current {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--hairline));
+  border-radius: var(--radius-row);
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--panel));
+}
+
+.settings-database-current-label {
+  color: var(--detail-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-database-current-path {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.settings-database-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .settings-database-picker-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-input {
   height: 32px;
   border: 1px solid var(--hairline);

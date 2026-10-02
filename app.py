@@ -10,6 +10,7 @@ import signal
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -1955,6 +1956,9 @@ def current_runtime_settings() -> dict:
     agent = raw.get("agent") if isinstance(raw, dict) else {}
     if isinstance(agent, dict) and agent.get("session_ttl_hours") in AGENT_SESSION_TTL_OPTIONS:
         merged["agent"]["session_ttl_hours"] = int(agent["session_ttl_hours"])
+    database = raw.get("database") if isinstance(raw, dict) else {}
+    if isinstance(database, dict) and isinstance(database.get("path"), str):
+        merged["database"]["path"] = database["path"].strip()
     return merged
 
 
@@ -2336,6 +2340,90 @@ def build_feed_source_settings_snapshot(hidden_keys: list[str]) -> dict:
     return {"hidden_source_subkeys": visible_hidden_keys, "groups": ordered_groups}
 
 
+def _database_path_from_payload(payload: object, current_settings: dict) -> str:
+    database = payload.get("database") if isinstance(payload, dict) else None
+    if not isinstance(database, dict) or "path" not in database:
+        return str(current_settings.get("database", {}).get("path") or "").strip()
+    value = database.get("path")
+    if not isinstance(value, str):
+        raise ValueError("invalid_database_path")
+    return value.strip()
+
+
+def validate_existing_database_path(value: str) -> str:
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = (BASE_DIR / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    if not candidate.is_file():
+        raise ValueError("database_path_must_exist")
+    if not os.access(candidate, os.R_OK):
+        raise ValueError("database_path_not_readable")
+    if not os.access(candidate, os.W_OK):
+        raise ValueError("database_path_not_writable")
+    try:
+        if candidate.read_bytes()[:16] != b"SQLite format 3\x00":
+            raise ValueError("database_path_not_sqlite")
+        uri = f"file:{candidate.as_posix()}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=5) as conn:
+            conn.execute("PRAGMA schema_version").fetchone()
+    except (OSError, sqlite3.Error):
+        raise ValueError("database_path_not_sqlite") from None
+    return str(candidate)
+
+
+def choose_existing_database_path() -> str:
+    """Open the host-native file chooser and return a validated SQLite path."""
+    if sys.platform != "darwin" or shutil.which("osascript") is None:
+        raise ValueError("database_picker_unavailable")
+
+    script = """
+try
+    set selectedFile to choose file with prompt "选择已有 NewsReader SQLite 数据库"
+    return POSIX path of selectedFile
+on error number -128
+    return "__CANCELLED__"
+end try
+"""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise ValueError("database_picker_failed") from None
+    if result.returncode != 0:
+        raise ValueError("database_picker_failed")
+    selected = result.stdout.strip()
+    if not selected or selected == "__CANCELLED__":
+        raise ValueError("database_picker_cancelled")
+    return validate_existing_database_path(selected)
+
+
+def database_runtime_snapshot(settings: dict | None = None) -> dict:
+    settings = settings or current_runtime_settings()
+    env_value = os.environ.get("NEWS_READER_DB_PATH", "").strip()
+    configured = str(settings.get("database", {}).get("path") or "").strip()
+    return {
+        "path": str(DB_PATH.expanduser().resolve()),
+        "configured_path": configured,
+        "environment_override": bool(env_value),
+        "environment_variable": "NEWS_READER_DB_PATH",
+        "editable": not bool(env_value),
+        "native_picker_available": bool(sys.platform == "darwin" and shutil.which("osascript")),
+        "restart_required": True,
+        "notice": (
+            "当前由环境变量 NEWS_READER_DB_PATH 控制，设置页不能覆盖。"
+            if env_value
+            else "选择已有 SQLite 文件后，重启 NewsReader 才会切换；不会迁移或复制数据。"
+        ),
+    }
+
+
 def serialize_runtime_settings() -> dict:
     settings = current_runtime_settings()
     translation_model = (settings["llm"]["translation"].get("model") or "").strip()
@@ -2358,6 +2446,7 @@ def serialize_runtime_settings() -> dict:
         "feed_source_subkeys": feed_source_snapshot,
         "tracked": settings["tracked"],
         "agent": settings["agent"],
+        "database": database_runtime_snapshot(settings),
         "restart_notice": "翻译 / 总结与 chat 的新请求通常立即生效；涉及 app.py 本版改动，终验前请重启 Flask。",
     }
 
@@ -2397,6 +2486,17 @@ def validate_runtime_settings(payload: object) -> dict:
     if ttl not in AGENT_SESSION_TTL_OPTIONS:
         raise ValueError("invalid_agent_session_ttl")
 
+    configured_db_path = _database_path_from_payload(payload, current_settings)
+    if os.environ.get("NEWS_READER_DB_PATH", "").strip():
+        # The environment override is authoritative; do not let an explicit
+        # settings request pretend it will change the active database.
+        current_configured_db_path = str(current_settings.get("database", {}).get("path") or "").strip()
+        if configured_db_path != current_configured_db_path:
+            raise ValueError("database_path_controlled_by_environment")
+        configured_db_path = current_configured_db_path
+    elif configured_db_path:
+        configured_db_path = validate_existing_database_path(configured_db_path)
+
     normalized = {
         "llm": {
             "translation": {
@@ -2414,6 +2514,9 @@ def validate_runtime_settings(payload: object) -> dict:
         "tracked": current_settings["tracked"],
         "agent": {
             "session_ttl_hours": int(ttl),
+        },
+        "database": {
+            "path": configured_db_path,
         },
     }
     return normalized
@@ -7637,6 +7740,22 @@ def api_release_notes():
 @app.get("/api/settings")
 def api_settings():
     return jsonify({"ok": True, **serialize_runtime_settings()})
+
+
+@app.post("/api/settings/database/pick")
+def api_settings_database_pick():
+    if os.environ.get("NEWS_READER_DB_PATH", "").strip():
+        return jsonify({"ok": False, "error": "database_path_controlled_by_environment"}), 400
+    try:
+        path = choose_existing_database_path()
+    except ValueError as exc:
+        error = str(exc)
+        status = 409 if error == "database_picker_cancelled" else 501 if error == "database_picker_unavailable" else 400
+        return jsonify({"ok": False, "error": error}), status
+    except Exception:
+        app.logger.exception("database picker failed unexpectedly")
+        return jsonify({"ok": False, "error": "database_picker_failed"}), 500
+    return jsonify({"ok": True, "path": path})
 
 
 @app.put("/api/settings")

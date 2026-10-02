@@ -117,6 +117,7 @@ let state = {
   settingsOpen: false,
   settingsLoading: false,
   settingsSaving: false,
+  settingsDatabasePickerBusy: false,
   settingsSecretBusyProvider: "",
   settingsSecretEditorProvider: "",
   settingsSection: "services",
@@ -457,10 +458,12 @@ const settingsStatus = document.getElementById("settingsStatus");
 const settingsApiStatus = document.getElementById("settingsApiStatus");
 const settingsNavServices = document.getElementById("settingsNavServices");
 const settingsNavModels = document.getElementById("settingsNavModels");
+const settingsNavDatabase = document.getElementById("settingsNavDatabase");
 const settingsNavFeedSources = document.getElementById("settingsNavFeedSources");
 const settingsNavRelease = document.getElementById("settingsNavRelease");
 const settingsSectionServices = document.getElementById("settingsSectionServices");
 const settingsSectionModels = document.getElementById("settingsSectionModels");
+const settingsSectionDatabase = document.getElementById("settingsSectionDatabase");
 const settingsSectionFeedSources = document.getElementById("settingsSectionFeedSources");
 const settingsSectionRelease = document.getElementById("settingsSectionRelease");
 const settingsTranslationProvider = document.getElementById("settingsTranslationProvider");
@@ -476,6 +479,12 @@ const settingsChatArchiveNote = document.getElementById("settingsChatArchiveNote
 const settingsAgentTtlSelect = document.getElementById("settingsAgentTtlSelect");
 const settingsAgentClearAllBtn = document.getElementById("settingsAgentClearAllBtn");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
+const settingsDatabasePathInput = document.getElementById("settingsDatabasePathInput");
+const settingsDatabasePathHelp = document.getElementById("settingsDatabasePathHelp");
+const settingsDatabaseActualPath = document.getElementById("settingsDatabaseActualPath");
+const settingsDatabaseStatus = document.getElementById("settingsDatabaseStatus");
+const settingsDatabaseBrowseBtn = document.getElementById("settingsDatabaseBrowseBtn");
+const settingsDatabaseSaveBtn = document.getElementById("settingsDatabaseSaveBtn");
 const settingsFeedSourceSubkeys = document.getElementById("settingsFeedSourceSubkeys");
 const settingsReleaseNotes = document.getElementById("settingsReleaseNotes");
 const settingsUpdateStatus = document.getElementById("settingsUpdateStatus");
@@ -2046,6 +2055,7 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
 function renderSettingsNav() {
   [
     [settingsNavServices, "services"],
+    [settingsNavDatabase, "database"],
     [settingsNavModels, "models"],
     [settingsNavFeedSources, "feed_sources"],
     [settingsNavRelease, "release"],
@@ -2060,6 +2070,7 @@ function renderSettingsNav() {
 function renderSettingsSections() {
   [
     [settingsSectionServices, "services"],
+    [settingsSectionDatabase, "database"],
     [settingsSectionModels, "models"],
     [settingsSectionFeedSources, "feed_sources"],
     [settingsSectionRelease, "release"],
@@ -2173,6 +2184,44 @@ function populateSettingsForm() {
   }
 }
 
+function renderDatabaseSettings() {
+  const database = state.runtimeSettings?.database || {};
+  const overridden = !!database.environment_override;
+  const pickerAvailable = database.native_picker_available !== false;
+  const configuredPath = (database.configured_path || "").trim();
+  if (settingsDatabasePathInput) {
+    if (document.activeElement !== settingsDatabasePathInput) {
+      settingsDatabasePathInput.value = configuredPath;
+    }
+    settingsDatabasePathInput.disabled = overridden || state.settingsLoading || state.settingsSaving || state.settingsClosing || state.settingsDatabasePickerBusy;
+    settingsDatabasePathInput.placeholder = overridden
+      ? "由 NEWS_READER_DB_PATH 环境变量控制"
+      : "选择或输入已有 SQLite 文件的完整路径";
+  }
+  if (settingsDatabaseActualPath) {
+    settingsDatabaseActualPath.textContent = database.path || "未解析";
+    settingsDatabaseActualPath.title = database.path || "";
+  }
+  if (settingsDatabasePathHelp) {
+    settingsDatabasePathHelp.textContent = overridden
+      ? "由环境变量 NEWS_READER_DB_PATH 控制；设置页位置只读，不能覆盖它。"
+      : pickerAvailable
+        ? "点击“选择文件…”打开系统原生文件选择器；也可手动输入完整路径。留空可恢复现有默认规则。"
+        : "当前启动环境不支持系统文件选择器，可手动输入已有 SQLite 文件的完整路径。留空可恢复现有默认规则。";
+  }
+  if (settingsDatabaseStatus) {
+    settingsDatabaseStatus.textContent = database.notice || "";
+  }
+  if (settingsDatabaseBrowseBtn) {
+    settingsDatabaseBrowseBtn.disabled = overridden || !pickerAvailable || state.settingsLoading || state.settingsSaving || state.settingsClosing || state.settingsDatabasePickerBusy;
+    settingsDatabaseBrowseBtn.textContent = state.settingsDatabasePickerBusy ? "正在打开…" : "选择文件…";
+    settingsDatabaseBrowseBtn.title = pickerAvailable ? "打开系统原生文件选择器" : "当前启动环境不支持系统文件选择器";
+  }
+  if (settingsDatabaseSaveBtn) {
+    settingsDatabaseSaveBtn.disabled = overridden || state.settingsLoading || state.settingsSaving || state.settingsClosing || state.settingsDatabasePickerBusy;
+  }
+}
+
 function renderSettingsOverlay() {
   if (!settingsOverlay) return;
   settingsOverlay.classList.toggle("hidden", !state.settingsOpen);
@@ -2184,6 +2233,7 @@ function renderSettingsOverlay() {
   renderReleaseNotes();
   renderUpdateCard();
   renderFeedSourceSettings();
+  renderDatabaseSettings();
   populateSettingsForm();
   if (settingsSaveBtn) settingsSaveBtn.disabled = state.settingsSaving;
   if (settingsAgentTtlSelect) {
@@ -2226,6 +2276,9 @@ function runtimeSettingsSavePayload({ hiddenSourceSubkeys = savedFeedHiddenSourc
     },
     agent: {
       session_ttl_hours: Number(settings.agent?.session_ttl_hours) === 24 ? 24 : 72,
+    },
+    database: {
+      path: (settings.database?.configured_path || "").trim(),
     },
   };
 }
@@ -2403,6 +2456,11 @@ async function saveRuntimeSettings() {
   const draftPiChatProvider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
   const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
   const draftAgentTtl = Number(settingsAgentTtlSelect?.value) === 24 ? 24 : 72;
+  const database = state.runtimeSettings?.database || {};
+  // Capture the input before renderSettingsOverlay() can restore its saved value.
+  const draftDatabasePath = !database.environment_override && settingsDatabasePathInput
+    ? settingsDatabasePathInput.value.trim()
+    : "";
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
@@ -2416,6 +2474,9 @@ async function saveRuntimeSettings() {
     payload.llm.pi_chat.provider = draftPiChatProvider;
     payload.llm.pi_chat.model = draftPiChatModel;
     payload.agent.session_ttl_hours = draftAgentTtl;
+    if (!database.environment_override && settingsDatabasePathInput) {
+      payload.database.path = draftDatabasePath;
+    }
     const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -3487,7 +3548,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.2.5";
+  version.textContent = "News Reader v2.2.6";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -10807,6 +10868,56 @@ if (settingsSaveBtn) {
     await saveRuntimeSettings();
   });
 }
+if (settingsDatabaseSaveBtn) {
+  settingsDatabaseSaveBtn.addEventListener("click", async () => {
+    await saveRuntimeSettings();
+  });
+}
+
+if (settingsDatabaseBrowseBtn) {
+  settingsDatabaseBrowseBtn.addEventListener("click", async () => {
+    const database = state.runtimeSettings?.database || {};
+    if (database.environment_override || state.settingsDatabasePickerBusy) return;
+    state.settingsDatabasePickerBusy = true;
+    state.settingsMessage = "正在打开系统文件选择器…";
+    state.settingsMessageTone = "pending";
+    renderSettingsOverlay();
+    let pickedPath = "";
+    try {
+      const res = await fetch("/api/settings/database/pick", { method: "POST" });
+      const contentType = res.headers?.get?.("content-type") || "";
+      const raw = await res.text();
+      let data = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        const staleBackend = res.status === 404 || res.status === 405 || contentType.includes("text/html");
+        throw new Error(staleBackend
+          ? "数据库选择接口尚未加载，请重启 NewsReader 服务后刷新页面。"
+          : "数据库选择接口返回了无效响应，请重启 NewsReader 后重试。");
+      }
+      if (res.status === 409 && data?.error === "database_picker_cancelled") return;
+      if (!res.ok || !data?.ok) {
+        const messages = {
+          database_picker_unavailable: "当前启动环境不支持系统文件选择器，请手动输入完整路径。",
+          database_picker_failed: "系统文件选择器打开失败，请手动输入完整路径。",
+          database_path_not_sqlite: "所选文件不是可打开的 SQLite 数据库。",
+        };
+        throw new Error(messages[data?.error] || data?.error || `数据库选择接口失败（HTTP ${res.status}）。`);
+      }
+      pickedPath = data.path || "";
+      state.settingsMessage = "已选择数据库文件；点击“保存数据库位置”后，重启 NewsReader 生效。";
+      state.settingsMessageTone = "muted";
+    } catch (error) {
+      state.settingsMessage = error?.message || "系统文件选择器打开失败，请手动输入完整路径。";
+      state.settingsMessageTone = "failed";
+    } finally {
+      state.settingsDatabasePickerBusy = false;
+      renderSettingsOverlay();
+      if (pickedPath && settingsDatabasePathInput) settingsDatabasePathInput.value = pickedPath;
+    }
+  });
+}
 
 if (settingsAgentClearAllBtn) {
   settingsAgentClearAllBtn.addEventListener("click", () => {
@@ -10816,6 +10927,7 @@ if (settingsAgentClearAllBtn) {
 
 [
   [settingsNavServices, "services"],
+  [settingsNavDatabase, "database"],
   [settingsNavModels, "models"],
   [settingsNavFeedSources, "feed_sources"],
   [settingsNavRelease, "release"],
