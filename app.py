@@ -44,6 +44,8 @@ from updater import STATE_PATH as UPDATE_STATE_PATH
 from updater import git_state as update_git_state
 from updater import local_health_url, request_supervisor
 
+from oar_client import bridge_command, bridge_request, parse_event as parse_oar_event, run_once as run_oar_once, cleanup_config as cleanup_oar_config, terminate_group, ERROR_MESSAGES as OAR_ERROR_MESSAGES
+
 from settings import (
     DEFAULT_PI_CHAT_MODEL,
     DEFAULT_PI_CHAT_PROVIDER,
@@ -2675,6 +2677,18 @@ def build_chat_prompt(
     )
 
 
+def agent_runtime_metadata(runtime_key: str) -> dict:
+    metadata = {"runtime": "oar-pi", "runtime_compatibility": ""}
+    try:
+        route = json.loads((agent_session_runtime_dir(runtime_key) / "route.json").read_text())
+        if route.get("runtime") == "cli":
+            metadata["runtime"] = "pi-cli"
+            metadata["runtime_compatibility"] = "使用 Pi CLI 兼容模式，保留原生资源与项目信任规则；本会话续问与重试保持该执行方式。"
+    except (OSError, ValueError):
+        pass
+    return metadata
+
+
 def run_pi_chat(
     *,
     item_id: str,
@@ -2695,65 +2709,26 @@ def run_pi_chat(
         raise ValueError("empty_question")
 
     session = (session_id or "").strip()
-    use_resume = bool(session) and not reset
-    if not use_resume:
-        session = f"newsreader-{item_id}-{uuid.uuid4()}"
-
-    command = [
-        "pi",
-        "-p",
-        "--mode",
-        "json",
-        "--session-id",
-        session,
-        "--provider",
-        pi_provider,
-        "--model",
-        pi_model,
-        build_chat_prompt(
-            title=title,
-            source=source,
-            published_at=published_at,
-            content=content,
-            question=prompt,
-            context_level=context_level,
-        ),
-    ]
-
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(BASE_DIR),
-            env=_pi_subprocess_env(),
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("pi_timeout") from exc
-
-    stdout = completed.stdout or ""
-    stderr = completed.stderr or ""
-    session_id_out, answer, has_error, error_message = _parse_pi_stdout(stdout)
-
-    if completed.returncode != 0:
-        detail = (stderr or stdout).strip() or "pi_failed"
-        raise RuntimeError(detail[:500])
-
-    if has_error:
-        raise RuntimeError(error_message or "pi_failed")
-
-    if not session_id_out:
-        raise RuntimeError("pi_missing_session_id")
-    if not answer:
-        raise RuntimeError("pi_empty_answer")
-
-    return {
-        "provider": "pi",
-        "session_id": session_id_out,
-        "model": pi_model,
-        "answer": answer,
-    }
+    legacy_native_id = ""
+    if session and not reset and not session.startswith("newsreader-oar-chat-"):
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,200}", session):
+            raise RuntimeError("pi_session_invalid")
+        legacy_native_id = session
+        session = "newsreader-oar-chat-" + hashlib.sha256(session.encode()).hexdigest()
+    if session and not re.fullmatch(r"newsreader-oar-chat-[a-zA-Z0-9_-]+", session):
+        raise RuntimeError("pi_session_invalid")
+    if not session or reset:
+        session = f"newsreader-oar-chat-{uuid.uuid4()}"
+    runtime_dir = agent_session_runtime_dir(session)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    chat_prompt = build_chat_prompt(title=title, source=source, published_at=published_at,
+                                   content=content, question=prompt, context_level=context_level)
+    request_payload = bridge_request(prompt=chat_prompt, resume_prompt=prompt, state_dir=runtime_dir,
+                                     provider=pi_provider, model=pi_model)
+    if legacy_native_id:
+        request_payload["legacy_native_id"] = legacy_native_id
+    answer = run_oar_once(bridge_command(session), request_payload, _pi_subprocess_env(), timeout)
+    return {"provider": "pi", "session_id": session, "model": pi_model, "answer": answer, **agent_runtime_metadata(session)}
 
 
 def build_chat_archive_prompt(*, title: str, source: str, published_at: str, messages: list[dict[str, str]]) -> str:
@@ -2785,51 +2760,21 @@ def run_pi_chat_archive(*, title: str, source: str, published_at: str, messages:
         published_at=published_at,
         messages=messages,
     )
-    # 归档是单次无会话调用：不复用原 chat session，避免把归档指令写进原会话上下文污染后续追问。
-    command = [
-        "pi",
-        "-p",
-        "--mode",
-        "json",
-        "--no-session",
-        "--provider",
-        pi_provider,
-        "--model",
-        pi_model,
-        prompt,
-    ]
-
+    # A private OAR session: never append archival instructions to the chat.
+    session = f"newsreader-oar-archive-{uuid.uuid4()}"
+    runtime_dir = agent_session_runtime_dir(session)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(BASE_DIR),
-            env=_pi_subprocess_env(),
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("pi_timeout") from exc
-
-    stdout = completed.stdout or ""
-    stderr = completed.stderr or ""
-    _session_id, summary, has_error, error_message = _parse_pi_stdout(stdout)
-
-    if completed.returncode != 0:
-        detail = (stderr or stdout).strip() or "pi_failed"
-        raise RuntimeError(detail[:500])
-    if has_error:
-        raise RuntimeError(error_message or "pi_failed")
-
-    summary = " ".join((summary or "").split())
+        summary = run_oar_once(bridge_command(session), bridge_request(
+            prompt=prompt, resume_prompt=prompt, state_dir=runtime_dir,
+            provider=pi_provider, model=pi_model), _pi_subprocess_env(), timeout)
+        runtime_metadata = agent_runtime_metadata(session)
+    finally:
+        _remove_agent_runtime_dir(session)
+    summary = " ".join(summary.split())
     if not summary:
         raise RuntimeError("pi_empty_archive")
-
-    return {
-        "provider": "pi",
-        "model": pi_model,
-        "summary": summary,
-    }
+    return {"provider": "pi", "model": pi_model, "summary": summary, **runtime_metadata}
 
 
 def normalize_chat_messages(raw_messages: object, *, max_messages: int = 20, max_chars: int = 4000) -> list[dict[str, str]]:
@@ -2960,7 +2905,19 @@ def _serialize_agent_session(row: sqlite3.Row | dict | None) -> dict | None:
         return None
     payload = dict(row)
     payload.pop("context_json", None)
-    payload.pop("executor_session_id", None)
+    executor_id = payload.pop("executor_session_id", "")
+    runtime_key = executor_id if executor_id and not _is_legacy_pi_executor_session(executor_id) else _full_pi_executor_session_id(payload["id"])
+    payload.update(agent_runtime_metadata(runtime_key))
+    payload["history_compatibility"] = ""
+    if _is_legacy_pi_executor_session(executor_id):
+        payload["history_compatibility"] = "旧对话保留；续问时将携带已保存的历史接续会话（不包含旧工具执行状态）。"
+    else:
+        try:
+            mapping = json.loads((agent_session_runtime_dir(executor_id) / "session.json").read_text())
+            if mapping.get("history_replayed"):
+                payload["history_compatibility"] = "已携带保存的旧对话接续；不包含迁移前的工具执行状态。"
+        except (OSError, ValueError):
+            pass
     return payload
 
 
@@ -3024,36 +2981,30 @@ def _agent_stream_session_id(payload: dict) -> str:
 
 
 def _full_pi_executor_session_id(session_id: str) -> str:
-    return f"newsreader-agent-full-{session_id}"
+    return f"newsreader-oar-pi-{session_id}"
 
 
 def _is_legacy_pi_executor_session(executor_session_id: str) -> bool:
-    return bool(executor_session_id) and not executor_session_id.startswith("newsreader-agent-full-")
+    return bool(executor_session_id) and not executor_session_id.startswith("newsreader-oar-pi-")
 
 
 def _agent_process_command(job: dict, session: dict, context: dict, history: list[dict]) -> tuple[list[str], dict[str, str], Path | None]:
-    question = job["question"]
-    quote_text = job.get("quote_text") or ""
-    model = job.get("model") or ""
-    previous_executor_id = str(session.get("executor_session_id") or "").strip()
-    is_legacy_session = _is_legacy_pi_executor_session(previous_executor_id)
-    is_first = not previous_executor_id or is_legacy_session
-    prompt = (
-        build_agent_prompt(context, question, quote_text, history=history)
-        if is_first
-        else build_agent_resume_prompt(question, quote_text)
-    )
-    executor_id = _full_pi_executor_session_id(session["id"]) if is_first else previous_executor_id
-    if is_legacy_session:
-        _remove_agent_runtime_dir(previous_executor_id)
+    previous = str(session.get("executor_session_id") or "").strip()
+    executor_id = _full_pi_executor_session_id(session["id"]) if not previous or _is_legacy_pi_executor_session(previous) else previous
     runtime_dir = agent_session_runtime_dir(executor_id)
     runtime_dir.mkdir(parents=True, exist_ok=True)
-    command = [
-        "pi", "-p", "--mode", "json", "--session-id", executor_id,
-        "--session-dir", str(runtime_dir), "--provider", session.get("executor_provider") or DEFAULT_PI_CHAT_PROVIDER,
-        "--model", model, prompt,
-    ]
-    return command, _pi_subprocess_env(), runtime_dir
+    return bridge_command(executor_id), _pi_subprocess_env(), runtime_dir
+
+
+def _agent_oar_request(job: dict, session: dict, context: dict, history: list[dict], runtime_dir: Path) -> dict:
+    payload = bridge_request(
+        prompt=build_agent_prompt(context, job["question"], job.get("quote_text") or "", history=history),
+        resume_prompt=build_agent_resume_prompt(job["question"], job.get("quote_text") or ""),
+        state_dir=runtime_dir, provider=session.get("executor_provider") or DEFAULT_PI_CHAT_PROVIDER,
+        model=job.get("model") or DEFAULT_PI_CHAT_MODEL,
+    )
+    payload["history_replayed"] = bool(history)
+    return payload
 
 
 def _update_agent_job_output(job_id: str, session_id: str, output: str, *, status: str = "streaming") -> None:
@@ -3092,57 +3043,12 @@ def _agent_cancel_requested(job_id: str) -> bool:
 def _terminate_agent_process(job_id: str) -> None:
     with AGENT_PROCESSES_GUARD:
         proc = AGENT_PROCESSES.get(job_id)
-    if not proc or proc.poll() is not None:
-        return
-    try:
-        pid = int(getattr(proc, "pid", 0) or 0)
-        if pid and os.name == "posix":
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
-            except (OSError, ProcessLookupError):
-                proc.terminate()
-        else:
-            proc.terminate()
-    except (OSError, ProcessLookupError, ValueError):
-        return
-    try:
-        proc.wait(timeout=1.5)
-        return
-    except (OSError, subprocess.TimeoutExpired, TypeError):
-        pass
-    try:
-        pid = int(getattr(proc, "pid", 0) or 0)
-        if pid and os.name == "posix":
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
-            except (OSError, ProcessLookupError):
-                proc.kill()
-        else:
-            proc.kill()
-    except (OSError, ProcessLookupError, ValueError):
-        pass
+    if proc:
+        terminate_group(proc)
 
 
 def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) -> None:
     previous_executor_session_id = str(session.get("executor_session_id") or "")
-    command, env, _runtime_dir = _agent_process_command(job, session, context, history)
-    # 使用确定性的目录/CLI session 映射，清理时不能依赖 CLI 输出的展示 ID。
-    try:
-        session_id_index = command.index("--session-id") + 1
-        executor_session_id = command[session_id_index]
-    except (ValueError, IndexError):
-        executor_session_id = ""
-    if executor_session_id:
-        conn = agent_db_conn()
-        try:
-            with conn:
-                conn.execute(
-                    "UPDATE agent_sessions SET executor_session_id=?, updated_at=? WHERE id=? AND executor_session_id=?",
-                    (executor_session_id, now_ts(), session["id"], previous_executor_session_id),
-                )
-            session["executor_session_id"] = executor_session_id
-        finally:
-            conn.close()
     output = ""
     stderr = ""
     proc = None
@@ -3150,9 +3056,26 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
     cancel_sent = False
     timed_out = False
     deadline = time.monotonic() + AGENT_JOB_TIMEOUT_SECONDS
+    terminal = None
+    terminal_answer: str | None = None
+    protocol_error = False
+    _runtime_dir = None
+    executor_session_id = ""
+    config_id = ""
     try:
+        command, env, _runtime_dir = _agent_process_command(job, session, context, history)
+        # Cancellation during command preparation must not start a new runtime.
+        if _agent_cancel_requested(job["id"]):
+            raise RuntimeError("oar_stopped")
+        # Store a deterministic private OAR directory, not the native SDK id.
+        try:
+            session_id_index = command.index("--session-id") + 1
+            executor_session_id = command[session_id_index]
+        except (ValueError, IndexError):
+            executor_session_id = ""
         proc = subprocess.Popen(
             command,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=False,
@@ -3163,7 +3086,14 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
         )
         with AGENT_PROCESSES_GUARD:
             AGENT_PROCESSES[job["id"]] = proc
+        request_payload = _agent_oar_request(job, session, context, history, _runtime_dir)
+        config_id = request_payload["config_id"]
+        pending_input = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+        if len(pending_input) > 2 * 1024 * 1024:
+            raise RuntimeError("oar_protocol_error")
         selector = selectors.DefaultSelector()
+        os.set_blocking(proc.stdin.fileno(), False)
+        selector.register(proc.stdin, selectors.EVENT_WRITE, "stdin")
         if proc.stdout:
             selector.register(proc.stdout, selectors.EVENT_READ, "stdout")
         if proc.stderr:
@@ -3171,35 +3101,36 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
         buffers: dict[str, bytes] = {"stdout": b"", "stderr": b""}
 
         def handle_line(kind: str, raw_line: bytes) -> None:
-            nonlocal output, stderr
+            nonlocal output, stderr, terminal, terminal_answer, protocol_error
             if kind == "stderr":
-                stderr += raw_line.decode("utf-8", errors="replace")
+                # Runtime/extension diagnostics can contain credentials. Discard.
                 return
-            raw = raw_line.decode("utf-8", errors="replace").strip()
-            if not raw:
+            if not raw_line.strip():
                 return
             try:
-                event = json.loads(raw)
-            except json.JSONDecodeError:
-                return
-            if not isinstance(event, dict):
-                return
-            executor_session_id = _agent_stream_session_id(event)
-            chunk = _agent_stream_text_delta(event)
-            if not chunk:
-                return
-            event_type = str(event.get("type") or "")
-            if event_type == "message_update":
-                update_type = str((event.get("assistantMessageEvent") or {}).get("type") or "")
-                if update_type == "text_delta":
-                    output += chunk
-                elif not output:
-                    output = chunk
-            elif event_type in {"response.output_text.delta", "output_text.delta", "text_delta"}:
-                output += chunk
-            elif not output:
-                output = chunk
-            _update_agent_job_output(job["id"], session["id"], output)
+                event = parse_oar_event(raw_line.decode("utf-8"))
+                if terminal is not None:
+                    raise RuntimeError("oar_protocol_error")
+                if event["type"] == "oar_result":
+                    terminal = event
+                    if event["outcome"] == "completed":
+                        terminal_answer = event["answer"]
+                        if len(terminal_answer) > 2 * 1024 * 1024:
+                            raise RuntimeError("oar_protocol_error")
+                        # A terminal answer is authoritative for success. Keep any
+                        # earlier stream text visible when the terminal answer is
+                        # empty, but never use that text to promote the job.
+                        if terminal_answer.strip():
+                            output = terminal_answer
+                            _update_agent_job_output(job["id"], session["id"], output)
+                elif event["type"] == "text_delta":
+                    output += event["delta"]
+                    if len(output) > 2 * 1024 * 1024:
+                        raise RuntimeError("oar_protocol_error")
+                    _update_agent_job_output(job["id"], session["id"], output)
+            except (RuntimeError, UnicodeError):
+                protocol_error = True
+                _terminate_agent_process(job["id"])
 
         while selector.get_map():
             if time.monotonic() >= deadline:
@@ -3217,6 +3148,16 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
             for key, _mask in events:
                 stream = key.fileobj
                 kind = key.data
+                if kind == "stdin":
+                    try:
+                        written = os.write(stream.fileno(), pending_input[:4096])
+                        pending_input = pending_input[written:]
+                    except BrokenPipeError:
+                        pending_input = b""
+                    if not pending_input:
+                        selector.unregister(stream)
+                        stream.close()
+                    continue
                 try:
                     chunk = stream.read1(4096) if hasattr(stream, "read1") else stream.read(4096)
                 except OSError:
@@ -3232,6 +3173,10 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
                         pass
                     continue
                 buffers[kind] += chunk
+                if len(buffers[kind]) > 2 * 1024 * 1024:
+                    protocol_error = True
+                    _terminate_agent_process(job["id"])
+                    buffers[kind] = b""
                 while b"\n" in buffers[kind]:
                     line, buffers[kind] = buffers[kind].split(b"\n", 1)
                     handle_line(kind, line)
@@ -3248,15 +3193,27 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
         stderr = "agent process did not exit"
     except Exception as exc:
         return_code = -1
-        stderr = str(exc)
+        stderr = str(exc) if str(exc) in OAR_ERROR_MESSAGES else "oar_runtime_failed"
+        if proc is not None:
+            _terminate_agent_process(job["id"])
     finally:
+        if proc:
+            terminate_group(proc)
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream and not stream.closed:
+                    stream.close()
         if selector is not None:
             selector.close()
         with AGENT_PROCESSES_GUARD:
             AGENT_PROCESSES.pop(job["id"], None)
+        # Bridge finally cleans its unique directory. After SIGKILL, reap only
+        # copies carrying this invocation's token, never another worker's config.
+        if _runtime_dir and config_id:
+            cleanup_oar_config(_runtime_dir, config_id)
 
     conn = agent_db_conn()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT cancel_requested, answer_text FROM agent_jobs WHERE id=?",
             (job["id"],),
@@ -3268,13 +3225,22 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
             status, error = "stopped", ""
         elif timed_out:
             status, error = "failed", "agent_timeout"
+        elif protocol_error:
+            status, error = "failed", "oar_protocol_error"
+        elif terminal is not None and terminal["outcome"] != "completed":
+            code = terminal.get("error") or ""
+            status, error = "failed", code if code in OAR_ERROR_MESSAGES else "oar_turn_failed"
         elif return_code != 0:
-            status, error = "failed", _agent_error_text(stderr or "agent_failed")
-        elif not output.strip():
+            status, error = "failed", stderr if stderr in OAR_ERROR_MESSAGES else "oar_runtime_failed"
+        elif terminal is None:
+            status, error = "failed", "oar_protocol_error"
+        elif terminal_answer is None or not terminal_answer.strip():
             status, error = "failed", "empty_answer"
         else:
             status, error = "succeeded", ""
         with conn:
+            if status == "succeeded" and executor_session_id:
+                conn.execute("UPDATE agent_sessions SET executor_session_id=? WHERE id=?", (executor_session_id, session["id"]))
             conn.execute(
                 """
                 UPDATE agent_jobs
@@ -3798,6 +3764,7 @@ def _create_agent_job_response(item_id: str, body: object, *, retry_job_id: str 
     conn = agent_db_conn()
     try:
         cleanup_agent_sessions(conn)
+        conn.execute("BEGIN IMMEDIATE")
         with conn:
             session_id = ""
             if isinstance(body, dict):
@@ -3824,6 +3791,9 @@ def _create_agent_job_response(item_id: str, body: object, *, retry_job_id: str 
             response_payload = _agent_payload_for_session(conn, session)
             response_payload["job"] = _serialize_agent_job(job)
         return jsonify({"ok": True, "job_id": job["id"], "context_available": True, **response_payload}), 202
+    except ValueError as exc:
+        payload, status = _agent_error_response(str(exc))
+        return jsonify(payload), status
     finally:
         conn.close()
 
@@ -3864,19 +3834,22 @@ def api_agent_job_stop(item_id: str, job_id: str):
     ensure_agent_db()
     conn = agent_db_conn()
     try:
+        # Serialize with worker claim and finalization before inspecting status.
+        conn.execute("BEGIN IMMEDIATE")
         with conn:
             job = _agent_job_for_item(conn, item_id, job_id)
             if not job:
                 return jsonify({"ok": False, "error": "job_not_found"}), 404
             if job["status"] in {"queued", "pending", "running", "streaming", "stopping"}:
                 stamp = now_ts()
+                queued = job["status"] in {"queued", "pending"}
                 conn.execute(
-                    "UPDATE agent_jobs SET cancel_requested=1, status='stopped', finished_at=?, updated_at=? WHERE id=?",
-                    (stamp, stamp, job_id),
+                    "UPDATE agent_jobs SET cancel_requested=1, status=?, finished_at=?, updated_at=? WHERE id=?",
+                    ("stopped" if queued else "stopping", stamp if queued else None, stamp, job_id),
                 )
                 conn.execute(
-                    "UPDATE agent_messages SET status='stopped', updated_at=? WHERE job_id=? AND role='assistant'",
-                    (stamp, job_id),
+                    "UPDATE agent_messages SET status=?, updated_at=? WHERE job_id=? AND role='assistant'",
+                    ("stopped" if queued else "stopping", stamp, job_id),
                 )
                 conn.execute(
                     "UPDATE agent_sessions SET last_activity_at=?, expires_at=?, updated_at=? WHERE id=?",
@@ -3884,6 +3857,11 @@ def api_agent_job_stop(item_id: str, job_id: str):
                 )
             job = conn.execute("SELECT * FROM agent_jobs WHERE id=?", (job_id,)).fetchone()
         _terminate_agent_process(job_id)
+        with conn:
+            # Running/streaming jobs stay stopping until run_agent_job() has
+            # finished process and per-worker config cleanup. This preserves the
+            # session execution lock through the launch-registration window.
+            job = conn.execute("SELECT * FROM agent_jobs WHERE id=?", (job_id,)).fetchone()
         return jsonify({"ok": True, "job": _serialize_agent_job(job)})
     finally:
         conn.close()
@@ -9699,6 +9677,8 @@ def api_news_chat(item_id: str):
             return jsonify({"ok": False, "error": "missing_session_id"}), 502
         if error == "pi_empty_answer":
             return jsonify({"ok": False, "error": "empty_answer"}), 502
+        if error in OAR_ERROR_MESSAGES:
+            return jsonify({"ok": False, "error": error}), 502
         return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
     finally:
         lock.release()
@@ -9765,6 +9745,8 @@ def api_news_chat_archive(item_id: str):
             return jsonify({"ok": False, "error": "provider_timeout"}), 504
         if error == "pi_empty_archive":
             return jsonify({"ok": False, "error": "empty_archive_summary"}), 502
+        if error in OAR_ERROR_MESSAGES:
+            return jsonify({"ok": False, "error": error}), 502
         return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
     finally:
         lock.release()
@@ -9810,6 +9792,8 @@ def api_news_chat_archive(item_id: str):
             "provider": payload.get("provider") or "pi",
             "model": payload.get("model") or pi_model,
             "archive_summary": summary,
+            "runtime": payload.get("runtime", "oar-pi"),
+            "runtime_compatibility": payload.get("runtime_compatibility", ""),
             "has_note": 1 if saved else 0,
             "note": (dict(saved) if saved else None),
             "note_preview": build_note_preview(saved["note"] if saved else None),

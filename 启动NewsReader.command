@@ -83,6 +83,16 @@ else
   fi
 fi
 
+# OAR is optional for reading news: diagnose, but never install/upgrade implicitly.
+OAR_NODE="${NEWS_READER_NODE:-$(command -v node 2>/dev/null || true)}"
+if [[ -z "$OAR_NODE" ]] || ! command -v "$OAR_NODE" >/dev/null 2>&1; then
+  print -u2 -- "新闻 Chat / Agent 不可用：请安装 Node.js 24+；新闻阅读仍可启动。"
+elif ! "$OAR_NODE" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)' >/dev/null 2>&1; then
+  print -u2 -- "新闻 Chat / Agent 不可用：OAR 需要 Node.js 24+；新闻阅读仍可启动。"
+elif [[ ! -f "$SCRIPT_DIR/node_modules/@botiverse/oar/package.json" ]]; then
+  print -u2 -- "新闻 Chat / Agent 依赖缺失；请在项目目录执行 npm ci --ignore-scripts。新闻阅读仍可启动。"
+fi
+
 # Preserve the historical remote-access behavior without making every direct
 # launcher invocation expose the service. An explicit host always wins; when
 # it is absent, use a valid Tailscale IPv4 and otherwise keep loopback.

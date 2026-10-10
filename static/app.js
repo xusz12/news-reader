@@ -3548,7 +3548,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.2.6";
+  version.textContent = "News Reader v2.3.1";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5604,10 +5604,36 @@ function renderDetailChatMeta(item, session) {
   if (session?.executor_provider) {
     const contextBadge = document.createElement("span");
     contextBadge.className = "detail-chat-source";
-    contextBadge.textContent = `本机 CLI · ${session.executor_provider}`;
+    contextBadge.textContent = session.runtime === "pi-cli"
+      ? `Pi CLI · 兼容模式 · ${session.executor_provider}`
+      : `OAR · Pi SDK · ${session.executor_provider}`;
     detailChatMeta.appendChild(contextBadge);
   }
+  if (session?.runtime_compatibility || session?.history_compatibility) {
+    const compatibility = document.createElement("span");
+    compatibility.className = "detail-chat-source";
+    compatibility.textContent = [session.runtime_compatibility, session.history_compatibility].filter(Boolean).join(" ");
+    detailChatMeta.appendChild(compatibility);
+  }
 }
+
+const OAR_ERROR_LABELS = {
+  oar_resources_changed: "此会话需要 Pi 原生资源，请明确开启新会话使用兼容模式；未自动切换执行方式。",
+  oar_trust_changed: "此会话的项目信任已改变，请检查 Pi 设置或明确开启新会话；未自动授权或切换执行方式。",
+  oar_project_untrusted: "Pi 原有规则未信任此项目，任务已暂停，未自动扩大权限。请在 Pi 检查项目信任。",
+  oar_extension_failed: "Pi 扩展或资源加载失败，任务已暂停。请检查 Pi 配置后重试。",
+  oar_node_missing: "未发现 Node.js，请安装 Node.js 24 或更高版本。",
+  oar_node_version: "OAR 需要 Node.js 24 或更高版本。",
+  oar_dependency_missing: "OAR 依赖缺失，请在项目目录执行 npm ci --ignore-scripts。",
+  oar_auth_required: "当前 Pi 模型没有可用登录，请在 Pi 中检查登录或选择可用模型。",
+  oar_model_unavailable: "所选 Pi 模型不存在，请检查模型配置。",
+  oar_runtime_failed: "OAR 运行失败，请检查本机 Pi 模型与扩展配置。",
+  oar_turn_failed: "Agent 未完整完成请求，请重试；部分输出不算成功。",
+  oar_legacy_session_missing: "旧 Pi 会话文件已不可用，请明确开启新会话；不会悄悄清空历史。",
+  oar_empty_answer: "Agent 未返回有效答案，请重试。",
+  oar_protocol_error: "Agent 返回不完整或格式异常，请重试。",
+  agent_timeout: "后台研究超时，请重试。",
+};
 
 function appendSafeAgentText(container, value) {
   if (!container) return;
@@ -5727,6 +5753,7 @@ function detailAgentErrorMessage(error, fallbackMessage) {
     return "无法连接 Agent 后端；请确认 news-reader 服务已启动并刷新页面。";
   }
   const known = {
+    ...OAR_ERROR_LABELS,
     detail_not_ready: "正文尚未抓取完成，暂时不能提问。",
     job_in_progress: "上一条问题仍在后台研究，请先停止或等待完成。",
     session_config_changed: "模型配置已变化，请点击“新会话”后重试。",
@@ -5882,7 +5909,7 @@ function renderDetailChat(item) {
         ? "已停止；已生成的部分内容已保留。"
         : job.status === "interrupted"
           ? "服务曾重启，任务已中断；可以重试。"
-          : `研究失败：${job.error || "请重试"}`;
+          : `研究失败：${OAR_ERROR_LABELS[job.error] || job.error || "请重试"}`;
       card.appendChild(error);
       const retry = document.createElement("button");
       retry.type = "button";
@@ -5947,10 +5974,11 @@ async function archiveDetailChat() {
     state.itemsById.set(item.id, item);
     rerenderOne(item.id);
     refreshDetailNoteUI(item);
-    state.detailChatStatus = "已归档到想法。";
+    state.detailChatStatus = payload.runtime === "pi-cli" ? "已归档到想法（Pi CLI 兼容模式）。" : "已归档到想法。";
   } catch (error) {
     const code = error instanceof Error ? error.message : "archive_request_failed";
     const labelMap = {
+      ...OAR_ERROR_LABELS,
       empty_archive_source: "没有可归档回答。",
       empty_archive_summary: "没有生成可归档结论。",
       invalid_archive_summary: "归档结果无效，请重试。",

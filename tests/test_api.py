@@ -2801,9 +2801,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.2.6" in html
-    assert "/static/style.css?v=2.2.6" in html
-    assert "/static/app.js?v=2.2.6" in html
+    assert "News Reader v2.3.1" in html
+    assert "/static/style.css?v=2.3.1" in html
+    assert "/static/app.js?v=2.3.1" in html
     assert 'id="settingsDatabaseBrowseBtn"' in html
     assert 'class="settings-database-current-path"' in html
     app_source = Path("static/app.js").read_text(encoding="utf-8")
@@ -4456,10 +4456,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.2.6" in app_source
-    assert "News Reader v2.2.6" in index_source
-    assert "/static/style.css?v=2.2.6" in index_source
-    assert "/static/app.js?v=2.2.6" in index_source
+    assert "News Reader v2.3.1" in app_source
+    assert "News Reader v2.3.1" in index_source
+    assert "/static/style.css?v=2.3.1" in index_source
+    assert "/static/app.js?v=2.3.1" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -5549,125 +5549,55 @@ def test_parse_pi_stdout_detects_will_retry():
 
 
 def test_run_pi_chat_success(tmp_path: Path, monkeypatch):
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
     import app as app_module
-
-    importlib.reload(app_module)
-
+    monkeypatch.setattr(app_module, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
     captured = {}
-
-    def fake_run(args, **kwargs):
-        captured["args"] = args
-        captured["env"] = kwargs.get("env")
-        class Completed:
-            returncode = 0
-            stdout = (
-                '{"type":"session","id":"pi-session-run"}\n'
-                '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Pi 回答"}}\n'
-                '{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}\n'
-            )
-            stderr = ""
-        return Completed()
-
-    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
-    result = app_module.run_pi_chat(
-        item_id="item-1",
-        question="怎么看？",
-        title="News",
-        source="Reuters",
-        published_at="2026-06-11",
-        content="body",
-        context_level="full_detail",
-        pi_provider="ollama",
-        pi_model="minimax-m3:cloud",
-    )
+    def fake_run(command, request, env, timeout):
+        captured.update(command=command, request=request, env=env)
+        return "Pi 回答"
+    monkeypatch.setattr(app_module, "run_oar_once", fake_run)
+    result = app_module.run_pi_chat(item_id="item-1", question="怎么看？", title="News", source="Reuters",
+        published_at="2026-06-11", content="body", context_level="full_detail", pi_provider="ollama", pi_model="minimax-m3:cloud")
     assert result["provider"] == "pi"
-    assert result["session_id"] == "pi-session-run"
+    assert result["session_id"].startswith("newsreader-oar-chat-")
     assert result["model"] == "minimax-m3:cloud"
     assert result["answer"] == "Pi 回答"
-    assert captured["env"] is not None
     assert captured["env"].get("PI_PACKAGE_DIR") is None
-    assert "--provider" in captured["args"] and "ollama" in captured["args"]
-    assert "--model" in captured["args"] and "minimax-m3:cloud" in captured["args"]
+    assert captured["request"]["provider"] == "ollama"
+    assert captured["request"]["model"] == "minimax-m3:cloud"
+    assert "怎么看" not in " ".join(captured["command"])
 
 
 def test_run_pi_chat_archive_success(tmp_path: Path, monkeypatch):
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
     import app as app_module
-
-    importlib.reload(app_module)
-
-    captured = {}
-
-    def fake_run(args, **kwargs):
-        captured["args"] = args
-        captured["env"] = kwargs.get("env")
-
-        class Completed:
-            returncode = 0
-            stdout = (
-                '{"type":"session","id":"archive-session"}\n'
-                '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"归档结论"}}\n'
-                '{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}\n'
-            )
-            stderr = ""
-        return Completed()
-
-    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
-    result = app_module.run_pi_chat_archive(
-        title="News",
-        source="Reuters",
-        published_at="2026-06-11",
+    monkeypatch.setattr(app_module, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    calls = []
+    def fake_run(command, request, env, timeout):
+        calls.append((command, request, env))
+        return "归档结论"
+    monkeypatch.setattr(app_module, "run_oar_once", fake_run)
+    args = dict(title="News", source="Reuters", published_at="2026-06-11",
         messages=[{"role": "user", "content": "总结"}, {"role": "assistant", "content": "结论"}],
-        pi_provider="ollama",
-        pi_model="minimax-m3:cloud",
-    )
-    assert result["provider"] == "pi"
-    assert result["model"] == "minimax-m3:cloud"
-    assert result["summary"] == "归档结论"
-    # 归档单次无会话：必须带 --no-session，不复用原 chat session。
-    assert "--no-session" in captured["args"]
-    assert "--session-id" not in captured["args"]
-    # 仍清理 PI_PACKAGE_DIR，避免 Slock 注入导致 pi 启动崩溃。
-    assert captured["env"] is not None
-    assert captured["env"].get("PI_PACKAGE_DIR") is None
+        pi_provider="ollama", pi_model="minimax-m3:cloud")
+    result = app_module.run_pi_chat_archive(**args)
+    app_module.run_pi_chat_archive(**args)
+    assert result == {"provider": "pi", "model": "minimax-m3:cloud", "summary": "归档结论",
+        "runtime": "oar-pi", "runtime_compatibility": ""}
+    assert calls[0][1]["state_dir"] != calls[1][1]["state_dir"]
+    assert "newsreader-oar-archive-" in calls[0][1]["state_dir"]
+    assert not Path(calls[0][1]["state_dir"]).exists()
+    assert calls[0][2].get("PI_PACKAGE_DIR") is None
 
 
 def test_run_pi_chat_archive_empty_raises(tmp_path: Path, monkeypatch):
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
     import app as app_module
-
-    importlib.reload(app_module)
-
-    monkeypatch.setattr(
-        app_module.subprocess,
-        "run",
-        lambda args, **kwargs: type(
-            "Completed",
-            (),
-            {"returncode": 0, "stdout": '{"type":"session","id":"archive-session"}\n', "stderr": ""},
-        )(),
-    )
-    raised = False
-    try:
-        app_module.run_pi_chat_archive(
-            title="News",
-            source="Reuters",
-            published_at="2026-06-11",
+    monkeypatch.setattr(app_module, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
+    monkeypatch.setattr(app_module, "run_oar_once", lambda *args: "")
+    with pytest.raises(RuntimeError, match="pi_empty_archive"):
+        app_module.run_pi_chat_archive(title="News", source="Reuters", published_at="2026-06-11",
             messages=[{"role": "user", "content": "总结"}, {"role": "assistant", "content": "结论"}],
-            pi_provider="ollama",
-            pi_model="minimax-m3:cloud",
-        )
-    except RuntimeError as exc:
-        raised = True
-        assert "pi_empty_archive" in str(exc)
-    assert raised, "空摘要应抛 RuntimeError(pi_empty_archive)"
+            pi_provider="ollama", pi_model="minimax-m3:cloud")
+    assert not list((tmp_path / "runtime").iterdir())
 
 
 def test_news_chat_dispatches_to_pi_when_configured(tmp_path: Path, monkeypatch):
@@ -5752,45 +5682,21 @@ def test_news_chat_dispatches_to_pi_when_configured(tmp_path: Path, monkeypatch)
 
 def test_pi_chat_first_and_follow_up_reuse_the_same_session(tmp_path: Path, monkeypatch):
     import app as app_module
-
+    monkeypatch.setattr(app_module, "AGENT_RUNTIME_DIR", tmp_path / "runtime")
     calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        return types.SimpleNamespace(
-            returncode=0,
-            stdout='{"type":"session","id":"pi-chat-session"}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"回答"}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
-    first = app_module.run_pi_chat(
-        item_id="item-1",
-        question="首问",
-        title="标题",
-        source="Reuters",
-        published_at="2026-06-11 09:00:00",
-        content="English body",
-        context_level="full_detail",
-        pi_provider="ollama",
-        pi_model="minimax-m3:cloud",
-    )
-    second = app_module.run_pi_chat(
-        item_id="item-1",
-        question="追问",
-        title="标题",
-        source="Reuters",
-        published_at="2026-06-11 09:00:00",
-        content="English body",
-        context_level="full_detail",
-        pi_provider="ollama",
-        pi_model="minimax-m3:cloud",
-        session_id=first["session_id"],
-    )
-    assert first["session_id"] == second["session_id"] == "pi-chat-session"
-    assert calls[0][0:4] == ["pi", "-p", "--mode", "json"]
-    assert calls[1][calls[1].index("--session-id") + 1] == "pi-chat-session"
-    assert all("--no-session" not in command for command in calls)
+    def fake_run(command, request, env, timeout):
+        calls.append((command, request))
+        return "回答"
+    monkeypatch.setattr(app_module, "run_oar_once", fake_run)
+    args = dict(item_id="item-1", title="标题", source="Reuters", published_at="2026-06-11 09:00:00",
+        content="English body", context_level="full_detail", pi_provider="ollama", pi_model="minimax-m3:cloud")
+    first = app_module.run_pi_chat(question="首问", **args)
+    second = app_module.run_pi_chat(question="追问", session_id=first["session_id"], **args)
+    assert first["session_id"] == second["session_id"]
+    assert calls[0][1]["state_dir"] == calls[1][1]["state_dir"]
+    assert "English body" in calls[0][1]["prompt"]
+    assert calls[1][1]["resume_prompt"] == "追问"
+    assert all("追问" not in " ".join(command) for command, _ in calls)
 
 
 def test_news_chat_archive_always_uses_pi_and_appends_note(tmp_path: Path, monkeypatch):
@@ -9359,10 +9265,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.2.6" in app_source
-    assert "News Reader v2.2.6" in index_source
-    assert "/static/style.css?v=2.2.6" in index_source
-    assert "/static/app.js?v=2.2.6" in index_source
+    assert "News Reader v2.3.1" in app_source
+    assert "News Reader v2.3.1" in index_source
+    assert "/static/style.css?v=2.3.1" in index_source
+    assert "/static/app.js?v=2.3.1" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10870,10 +10776,10 @@ def test_agent_frontend_traffic_lights_and_right_aligned_actions_contract():
     index_source = Path("static/index.html").read_text(encoding="utf-8")
     style_source = Path("static/style.css").read_text(encoding="utf-8")
 
-    assert "News Reader v2.2.6" in index_source
-    assert "/static/style.css?v=2.2.6" in index_source
-    assert "/static/app.js?v=2.2.6" in index_source
-    assert 'version.textContent = "News Reader v2.2.6"' in app_source
+    assert "News Reader v2.3.1" in index_source
+    assert "/static/style.css?v=2.3.1" in index_source
+    assert "/static/app.js?v=2.3.1" in index_source
+    assert 'version.textContent = "News Reader v2.3.1"' in app_source
 
     collapse = '<button id="detailChatBackBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-collapse" type="button" aria-label="收起 Agent 浮窗" title="收起 Agent 浮窗"></button>'
     expand = '<button id="detailAgentExpandBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-expand" type="button" aria-label="放大 Agent 浮窗" title="放大 Agent 浮窗"></button>'
@@ -11479,60 +11385,162 @@ assert(rerenderCount === 1 && noteRefreshCount === 1, "failed archive refreshed 
     subprocess.run(["node", "-e", textwrap.dedent(script)], check=True)
 
 
+def _install_fake_oar(tmp_path, monkeypatch):
+    import sys
+    fake = tmp_path / "fake-node"
+    fake.write_text("#!" + sys.executable + "\n" + r'''
+import json, os, pathlib, shutil, signal, sys, time
+request = json.load(sys.stdin)
+state = pathlib.Path(request["state_dir"])
+state.mkdir(parents=True, exist_ok=True)
+mapping = state / "session.json"
+request["effective_prompt"] = request["resume_prompt"] if mapping.exists() else request["prompt"]
+request["argv"] = sys.argv[1:]
+with open(os.environ["OAR_REQUEST_LOG"], "a") as log:
+    log.write(json.dumps(request, ensure_ascii=False) + "\n")
+mode = os.environ.get("OAR_FAKE_MODE", "success")
+config = state / ("config-" + request["config_id"] + "-fixture")
+def cleanup(_signum=None, _frame=None):
+    shutil.rmtree(config, ignore_errors=True)
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, cleanup)
+signal.signal(signal.SIGINT, cleanup)
+if mode == "hang":
+    config.mkdir(exist_ok=True)
+    (config / "auth.json").write_text("private")
+    print(json.dumps({"type": "text_delta", "delta": "partial"}), flush=True)
+    time.sleep(60)
+if mode == "malformed":
+    print("not json"); sys.exit(0)
+if mode == "auth":
+    print(json.dumps({"type": "oar_result", "outcome": "failed", "error": "oar_auth_required"})); sys.exit(1)
+print(json.dumps({"type": "text_delta", "delta": "完成"}), flush=True)
+if mode == "empty_terminal":
+    print(json.dumps({"type": "oar_result", "outcome": "completed", "answer": ""}), flush=True)
+    sys.exit(0)
+if mode == "partial": sys.exit(0)
+result = {"type": "oar_result", "outcome": "completed", "answer": "完成"}
+print(json.dumps(result), flush=True)
+if mode == "duplicate": print(json.dumps(result), flush=True)
+if mode == "exit_failure": sys.exit(1)
+mapping.write_text(json.dumps({"id": "fixture-native", "history_replayed": request.get("history_replayed", False)}))
+''', encoding="utf-8")
+    fake.chmod(0o755)
+    log = tmp_path / "oar-requests.jsonl"
+    monkeypatch.setenv("NEWS_READER_NODE", str(fake))
+    monkeypatch.setenv("OAR_REQUEST_LOG", str(log))
+    return log
+
+
+@pytest.mark.parametrize("answer", ["", " \t\n"])
+def test_oar_empty_terminal_does_not_promote_streamed_text(tmp_path: Path, monkeypatch, answer):
+    app_module, client, item, _db_path, _agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    _install_fake_oar(tmp_path, monkeypatch)
+    fake = tmp_path / "fake-node"
+    fake.write_text(fake.read_text().replace('"answer": ""', '"answer": ' + repr(answer)))
+    monkeypatch.setenv("OAR_FAKE_MODE", "empty_terminal")
+    submitted = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "空终态"})
+    assert submitted.status_code == 202
+    assert app_module.process_pending_agent_once() is True
+    job = app_module.load_agent_payload(item["id"])["jobs"][-1]
+    assert job["status"] == "failed"
+    assert job["error"] == "empty_answer"
+    assert job["answer_text"] == "完成"
+    payload = app_module.load_agent_payload(item["id"])
+    assert payload["messages"][-1]["status"] == "failed"
+    with app_module.agent_db_conn() as conn:
+        assert conn.execute("SELECT executor_session_id FROM agent_sessions").fetchone()[0] == ""
+    runtime = app_module.agent_session_runtime_dir(app_module._full_pi_executor_session_id(payload["session"]["id"]))
+    assert not (runtime / "session.json").exists()
+    monkeypatch.setenv("OAR_FAKE_MODE", "success")
+    assert client.post(f"/api/news/{item['id']}/agent/jobs/{submitted.get_json()['job_id']}/retry").status_code == 202
+    assert app_module.process_pending_agent_once()
+    assert app_module.load_agent_payload(item["id"])["jobs"][-1]["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("window", ["command", "registration", "cleanup"])
+def test_oar_stop_during_launch_keeps_session_busy_until_worker_finishes(tmp_path: Path, monkeypatch, window):
+    import threading
+
+    app_module, client, item, _db_path, _agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    _install_fake_oar(tmp_path, monkeypatch)
+    submitted = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "启动竞态"})
+    assert submitted.status_code == 202
+    payload = submitted.get_json()
+    entered, release = threading.Event(), threading.Event()
+    if window == "command":
+        original = app_module._agent_process_command
+        def held(*args, **kwargs):
+            entered.set()
+            assert release.wait(8)
+            return original(*args, **kwargs)
+        monkeypatch.setattr(app_module, "_agent_process_command", held)
+    elif window == "registration":
+        original = app_module.subprocess.Popen
+        def held(*args, **kwargs):
+            proc = original(*args, **kwargs)
+            entered.set()
+            assert release.wait(8)
+            return proc
+        monkeypatch.setattr(app_module.subprocess, "Popen", held)
+    else:
+        original = app_module.cleanup_oar_config
+        def held(*args, **kwargs):
+            entered.set()
+            assert release.wait(8)
+            return original(*args, **kwargs)
+        monkeypatch.setattr(app_module, "cleanup_oar_config", held)
+    worker = threading.Thread(target=app_module.process_pending_agent_once)
+    worker.start()
+    try:
+        assert entered.wait(3)
+        stopped = client.post(f"/api/news/{item['id']}/agent/jobs/{payload['job_id']}/stop")
+        assert stopped.status_code == 200
+        assert stopped.get_json()["job"]["status"] == "stopping"
+        assert not stopped.get_json()["job"]["finished_at"]
+        assert app_module.load_agent_payload(item["id"])["messages"][-1]["status"] == "stopping"
+        assert client.post(f"/api/news/{item['id']}/agent/jobs/{payload['job_id']}/retry").status_code == 409
+        blocked = client.post(
+            f"/api/news/{item['id']}/agent/jobs",
+            json={"question": "旧任务仍在启动", "session_id": payload["session"]["id"]},
+        )
+        assert blocked.status_code == 409
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    settled = app_module.load_agent_payload(item["id"])["jobs"][-1]
+    assert settled["status"] == "stopped" and settled["finished_at"]
+    assert app_module.load_agent_payload(item["id"])["messages"][-1]["status"] == "stopped"
+    retry = client.post(f"/api/news/{item['id']}/agent/jobs/{payload['job_id']}/retry")
+    assert retry.status_code == 202
+
+
 def test_agent_first_and_follow_up_use_one_full_pi_session(tmp_path: Path, monkeypatch):
     app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_pi = fake_bin / "pi"
-    fake_pi.write_text(
-        "#!/bin/sh\nprintf '%s\\0' \"$@\" >> \"$PI_ARGS_LOG\"\nprintf '%s\\0' '__CALL_END__' >> \"$PI_ARGS_LOG\"\nprintf '%s\\n' '{\"type\":\"session\",\"id\":\"pi-output-session\"}' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"完成\"}}'\n",
-        encoding="utf-8",
-    )
-    fake_pi.chmod(0o755)
-    args_log = tmp_path / "pi-args.log"
-    monkeypatch.setenv("PATH", str(fake_bin))
-    monkeypatch.setenv("PI_ARGS_LOG", str(args_log))
-
+    log = _install_fake_oar(tmp_path, monkeypatch)
     first = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "首问"})
     assert first.status_code == 202
     session_id = first.get_json()["session"]["id"]
     assert app_module.process_pending_agent_once() is True
-
-    second = client.post(
-        f"/api/news/{item['id']}/agent/jobs",
-        json={"question": "依赖上一轮的追问", "session_id": session_id},
-    )
+    second = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "依赖上一轮的追问", "session_id": session_id})
     assert second.status_code == 202
     assert app_module.process_pending_agent_once() is True
-
-    calls: list[list[str]] = [[]]
-    for raw in args_log.read_bytes().split(b"\0"):
-        if not raw:
-            continue
-        value = raw.decode("utf-8")
-        if value == "__CALL_END__":
-            calls.append([])
-        else:
-            calls[-1].append(value)
-    calls = [call for call in calls if call]
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    expected = f"newsreader-oar-pi-{session_id}"
     assert len(calls) == 2
-    expected_executor_id = f"newsreader-agent-full-{session_id}"
-    assert all(call[call.index("--session-id") + 1] == expected_executor_id for call in calls)
-    assert calls[0][calls[0].index("--session-dir") + 1] == calls[1][calls[1].index("--session-dir") + 1]
-    assert "complete original article" in calls[0][-1]
-    assert "首问" in calls[0][-1]
-    assert "complete original article" not in calls[1][-1]
-    assert "首问" not in calls[1][-1]
-    assert calls[1][-1].endswith("本轮用户问题：依赖上一轮的追问")
-    restricted_flags = {
-        "--tools", "--no-extensions", "--no-builtin-tools", "--no-context-files",
-        "--no-skills", "--no-prompt-templates", "--no-themes",
-    }
-    assert not restricted_flags.intersection(calls[0] + calls[1])
+    assert all(call["argv"][call["argv"].index("--session-id") + 1] == expected for call in calls)
+    assert calls[0]["state_dir"] == calls[1]["state_dir"]
+    assert "complete original article" in calls[0]["effective_prompt"]
+    assert "首问" in calls[0]["effective_prompt"]
+    assert "complete original article" not in calls[1]["effective_prompt"]
+    assert "首问" not in calls[1]["effective_prompt"]
+    assert calls[1]["effective_prompt"].endswith("本轮用户问题：依赖上一轮的追问")
+    # Full fallback history is supplied to the bridge, not sent on a native resume.
+    assert "首问" in calls[1]["prompt"]
+    assert all("首问" not in " ".join(call["argv"]) for call in calls)
     with sqlite3.connect(agent_db_path) as conn:
-        assert conn.execute(
-            "SELECT executor_session_id FROM agent_sessions WHERE id=?", (session_id,)
-        ).fetchone() == (expected_executor_id,)
+        assert conn.execute("SELECT executor_session_id FROM agent_sessions WHERE id=?", (session_id,)).fetchone() == (expected,)
 
 
 def test_agent_existing_temp_db_is_migrated_before_session_use(tmp_path: Path, monkeypatch):
@@ -11582,53 +11590,27 @@ def test_agent_legacy_pi_session_switches_with_one_time_visible_history(tmp_path
     legacy_id = "newsreader-agent-legacy-session"
     legacy_runtime = app_module.agent_session_runtime_dir(legacy_id)
     legacy_runtime.mkdir(parents=True)
-    (legacy_runtime / "old-session.jsonl").write_text("legacy", encoding="utf-8")
-
-    command, _env, runtime_dir = app_module._agent_process_command(
-        {"provider": "pi", "model": "minimax-m3:cloud", "question": "新问题", "quote_text": "",},
-        {"id": "session-legacy", "executor_provider": "ollama", "executor_session_id": legacy_id},
-        context,
-        [{"role": "user", "content": "旧问题"}, {"role": "assistant", "content": "旧回答"}],
-    )
-    assert command[command.index("--session-id") + 1] == "newsreader-agent-full-session-legacy"
-    assert str(runtime_dir).endswith("newsreader-agent-full-session-legacy")
-    assert "complete original article" in command[-1]
-    assert "此前会话记录（仅用于连续对话）" in command[-1]
-    assert "旧问题" in command[-1]
-    assert "旧回答" in command[-1]
-    assert not legacy_runtime.exists()
-
-    pi_session = {
-        "id": "session-legacy",
-        "executor_provider": "ollama",
-        "executor_session_id": "newsreader-agent-full-session-legacy",
-    }
-    follow_up, _env, _runtime_dir = app_module._agent_process_command(
-        {"provider": "pi", "model": "minimax-m3:cloud", "question": "再问", "quote_text": ""},
-        pi_session,
-        context,
-        [{"role": "user", "content": "旧问题"}, {"role": "assistant", "content": "旧回答"}],
-    )
-    assert follow_up[-1].endswith("本轮用户问题：再问")
-    assert "此前会话记录（仅用于连续对话）" not in follow_up[-1]
-    assert "旧问题" not in follow_up[-1]
-    assert "旧回答" not in follow_up[-1]
+    (legacy_runtime / "old-session.jsonl").write_text("legacy")
+    session = {"id": "session-legacy", "executor_provider": "ollama", "executor_session_id": legacy_id}
+    job = {"provider": "pi", "model": "minimax-m3:cloud", "question": "新问题", "quote_text": ""}
+    history = [{"role": "user", "content": "旧问题"}, {"role": "assistant", "content": "旧回答"}]
+    command, env, runtime_dir = app_module._agent_process_command(job, session, context, history)
+    assert command[command.index("--session-id") + 1] == "newsreader-oar-pi-session-legacy"
+    request = app_module._agent_oar_request(job, session, context, history, runtime_dir)
+    assert "complete original article" in request["prompt"]
+    assert "此前会话记录（仅用于连续对话）" in request["prompt"]
+    assert "旧问题" in request["prompt"] and "旧回答" in request["prompt"]
+    assert request["history_replayed"] is True
+    assert "旧问题" not in request["resume_prompt"]
+    assert "旧对话保留" in app_module._serialize_agent_session(session)["history_compatibility"]
+    # No deletion or mutation of pre-migration native files.
+    assert (legacy_runtime / "old-session.jsonl").read_text() == "legacy"
 
 
 def test_agent_legacy_pi_migration_persists_and_stops_replaying_history(tmp_path: Path, monkeypatch):
     app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(app_module, "_agent_provider_model", lambda: ("pi", "minimax-m3:cloud", "ollama"))
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_pi = fake_bin / "pi"
-    fake_pi.write_text(
-        "#!/bin/sh\nprintf '%s\\0' \"$@\" >> \"$PI_ARGS_LOG\"\nprintf '%s\\0' '__CALL_END__' >> \"$PI_ARGS_LOG\"\nprintf '%s\\n' '{\"type\":\"session\",\"id\":\"pi-output-session\"}' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"完成\"}}'\n",
-        encoding="utf-8",
-    )
-    fake_pi.chmod(0o755)
-    args_log = tmp_path / "pi-args.log"
-    monkeypatch.setenv("PATH", str(fake_bin))
-    monkeypatch.setenv("PI_ARGS_LOG", str(args_log))
+    log = _install_fake_oar(tmp_path, monkeypatch)
 
     first = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "旧问题"})
     assert first.status_code == 202
@@ -11665,27 +11647,19 @@ def test_agent_legacy_pi_migration_persists_and_stops_replaying_history(tmp_path
     assert third.status_code == 202
     assert app_module.process_pending_agent_once() is True
 
-    calls: list[list[str]] = [[]]
-    for raw in args_log.read_bytes().split(b"\0"):
-        if not raw:
-            continue
-        value = raw.decode("utf-8")
-        if value == "__CALL_END__":
-            calls.append([])
-        else:
-            calls[-1].append(value)
-    calls = [call for call in calls if call]
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert len(calls) == 2
-    assert "旧问题" in calls[0][-1]
-    assert "旧回答" in calls[0][-1]
-    assert "此前会话记录（仅用于连续对话）" not in calls[1][-1]
-    assert "旧问题" not in calls[1][-1]
-    assert "旧回答" not in calls[1][-1]
+    assert "旧问题" in calls[0]["effective_prompt"] and "旧回答" in calls[0]["effective_prompt"]
+    assert "此前会话记录（仅用于连续对话）" not in calls[1]["effective_prompt"]
+    assert "旧问题" not in calls[1]["effective_prompt"] and "旧回答" not in calls[1]["effective_prompt"]
+    visible = app_module.load_agent_payload(item["id"])
+    assert any(message["content"] == "旧回答" for message in visible["messages"])
+    assert "旧对话" in visible["session"]["history_compatibility"]
     with sqlite3.connect(agent_db_path) as conn:
         stored = conn.execute(
             "SELECT executor_session_id FROM agent_sessions WHERE id=?", (session_id,)
         ).fetchone()
-    assert stored == (f"newsreader-agent-full-{session_id}",)
+    assert stored == (f"newsreader-oar-pi-{session_id}",)
 
 
 def test_agent_ttl_setting_persists_and_ui_exposes_cleanup_controls(tmp_path: Path, monkeypatch):
@@ -12052,3 +12026,165 @@ def test_database_settings_reject_unwritable_file(tmp_path: Path, monkeypatch):
     response = client.put("/api/settings", json=payload)
     assert response.status_code == 400
     assert response.get_json()["error"] == "database_path_not_readable"
+
+
+@pytest.mark.parametrize('mode,expected_error', [
+    ('partial', 'oar_protocol_error'), ('malformed', 'oar_protocol_error'),
+    ('auth', 'oar_auth_required'), ('duplicate', 'oar_protocol_error'),
+    ('exit_failure', 'oar_runtime_failed'),
+])
+def test_oar_agent_failure_is_persisted_and_retryable(tmp_path, monkeypatch, mode, expected_error):
+    app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    _install_fake_oar(tmp_path, monkeypatch)
+    monkeypatch.setenv('OAR_FAKE_MODE', mode)
+    first = client.post(f"/api/news/{item['id']}/agent/jobs", json={'question':'question'})
+    assert first.status_code == 202
+    assert client.post(f"/api/news/{item['id']}/agent/jobs", json={'question':'duplicate'}).status_code == 409
+    assert app_module.process_pending_agent_once()
+    payload = app_module.load_agent_payload(item['id'])
+    assert payload['jobs'][-1]['status'] == 'failed'
+    assert payload['jobs'][-1]['error'] == expected_error
+    with sqlite3.connect(agent_db_path) as conn:
+        assert conn.execute('SELECT executor_session_id FROM agent_sessions').fetchone() == ('',)
+    monkeypatch.setenv('OAR_FAKE_MODE', 'success')
+    retry = client.post(f"/api/news/{item['id']}/agent/jobs/{first.get_json()['job_id']}/retry")
+    assert retry.status_code == 202
+    assert app_module.process_pending_agent_once()
+    assert app_module.load_agent_payload(item['id'])['jobs'][-1]['status'] == 'succeeded'
+
+
+def test_oar_node_missing_settles_job(tmp_path, monkeypatch):
+    app_module, client, item, _db_path, _agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv('NEWS_READER_NODE', '/not/a/node')
+    client.post(f"/api/news/{item['id']}/agent/jobs", json={'question':'question'})
+    assert app_module.process_pending_agent_once()
+    job = app_module.load_agent_payload(item['id'])['jobs'][-1]
+    assert job['status'] == 'failed' and job['error'] == 'oar_node_missing'
+
+
+def test_oar_timeout_and_stop_cleanup(tmp_path, monkeypatch):
+    import threading
+    import time
+    app_module, client, item, _db_path, _agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    log = _install_fake_oar(tmp_path, monkeypatch)
+    monkeypatch.setenv('OAR_FAKE_MODE', 'hang')
+    monkeypatch.setattr(app_module, 'AGENT_JOB_TIMEOUT_SECONDS', .2)
+    first = client.post(f"/api/news/{item['id']}/agent/jobs", json={'question':'timeout'})
+    assert app_module.process_pending_agent_once()
+    payload = app_module.load_agent_payload(item['id'])
+    assert payload['jobs'][-1]['status'] == 'failed'
+    assert payload['jobs'][-1]['error'] == 'agent_timeout'
+    assert not list(app_module.AGENT_RUNTIME_DIR.glob('*/config-*'))
+    monkeypatch.setattr(app_module, 'AGENT_JOB_TIMEOUT_SECONDS', 10)
+    second = client.post(f"/api/news/{item['id']}/agent/jobs", json={'question':'stop'})
+    worker = threading.Thread(target=app_module.process_pending_agent_once)
+    worker.start()
+    deadline = time.monotonic() + 3
+    while len(log.read_text().splitlines()) < 2 and time.monotonic() < deadline:
+        time.sleep(.02)
+    stopped = client.post(f"/api/news/{item['id']}/agent/jobs/{second.get_json()['job_id']}/stop")
+    assert stopped.status_code == 200
+    worker.join(4)
+    assert not worker.is_alive()
+    assert app_module.load_agent_payload(item['id'])['jobs'][-1]['status'] == 'stopped'
+    assert not app_module.AGENT_PROCESSES
+    assert not list(app_module.AGENT_RUNTIME_DIR.glob('*/config-*'))
+
+
+def test_oar_stop_wins_completion_race(tmp_path, monkeypatch):
+    app_module, client, item, _db_path, agent_db_path = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    _install_fake_oar(tmp_path, monkeypatch)
+    original = app_module._update_agent_job_output
+    def cancel_after_output(job_id, session_id, output, **kwargs):
+        original(job_id, session_id, output, **kwargs)
+        with sqlite3.connect(agent_db_path) as conn:
+            conn.execute('UPDATE agent_jobs SET cancel_requested=1 WHERE id=?', (job_id,))
+    monkeypatch.setattr(app_module, '_update_agent_job_output', cancel_after_output)
+    client.post(f"/api/news/{item['id']}/agent/jobs", json={'question':'race'})
+    assert app_module.process_pending_agent_once()
+    job = app_module.load_agent_payload(item['id'])['jobs'][-1]
+    assert job['status'] == 'stopped'
+
+
+def test_oar_sync_legacy_id_is_imported_not_discarded(tmp_path, monkeypatch):
+    import app as app_module
+    monkeypatch.setattr(app_module, 'AGENT_RUNTIME_DIR', tmp_path / 'runtime')
+    requests = []
+    def fake_run(command, request, env, timeout):
+        requests.append(request)
+        return 'continued'
+    monkeypatch.setattr(app_module, 'run_oar_once', fake_run)
+    args = dict(item_id='item', title='fixture', source='fixture', published_at='2026-10-10', content='sample',
+                context_level='full_detail', pi_provider='fixture', pi_model='fixture')
+    result = app_module.run_pi_chat(question='next', session_id='old-native-id', **args)
+    assert requests[0]['legacy_native_id'] == 'old-native-id'
+    assert result['session_id'].startswith('newsreader-oar-chat-')
+    app_module.run_pi_chat(question='again', session_id=result['session_id'], **args)
+    assert 'legacy_native_id' not in requests[1]
+    assert requests[0]['state_dir'] == requests[1]['state_dir']
+    with pytest.raises(RuntimeError, match='pi_session_invalid'):
+        app_module.run_pi_chat(question='unsafe', session_id='../../unsafe', **args)
+
+
+def test_pi_archive_keeps_cli_label_before_private_state_cleanup(tmp_path, monkeypatch):
+    import app as app_module
+    monkeypatch.setattr(app_module, 'AGENT_RUNTIME_DIR', tmp_path / 'runtime')
+    states = []
+    def fake_run(command, request, env, timeout):
+        state = Path(request['state_dir'])
+        states.append(state)
+        (state / 'route.json').write_text(json.dumps({'runtime': 'cli'}))
+        return '归档结论'
+    monkeypatch.setattr(app_module, 'run_oar_once', fake_run)
+    result = app_module.run_pi_chat_archive(title='Fixture', source='Fixture', published_at='2026-10-10',
+        messages=[{'role': 'user', 'content': '归档'}, {'role': 'assistant', 'content': '结论'}],
+        pi_provider='fixture', pi_model='fixture')
+    assert result['runtime'] == 'pi-cli'
+    assert '兼容模式' in result['runtime_compatibility']
+    assert all(not state.exists() for state in states)
+
+
+def test_legacy_background_session_uses_new_route_for_compatibility_label(tmp_path, monkeypatch):
+    import app as app_module
+    monkeypatch.setattr(app_module, 'AGENT_RUNTIME_DIR', tmp_path / 'runtime')
+    session_id = 'fixture-legacy-label'
+    state = app_module.agent_session_runtime_dir(app_module._full_pi_executor_session_id(session_id))
+    state.mkdir(parents=True)
+    (state / 'route.json').write_text(json.dumps({'runtime': 'cli'}))
+    result = app_module._serialize_agent_session({'id': session_id, 'executor_session_id': 'legacy-native-fixture',
+        'executor_provider': 'fixture', 'context_json': '{}'})
+    assert result['runtime'] == 'pi-cli'
+    assert '兼容模式' in result['runtime_compatibility']
+    assert '旧对话' in result['history_compatibility']
+    assert 'executor_session_id' not in result and 'context_json' not in result
+
+
+def test_oar_old_worker_cleanup_does_not_remove_another_invocations_config(tmp_path, monkeypatch):
+    app_module, client, item, _, _ = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    _install_fake_oar(tmp_path, monkeypatch)
+    submitted = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "清理归属"}).get_json()
+    runtime = app_module.agent_session_runtime_dir(app_module._full_pi_executor_session_id(submitted["session"]["id"]))
+    other_config = runtime / ("config-" + "a" * 32 + "-another-worker")
+    other_config.mkdir(parents=True)
+    (other_config / "auth.json").write_text("another worker credential")
+    # Ignore SIGTERM so Python must clean its own token after SIGKILL.
+    fake = tmp_path / "fake-node"
+    fake.write_text(fake.read_text().replace("signal.signal(signal.SIGTERM, cleanup)",
+                                           "signal.signal(signal.SIGTERM, signal.SIG_IGN)"))
+    monkeypatch.setenv("OAR_FAKE_MODE", "hang")
+    monkeypatch.setattr(app_module, "AGENT_JOB_TIMEOUT_SECONDS", .2)
+    assert app_module.process_pending_agent_once()
+    assert app_module.load_agent_payload(item["id"])["jobs"][-1]["status"] == "failed"
+    assert list(runtime.glob("config-*")) == [other_config]
+    assert (other_config / "auth.json").read_text() == "another worker credential"
+
+
+def test_oar_queued_stop_is_immediate_and_never_runs(tmp_path, monkeypatch):
+    app_module, client, item, _, _ = _setup_agent_api_fixture(tmp_path, monkeypatch)
+    log = _install_fake_oar(tmp_path, monkeypatch)
+    submitted = client.post(f"/api/news/{item['id']}/agent/jobs", json={"question": "排队取消"}).get_json()
+    stopped = client.post(f"/api/news/{item['id']}/agent/jobs/{submitted['job_id']}/stop").get_json()["job"]
+    assert stopped["status"] == "stopped" and stopped["finished_at"]
+    assert app_module.process_pending_agent_once() is False
+    assert not log.exists()
+    assert client.post(f"/api/news/{item['id']}/agent/jobs/{submitted['job_id']}/retry").status_code == 202

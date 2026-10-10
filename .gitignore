@@ -12,3 +12,6 @@ tmp/
 scripts/experiment_*.py
 PRODUCT.md
 DESIGN.md
+
+# OAR / Pi SDK dependencies
+node_modules/
