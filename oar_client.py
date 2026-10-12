@@ -72,9 +72,22 @@ def terminate_group(proc) -> None:
     pid = int(getattr(proc, "pid", 0) or 0)
     if not pid:
         return
+    def signal_group(sig: int) -> None:
+        try:
+            os.killpg(pid, sig)
+        except PermissionError as error:
+            # macOS can return EPERM while the leader is becoming a zombie.
+            # Reap only our child, then retry so surviving tools are killed.
+            # Never ignore a permission error for a still-live process.
+            try:
+                proc.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                raise error
+            os.killpg(pid, sig)
+
     try:
         if os.name == "posix":
-            os.killpg(pid, signal.SIGTERM)
+            signal_group(signal.SIGTERM)
         elif proc.poll() is None:
             proc.terminate()
     except ProcessLookupError:
@@ -86,7 +99,7 @@ def terminate_group(proc) -> None:
     # killpg(pid) still addresses descendants after the leader has exited.
     try:
         if os.name == "posix":
-            os.killpg(pid, signal.SIGKILL)
+            signal_group(signal.SIGKILL)
         elif proc.poll() is None:
             proc.kill()
     except ProcessLookupError:

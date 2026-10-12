@@ -61,6 +61,8 @@ DEFAULT_APP_SETTINGS = {
     },
     "agent": {
         "session_ttl_hours": 72,
+        "runtime": "pi",
+        "codex": {"model": "", "profile": "", "sandbox": "read-only"},
     },
     "database": {
         "path": "",
@@ -174,6 +176,14 @@ def load_app_settings() -> dict:
 
     agent = payload.get("agent") if isinstance(payload, dict) else None
     if isinstance(agent, dict):
+        from codex_client import normalize_config
+        if agent.get("runtime") in ("pi", "codex"):
+            base["agent"]["runtime"] = agent["runtime"]
+        if isinstance(agent.get("codex"), dict):
+            try:
+                base["agent"]["codex"] = normalize_config(agent["codex"])
+            except ValueError:
+                pass
         ttl = agent.get("session_ttl_hours")
         if ttl in (24, 72):
             base["agent"]["session_ttl_hours"] = ttl

@@ -2,7 +2,7 @@
 
 本地新闻阅读器（Web 版），数据源来自 `DailyNews`，用于新闻流扫读、稍后阅读、想法沉淀、提醒、跟踪主题与复盘。
 
-当前稳定版本：`v2.3.1`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前稳定版本：`v2.3.1.1`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 核心能力
 
@@ -85,10 +85,20 @@ python3 app.py
 - `NEWS_READER_APP_SETTINGS_PATH`：覆盖应用运行设置文件路径。
 - `NEWS_READER_MEDIA_CACHE_DIR`：覆盖媒体缓存目录。
 - `NEWS_READER_AGENT_DB_PATH`：覆盖新闻研究 Agent 独立临时 SQLite 路径；默认与主数据库同目录，文件不进入 Git 或常规新闻库备份。
-- `NEWS_READER_AGENT_RUNTIME_DIR`：覆盖 OAR/Pi 研究会话临时目录；默认位于系统临时目录并按会话 TTL 清理。
+- `NEWS_READER_AGENT_RUNTIME_DIR`：覆盖 OAR/Pi/Codex 研究会话映射临时目录；默认位于系统临时目录并按会话 TTL 清理。
 
 - `NEWS_READER_NODE`：指定用于 OAR 的 Node 可执行文件；默认从 PATH 寻找。
 - `NEWS_READER_PI_AGENT_DIR`：指定只读来源 Pi 配置目录；否则使用 `PI_CODING_AGENT_DIR`，最后回退到 `~/.pi/agent`。
+
+### Codex 新闻 Chat（v2.3.1.1）
+
+设置 → Chat 与新闻研究 Agent，先选 Pi 或 Codex，再配置所选运行方式的 provider/model；缺省仍为 Pi，不适用的选项隐藏并禁用。两套配置分别保留，切换只影响新会话。已有对话的 runtime、模型选择、profile 名称与文件沙盒策略保持不变，续问/重试不把 Pi 会话 ID 传给 Codex，也不反向迁移；需要切换时明确点击“新会话”。DeepSeek 翻译、固定总结和 Pi 兼容模式不变。
+
+先在本机安装并配置 Codex CLI；原生 OpenAI provider 的登录与自定义/本地 provider 的认证由 Codex 管理。应用只把 `codex login status` 作为 OpenAI 登录提示，不据此阻止调用或要求重新登录，不读取、复制或存储账号凭据。`NEWS_READER_CODEX` 可指定可执行文件，否则从 PATH 寻找 `codex`。本轮按 Codex CLI 0.158.0 的 `exec --json` / `exec resume` 协议适配，启动前检查命令能力；缺少或不兼容的命令会阻止启动；状态探测失败不等同于认证失败，真正执行返回的认证错误才提示检查所选 provider/profile。不自动改走 Pi。
+
+Codex provider 和模型可留空使用本机 CLI 配置，也可填写已配置的 provider 名称及明确模型；profile 是本机已有名称。应用与启动终端都继承 PATH、HOME 和 CODEX_HOME，不自行切换用户或配置目录。**冻结的是显式 provider/model/profile 选择，不复制本机 profile 内容；留空模型的实际默认值及 profile 内工具/网络配置仍由本机 Codex 管理，外部修改可能影响续问。**若需要模型稳定，请填写明确模型名。每次调用显式固定项目目录、`read-only` 文件沙盒与 `approval_policy=never`；不添加目录、不绕过沙盒、不自动扩大项目信任。文件沙盒不意味着 MCP、hooks 或远程工具全部只读，这些仍需由用户按本机原有权限管理。新闻资料不作为改变权限的指令；联网是否可用须实际验证。
+
+后台任务保留原有流式状态、停止与重试。只有非空最终答案、完整终态、正常退出和应用会话映射保存成功才判成功；未知/重复/缺失事件不以先前片段补成成功。停止后先回收进程组，再允许同会话重试。归档使用独立的临时 Codex 调用，不续接聊天线程；失败或空结果不改笔记。原生 Codex 历史由 CLI 管理，应用只保存私有映射；清空应用会话不会主动删除本机 Codex 全局历史，CLI 账号/历史维护仍由用户负责。
 
 ### OAR 会话兼容与边界
 

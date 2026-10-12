@@ -44,6 +44,7 @@ from updater import STATE_PATH as UPDATE_STATE_PATH
 from updater import git_state as update_git_state
 from updater import local_health_url, request_supervisor
 
+import codex_client
 from oar_client import bridge_command, bridge_request, parse_event as parse_oar_event, run_once as run_oar_once, cleanup_config as cleanup_oar_config, terminate_group, ERROR_MESSAGES as OAR_ERROR_MESSAGES
 
 from settings import (
@@ -863,6 +864,8 @@ def ensure_agent_db() -> None:
         }
         if "executor_provider" not in session_columns:
             conn.execute("ALTER TABLE agent_sessions ADD COLUMN executor_provider TEXT NOT NULL DEFAULT ''")
+        if "executor_config" not in session_columns:
+            conn.execute("ALTER TABLE agent_sessions ADD COLUMN executor_config TEXT NOT NULL DEFAULT '{}'")
         conn.commit()
     finally:
         conn.close()
@@ -1958,6 +1961,13 @@ def current_runtime_settings() -> dict:
     agent = raw.get("agent") if isinstance(raw, dict) else {}
     if isinstance(agent, dict) and agent.get("session_ttl_hours") in AGENT_SESSION_TTL_OPTIONS:
         merged["agent"]["session_ttl_hours"] = int(agent["session_ttl_hours"])
+    if isinstance(agent, dict):
+        if isinstance(agent.get("runtime"), str) and agent["runtime"] in {"pi", "codex"}:
+            merged["agent"]["runtime"] = agent["runtime"]
+        try:
+            merged["agent"]["codex"] = codex_client.normalize_config(agent.get("codex", {}))
+        except ValueError:
+            pass
     database = raw.get("database") if isinstance(raw, dict) else {}
     if isinstance(database, dict) and isinstance(database.get("path"), str):
         merged["database"]["path"] = database["path"].strip()
@@ -2438,6 +2448,7 @@ def serialize_runtime_settings() -> dict:
         "api_status": {
             "deepseek": deepseek_snapshot["service"],
             "pi": pi_snapshot["service"],
+            "codex": codex_client.status_snapshot(),
         },
         "model_catalogs": {
             "translation": deepseek_snapshot["catalog"],
@@ -2488,6 +2499,11 @@ def validate_runtime_settings(payload: object) -> dict:
     if ttl not in AGENT_SESSION_TTL_OPTIONS:
         raise ValueError("invalid_agent_session_ttl")
 
+    runtime = agent_payload.get("runtime", current_settings["agent"].get("runtime", "pi"))
+    if not isinstance(runtime, str) or runtime not in {"pi", "codex"}:
+        raise ValueError("invalid_agent_runtime")
+    codex_config = codex_client.normalize_config(agent_payload.get("codex", current_settings["agent"]["codex"]))
+
     configured_db_path = _database_path_from_payload(payload, current_settings)
     if os.environ.get("NEWS_READER_DB_PATH", "").strip():
         # The environment override is authoritative; do not let an explicit
@@ -2516,6 +2532,8 @@ def validate_runtime_settings(payload: object) -> dict:
         "tracked": current_settings["tracked"],
         "agent": {
             "session_ttl_hours": int(ttl),
+            "runtime": runtime,
+            "codex": codex_config,
         },
         "database": {
             "path": configured_db_path,
@@ -2777,6 +2795,36 @@ def run_pi_chat_archive(*, title: str, source: str, published_at: str, messages:
     return {"provider": "pi", "model": pi_model, "summary": summary, **runtime_metadata}
 
 
+def run_codex_chat(*, question: str, session_id: str = "", reset: bool = False,
+                   title: str, source: str, published_at: str, content: str, context_level: str, **unused) -> dict:
+    config = current_runtime_settings()["agent"]["codex"]
+    if reset:
+        session_id = ""
+    if session_id and (not session_id.startswith("newsreader-codex-chat-") or not codex_client.valid_thread_id(session_id.removeprefix("newsreader-codex-chat-"))):
+        raise RuntimeError("codex_session_invalid")
+    key = session_id or f"newsreader-codex-chat-{uuid.uuid4()}"
+    state_dir = agent_session_runtime_dir(key)
+    if session_id:
+        config = codex_client.saved_config(state_dir)
+    thread_id = codex_client.read_thread(state_dir, config)
+    if session_id and not thread_id:
+        raise RuntimeError("codex_session_invalid")
+    prompt = question if thread_id else build_chat_prompt(title=title, source=source,
+        published_at=published_at, content=content, question=question, context_level=context_level)
+    answer, native_id = codex_client.run_once(config, prompt, thread_id=thread_id)
+    codex_client.write_thread(state_dir, config, native_id)
+    return {"provider": "codex", "session_id": key, "model": config["model"], "answer": answer,
+            "runtime": "codex", "runtime_label": "Codex CLI"}
+
+
+def run_codex_chat_archive(*, title: str, source: str, published_at: str, messages: list[dict], config: dict) -> dict:
+    # Ephemeral new turn: never resumes or modifies the news Chat thread.
+    prompt = build_chat_archive_prompt(title=title, source=source, published_at=published_at, messages=messages)
+    answer, _ = codex_client.run_once(config, prompt, ephemeral=True)
+    return {"provider": "codex", "model": config["model"], "summary": " ".join(answer.split()),
+            "runtime": "codex", "runtime_label": "Codex CLI"}
+
+
 def normalize_chat_messages(raw_messages: object, *, max_messages: int = 20, max_chars: int = 4000) -> list[dict[str, str]]:
     if not isinstance(raw_messages, list) or not raw_messages:
         raise ValueError("invalid_messages")
@@ -2906,6 +2954,14 @@ def _serialize_agent_session(row: sqlite3.Row | dict | None) -> dict | None:
     payload = dict(row)
     payload.pop("context_json", None)
     executor_id = payload.pop("executor_session_id", "")
+    config_json = payload.pop("executor_config", "{}")
+    if payload.get("provider") == "codex":
+        try:
+            config = codex_client.normalize_config(json.loads(config_json))
+        except (ValueError, TypeError):
+            config = {"model": "", "profile": "", "sandbox": "read-only"}
+        payload.update(runtime="codex", runtime_label="Codex CLI", runtime_compatibility="", history_compatibility="", executor_config=config)
+        return payload
     runtime_key = executor_id if executor_id and not _is_legacy_pi_executor_session(executor_id) else _full_pi_executor_session_id(payload["id"])
     payload.update(agent_runtime_metadata(runtime_key))
     payload["history_compatibility"] = ""
@@ -2928,7 +2984,7 @@ def load_agent_payload(item_id: str) -> dict:
         cleanup_agent_sessions(conn)
         session = conn.execute(
             """
-            SELECT id, item_id, url, provider, executor_provider, model, executor_session_id, context_hash,
+            SELECT id, item_id, url, provider, executor_provider, executor_config, model, executor_session_id, context_hash,
                    context_json, status, created_at, last_activity_at, expires_at, updated_at
             FROM agent_sessions
             WHERE item_id=? AND status='active'
@@ -2990,6 +3046,19 @@ def _is_legacy_pi_executor_session(executor_session_id: str) -> bool:
 
 def _agent_process_command(job: dict, session: dict, context: dict, history: list[dict]) -> tuple[list[str], dict[str, str], Path | None]:
     previous = str(session.get("executor_session_id") or "").strip()
+    if session.get("provider") == "codex":
+        if previous and previous != f"newsreader-codex-agent-{session['id']}":
+            raise RuntimeError("codex_session_invalid")
+        executor_id = previous or f"newsreader-codex-agent-{session['id']}"
+        runtime_dir = agent_session_runtime_dir(executor_id)
+        config = codex_client.normalize_config(json.loads(session.get("executor_config") or "{}"))
+        thread_id = codex_client.read_thread(runtime_dir, config)
+        # Missing or orphaned mapping must not silently start/resume a different
+        # native turn after a failed filesystem/SQLite commit.
+        if bool(previous) != bool(thread_id):
+            raise RuntimeError("codex_session_invalid")
+        codex_client.require_ready()
+        return codex_client.command(config, thread_id=thread_id), dict(os.environ), runtime_dir
     executor_id = _full_pi_executor_session_id(session["id"]) if not previous or _is_legacy_pi_executor_session(previous) else previous
     runtime_dir = agent_session_runtime_dir(executor_id)
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -3049,6 +3118,12 @@ def _terminate_agent_process(job_id: str) -> None:
 
 def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) -> None:
     previous_executor_session_id = str(session.get("executor_session_id") or "")
+    is_codex = session.get("provider") == "codex"
+    runtime_errors = codex_client.ERROR_MESSAGES if is_codex else OAR_ERROR_MESSAGES
+    protocol_code = "codex_protocol_error" if is_codex else "oar_protocol_error"
+    runtime_code = "codex_runtime_failed" if is_codex else "oar_runtime_failed"
+    codex_config = None
+    codex_parser = None
     output = ""
     stderr = ""
     proc = None
@@ -3067,12 +3142,15 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
         # Cancellation during command preparation must not start a new runtime.
         if _agent_cancel_requested(job["id"]):
             raise RuntimeError("oar_stopped")
-        # Store a deterministic private OAR directory, not the native SDK id.
+        if is_codex:
+            codex_config = codex_client.normalize_config(json.loads(session.get("executor_config") or "{}"))
+            codex_parser = codex_client.EventParser(codex_client.read_thread(_runtime_dir, codex_config))
+        # Store a deterministic private runtime directory, never a foreign SDK id.
         try:
             session_id_index = command.index("--session-id") + 1
             executor_session_id = command[session_id_index]
         except (ValueError, IndexError):
-            executor_session_id = ""
+            executor_session_id = f"newsreader-codex-agent-{session['id']}" if is_codex else ""
         proc = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -3086,9 +3164,14 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
         )
         with AGENT_PROCESSES_GUARD:
             AGENT_PROCESSES[job["id"]] = proc
-        request_payload = _agent_oar_request(job, session, context, history, _runtime_dir)
-        config_id = request_payload["config_id"]
-        pending_input = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+        if is_codex:
+            prompt = (build_agent_resume_prompt(job["question"], job.get("quote_text") or "") if codex_parser.expected_thread
+                      else build_agent_prompt(context, job["question"], job.get("quote_text") or "", history=history))
+            pending_input = prompt.encode("utf-8")
+        else:
+            request_payload = _agent_oar_request(job, session, context, history, _runtime_dir)
+            config_id = request_payload["config_id"]
+            pending_input = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
         if len(pending_input) > 2 * 1024 * 1024:
             raise RuntimeError("oar_protocol_error")
         selector = selectors.DefaultSelector()
@@ -3108,7 +3191,7 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
             if not raw_line.strip():
                 return
             try:
-                event = parse_oar_event(raw_line.decode("utf-8"))
+                event = codex_parser.parse(raw_line.decode("utf-8")) if is_codex else parse_oar_event(raw_line.decode("utf-8"))
                 if terminal is not None:
                     raise RuntimeError("oar_protocol_error")
                 if event["type"] == "oar_result":
@@ -3124,7 +3207,7 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
                             output = terminal_answer
                             _update_agent_job_output(job["id"], session["id"], output)
                 elif event["type"] == "text_delta":
-                    output += event["delta"]
+                    output = event["delta"] if is_codex and event.get("replace") else output + event["delta"]
                     if len(output) > 2 * 1024 * 1024:
                         raise RuntimeError("oar_protocol_error")
                     _update_agent_job_output(job["id"], session["id"], output)
@@ -3193,7 +3276,7 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
         stderr = "agent process did not exit"
     except Exception as exc:
         return_code = -1
-        stderr = str(exc) if str(exc) in OAR_ERROR_MESSAGES else "oar_runtime_failed"
+        stderr = str(exc) if str(exc) in runtime_errors else runtime_code
         if proc is not None:
             _terminate_agent_process(job["id"])
     finally:
@@ -3226,19 +3309,24 @@ def run_agent_job(job: dict, session: dict, context: dict, history: list[dict]) 
         elif timed_out:
             status, error = "failed", "agent_timeout"
         elif protocol_error:
-            status, error = "failed", "oar_protocol_error"
+            status, error = "failed", protocol_code
         elif terminal is not None and terminal["outcome"] != "completed":
             code = terminal.get("error") or ""
-            status, error = "failed", code if code in OAR_ERROR_MESSAGES else "oar_turn_failed"
+            status, error = "failed", code if code in runtime_errors else ("codex_turn_failed" if is_codex else "oar_turn_failed")
         elif return_code != 0:
-            status, error = "failed", stderr if stderr in OAR_ERROR_MESSAGES else "oar_runtime_failed"
+            status, error = "failed", stderr if stderr in runtime_errors else runtime_code
         elif terminal is None:
-            status, error = "failed", "oar_protocol_error"
+            status, error = "failed", protocol_code
         elif terminal_answer is None or not terminal_answer.strip():
             status, error = "failed", "empty_answer"
         else:
             status, error = "succeeded", ""
         with conn:
+            if status == "succeeded" and is_codex:
+                try:
+                    codex_client.write_thread(_runtime_dir, codex_config, codex_parser.thread_id)
+                except (OSError, RuntimeError):
+                    status, error = "failed", "codex_session_invalid"
             if status == "succeeded" and executor_session_id:
                 conn.execute("UPDATE agent_sessions SET executor_session_id=? WHERE id=?", (executor_session_id, session["id"]))
             conn.execute(
@@ -3379,6 +3467,9 @@ def _load_visible_agent_article(item_id: str) -> tuple[dict | None, dict | None]
 
 
 def _agent_provider_model() -> tuple[str, str, str]:
+    settings = current_runtime_settings()["agent"]
+    if settings.get("runtime") == "codex":
+        return "codex", settings["codex"]["model"], "codex"
     config = current_pi_chat_config()
     return "pi", config["model"], config["provider"]
 
@@ -3455,6 +3546,11 @@ def _agent_create_session(
             stamp,
         ),
     )
+    if provider == "codex":
+        config = current_runtime_settings()["agent"]["codex"]
+        # Freeze model/profile/permission policy for follow-up and retry.
+        conn.execute("UPDATE agent_sessions SET executor_config=? WHERE id=?",
+                     (json.dumps(codex_client.normalize_config({**config, "model": model})), session_id))
     return conn.execute("SELECT * FROM agent_sessions WHERE id=?", (session_id,)).fetchone()
 
 
@@ -3464,6 +3560,7 @@ def _agent_config_changed(session: sqlite3.Row | dict) -> bool:
         session["provider"] != provider
         or session["model"] != model
         or (provider == "pi" and session["executor_provider"] != executor_provider)
+        or (provider == "codex" and json.loads(dict(session).get("executor_config") or "{}") != current_runtime_settings()["agent"]["codex"])
     )
 
 
@@ -9652,7 +9749,13 @@ def api_news_chat(item_id: str):
         return jsonify({"ok": False, "error": "provider_busy"}), 409
 
     try:
-        payload = run_pi_chat(
+        # A saved runtime always wins; settings select new/reset sessions only.
+        use_codex = (session_id.startswith("newsreader-codex-chat-") if session_id and not reset
+                     else current_runtime_settings()["agent"]["runtime"] == "codex")
+        if session_id.startswith("newsreader-codex-") and not session_id.startswith("newsreader-codex-chat-") and not reset:
+            raise RuntimeError("codex_session_invalid")
+        runner = run_codex_chat if use_codex else run_pi_chat
+        payload = runner(
             item_id=item_id,
             question=question,
             session_id=session_id,
@@ -9677,7 +9780,7 @@ def api_news_chat(item_id: str):
             return jsonify({"ok": False, "error": "missing_session_id"}), 502
         if error == "pi_empty_answer":
             return jsonify({"ok": False, "error": "empty_answer"}), 502
-        if error in OAR_ERROR_MESSAGES:
+        if error in OAR_ERROR_MESSAGES or error in codex_client.ERROR_MESSAGES:
             return jsonify({"ok": False, "error": error}), 502
         return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
     finally:
@@ -9731,21 +9834,54 @@ def api_news_chat_archive(item_id: str):
         return jsonify({"ok": False, "error": "provider_busy"}), 409
 
     try:
-        payload = run_pi_chat_archive(
-            title=(item["title"] or "").strip(),
-            source=(item["source"] or "").strip(),
-            published_at=(item["published_at"] or "").strip(),
-            messages=messages,
-            pi_provider=pi_config["provider"],
-            pi_model=pi_model,
-        )
+        active_session_id = str(body.get("agent_session_id") or "")
+        archive_config = None
+        sync_session_id = str(body.get("session_id") or "")
+        if active_session_id:
+            ensure_agent_db()
+            ac = agent_db_conn()
+            try:
+                saved = _agent_active_session(ac, item_id, active_session_id)
+                if not saved:
+                    return jsonify({"ok": False, "error": "session_invalid"}), 409
+                if saved["provider"] == "codex":
+                    archive_config = json.loads(saved["executor_config"])
+                else:
+                    pi_config = {"provider": saved["executor_provider"], "model": saved["model"]}
+                    pi_model = saved["model"]
+            finally:
+                ac.close()
+        elif sync_session_id:
+            # Legacy synchronous clients may also archive an existing turn.
+            # Its namespace, not the current default, selects the runtime.
+            if sync_session_id.startswith("newsreader-codex-"):
+                if (not sync_session_id.startswith("newsreader-codex-chat-")
+                        or not codex_client.valid_thread_id(sync_session_id.removeprefix("newsreader-codex-chat-"))):
+                    raise RuntimeError("codex_session_invalid")
+                archive_config = codex_client.saved_config(agent_session_runtime_dir(sync_session_id))
+            elif not re.fullmatch(r"[a-zA-Z0-9_-]{1,200}", sync_session_id):
+                raise RuntimeError("pi_session_invalid")
+        elif current_runtime_settings()["agent"].get("runtime") == "codex":
+            archive_config = current_runtime_settings()["agent"]["codex"]
+        if archive_config is not None:
+            payload = run_codex_chat_archive(title=(item["title"] or "").strip(), source=(item["source"] or "").strip(),
+                published_at=(item["published_at"] or "").strip(), messages=messages, config=archive_config)
+        else:
+            payload = run_pi_chat_archive(
+                title=(item["title"] or "").strip(),
+                source=(item["source"] or "").strip(),
+                published_at=(item["published_at"] or "").strip(),
+                messages=messages,
+                pi_provider=pi_config["provider"],
+                pi_model=pi_model,
+            )
     except RuntimeError as exc:
         error = str(exc)
         if error == "pi_timeout":
             return jsonify({"ok": False, "error": "provider_timeout"}), 504
         if error == "pi_empty_archive":
             return jsonify({"ok": False, "error": "empty_archive_summary"}), 502
-        if error in OAR_ERROR_MESSAGES:
+        if error in OAR_ERROR_MESSAGES or error in codex_client.ERROR_MESSAGES:
             return jsonify({"ok": False, "error": error}), 502
         return jsonify({"ok": False, "error": "provider_failed", "detail": error}), 502
     finally:

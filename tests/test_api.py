@@ -2801,9 +2801,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.3.1" in html
-    assert "/static/style.css?v=2.3.1" in html
-    assert "/static/app.js?v=2.3.1" in html
+    assert "News Reader v2.3.1.1" in html
+    assert "/static/style.css?v=2.3.1.1" in html
+    assert "/static/app.js?v=2.3.1.1" in html
     assert 'id="settingsDatabaseBrowseBtn"' in html
     assert 'class="settings-database-current-path"' in html
     app_source = Path("static/app.js").read_text(encoding="utf-8")
@@ -4456,10 +4456,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.3.1" in app_source
-    assert "News Reader v2.3.1" in index_source
-    assert "/static/style.css?v=2.3.1" in index_source
-    assert "/static/app.js?v=2.3.1" in index_source
+    assert "News Reader v2.3.1.1" in app_source
+    assert "News Reader v2.3.1.1" in index_source
+    assert "/static/style.css?v=2.3.1.1" in index_source
+    assert "/static/app.js?v=2.3.1.1" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -5130,7 +5130,7 @@ def test_deepseek_model_catalog_fallback_keeps_saved_model(tmp_path: Path, monke
     assert snapshot["catalog"]["options"][-1]["source"] == "saved"
 
 
-def test_settings_are_pi_only_and_ignore_unknown_executor_fields(tmp_path: Path, monkeypatch):
+def test_settings_default_pi_and_ignore_unknown_executor_fields(tmp_path: Path, monkeypatch):
     daily_dir = tmp_path / "DailyNews"
     daily_dir.mkdir(parents=True)
     db_path = tmp_path / "news_index.sqlite3"
@@ -5163,7 +5163,8 @@ def test_settings_are_pi_only_and_ignore_unknown_executor_fields(tmp_path: Path,
 
     initial = client.get("/api/settings").get_json()
     assert set(initial["llm"]) == {"translation", "pi_chat"}
-    assert set(initial["api_status"]) == {"deepseek", "pi"}
+    assert set(initial["api_status"]) == {"deepseek", "pi", "codex"}
+    assert initial["agent"]["runtime"] == "pi"
     assert set(initial["model_catalogs"]) == {"translation", "pi_chat"}
     assert initial["llm"]["translation"]["model"] == "deepseek-saved"
 
@@ -9265,10 +9266,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.3.1" in app_source
-    assert "News Reader v2.3.1" in index_source
-    assert "/static/style.css?v=2.3.1" in index_source
-    assert "/static/app.js?v=2.3.1" in index_source
+    assert "News Reader v2.3.1.1" in app_source
+    assert "News Reader v2.3.1.1" in index_source
+    assert "/static/style.css?v=2.3.1.1" in index_source
+    assert "/static/app.js?v=2.3.1.1" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10776,10 +10777,10 @@ def test_agent_frontend_traffic_lights_and_right_aligned_actions_contract():
     index_source = Path("static/index.html").read_text(encoding="utf-8")
     style_source = Path("static/style.css").read_text(encoding="utf-8")
 
-    assert "News Reader v2.3.1" in index_source
-    assert "/static/style.css?v=2.3.1" in index_source
-    assert "/static/app.js?v=2.3.1" in index_source
-    assert 'version.textContent = "News Reader v2.3.1"' in app_source
+    assert "News Reader v2.3.1.1" in index_source
+    assert "/static/style.css?v=2.3.1.1" in index_source
+    assert "/static/app.js?v=2.3.1.1" in index_source
+    assert 'version.textContent = "News Reader v2.3.1.1"' in app_source
 
     collapse = '<button id="detailChatBackBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-collapse" type="button" aria-label="收起 Agent 浮窗" title="收起 Agent 浮窗"></button>'
     expand = '<button id="detailAgentExpandBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-expand" type="button" aria-label="放大 Agent 浮窗" title="放大 Agent 浮窗"></button>'
@@ -11725,6 +11726,7 @@ const context = {
   settingsPiChatProviderSelect: {}, settingsPiChatProviderCustom: {},
   settingsPiChatModelSelect: {}, settingsPiChatModelCustom: {},
   settingsAgentTtlSelect: { value: "72" },
+  settingsAgentRuntime: { value: "pi" }, settingsCodexProvider: { value: "" }, settingsCodexModel: { value: "" }, settingsCodexProfile: { value: "" },
   readModelSetting: () => "",
   savedFeedHiddenSourceSubkeys: () => [],
   normalizeFeedHiddenSourceSubkeys: (value) => value || [],
@@ -12076,16 +12078,21 @@ def test_oar_timeout_and_stop_cleanup(tmp_path, monkeypatch):
     assert payload['jobs'][-1]['error'] == 'agent_timeout'
     assert not list(app_module.AGENT_RUNTIME_DIR.glob('*/config-*'))
     monkeypatch.setattr(app_module, 'AGENT_JOB_TIMEOUT_SECONDS', 10)
+    # The short timeout can expire before the first fake runtime writes its log.
+    # Wait for this invocation, not an assumed second line in an existing file.
+    previous_count = len(log.read_text().splitlines()) if log.exists() else 0
     second = client.post(f"/api/news/{item['id']}/agent/jobs", json={'question':'stop'})
     worker = threading.Thread(target=app_module.process_pending_agent_once)
     worker.start()
     deadline = time.monotonic() + 3
-    while len(log.read_text().splitlines()) < 2 and time.monotonic() < deadline:
+    while (not log.exists() or len(log.read_text().splitlines()) <= previous_count) and time.monotonic() < deadline:
         time.sleep(.02)
+    started = log.exists() and len(log.read_text().splitlines()) > previous_count
     stopped = client.post(f"/api/news/{item['id']}/agent/jobs/{second.get_json()['job_id']}/stop")
     assert stopped.status_code == 200
     worker.join(4)
     assert not worker.is_alive()
+    assert started
     assert app_module.load_agent_payload(item['id'])['jobs'][-1]['status'] == 'stopped'
     assert not app_module.AGENT_PROCESSES
     assert not list(app_module.AGENT_RUNTIME_DIR.glob('*/config-*'))

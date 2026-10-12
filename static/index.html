@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.3.1</title>
+    <title>News Reader v2.3.1.1</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.3.1&build=db-picker" />
+    <link rel="stylesheet" href="/static/style.css?v=2.3.1.1&build=db-picker" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.3.1</span>
+          <span class="topbar-version">v2.3.1.1</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -871,6 +871,56 @@
           <section id="settingsSectionModels" class="settings-card settings-section-panel hidden">
             <h3 class="settings-card-title">模型管理</h3>
             <div class="settings-form">
+              <section class="settings-form-group" aria-labelledby="settingsAgentRuntimeTitle">
+                <h4 id="settingsAgentRuntimeTitle" class="settings-form-group-title">Chat 与新闻研究 Agent</h4>
+                <div class="settings-form-grid">
+                  <div class="settings-field">
+                    <label for="settingsAgentRuntime">运行方式</label>
+                    <select id="settingsAgentRuntime" class="pref-select">
+                      <option value="pi">Pi（OAR 主路径 / CLI 兼容）</option>
+                      <option value="codex">Codex CLI</option>
+                    </select>
+                    <div class="settings-field-help">保存后仅影响新会话；已有会话仍使用原运行方式、模型和权限。需要切换时，请明确开启新会话。</div>
+                  </div>
+                </div>
+                <div id="settingsPiRuntimeOptions" class="settings-form-grid">
+
+                  <div class="settings-field">
+                    <label for="settingsPiChatProviderSelect">Pi chat provider</label>
+                    <select id="settingsPiChatProviderSelect" class="pref-select">
+                      <option value="ollama">ollama</option>
+                    </select>
+                    <input id="settingsPiChatProviderCustom" class="settings-input hidden" type="text" maxlength="40" placeholder="输入自定义 pi provider" />
+                    <div class="settings-field-help">默认 ollama，可自定义 provider，如 deepseek</div>
+                  </div>
+                  <div class="settings-field">
+                    <label for="settingsPiChatModelSelect">Pi chat 默认模型</label>
+                    <select id="settingsPiChatModelSelect" class="pref-select"></select>
+                    <input id="settingsPiChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Pi 模型名" />
+                    <div id="settingsPiChatModelCurrent" class="settings-field-current"></div>
+                  </div>
+                </div>
+                <div id="settingsCodexRuntimeOptions" class="settings-form-grid hidden">
+                  <div class="settings-field">
+                    <label for="settingsCodexProvider">Codex provider（留空使用本机配置）</label>
+                    <input id="settingsCodexProvider" class="settings-input" type="text" maxlength="80" autocomplete="off" />
+                    <div class="settings-field-help">填写本机 Codex 已配置的 provider 名称，不是 Pi provider；不修改账号或原生配置。</div>
+                  </div>
+                  <div class="settings-field">
+                    <label for="settingsCodexModel">Codex 模型（留空使用 CLI 默认）</label>
+                    <input id="settingsCodexModel" class="settings-input" type="text" maxlength="120" autocomplete="off" />
+                  </div>
+                  <div class="settings-field">
+                    <label for="settingsCodexProfile">Codex profile（可选，本机已配置名称）</label>
+                    <input id="settingsCodexProfile" class="settings-input" type="text" maxlength="80" autocomplete="off" />
+                    <div class="settings-field-help">固定只读文件沙盒；MCP、hooks 和远程工具仍受本机权限管理。不会自动登录或转移 Pi 会话。</div>
+                  </div>
+                  <div class="settings-field">
+                    <label>Codex CLI 状态（非可用性判定）</label>
+                    <div id="settingsCodexStatus" class="settings-field-help" role="status" aria-live="polite"></div>
+                  </div>
+                </div>
+              </section>
               <section class="settings-form-group" aria-labelledby="settingsTranslationGroupTitle">
                 <h4 id="settingsTranslationGroupTitle" class="settings-form-group-title">翻译与总结</h4>
                 <div class="settings-form-grid">
@@ -885,25 +935,6 @@
                     <select id="settingsTranslationModelSelect" class="pref-select"></select>
                     <input id="settingsTranslationModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 DeepSeek 模型名" />
                     <div id="settingsTranslationModelCurrent" class="settings-field-current"></div>
-                  </div>
-                </div>
-              </section>
-              <section class="settings-form-group" aria-labelledby="settingsChatGroupTitle">
-                <h4 id="settingsChatGroupTitle" class="settings-form-group-title">Chat 与新闻研究 Agent</h4>
-                <div class="settings-form-grid">
-                  <div class="settings-field">
-                    <label for="settingsPiChatProviderSelect">Pi chat provider</label>
-                    <select id="settingsPiChatProviderSelect" class="pref-select">
-                      <option value="ollama">ollama</option>
-                    </select>
-                    <input id="settingsPiChatProviderCustom" class="settings-input hidden" type="text" maxlength="40" placeholder="输入自定义 pi provider" />
-                    <div class="settings-field-help">默认 ollama，可自定义 provider，如 deepseek</div>
-                  </div>
-                  <div class="settings-field">
-                    <label for="settingsPiChatModelSelect">Pi chat 默认模型</label>
-                    <select id="settingsPiChatModelSelect" class="pref-select"></select>
-                    <input id="settingsPiChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Pi 模型名" />
-                    <div id="settingsPiChatModelCurrent" class="settings-field-current"></div>
                   </div>
                 </div>
               </section>
@@ -925,7 +956,7 @@
                   </div>
                 </div>
               </section>
-              <div class="settings-field-note" id="settingsChatArchiveNote">Chat、新闻研究 Agent 和归档摘要均使用 Pi；后台任务继承本机 Pi CLI 的实际配置与权限。</div>
+              <div class="settings-field-note" id="settingsChatArchiveNote">Chat、新闻研究 Agent 和归档摘要按会话保存的运行方式执行；Pi 保留原生兼容路径，Codex 使用本机 CLI 登录与配置。</div>
               <div class="settings-actions">
                 <button id="settingsSaveBtn" class="detail-retry-btn" type="button">保存设置</button>
               </div>
@@ -993,6 +1024,6 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.3.1&build=db-picker"></script>
+    <script src="/static/app.js?v=2.3.1.1&build=db-picker"></script>
   </body>
 </html>

@@ -476,6 +476,11 @@ const settingsPiChatModelSelect = document.getElementById("settingsPiChatModelSe
 const settingsPiChatModelCustom = document.getElementById("settingsPiChatModelCustom");
 const settingsPiChatModelCurrent = document.getElementById("settingsPiChatModelCurrent");
 const settingsChatArchiveNote = document.getElementById("settingsChatArchiveNote");
+const settingsAgentRuntime = document.getElementById("settingsAgentRuntime");
+const settingsCodexProvider = document.getElementById("settingsCodexProvider");
+const settingsCodexModel = document.getElementById("settingsCodexModel");
+const settingsCodexProfile = document.getElementById("settingsCodexProfile");
+const settingsCodexStatus = document.getElementById("settingsCodexStatus");
 const settingsAgentTtlSelect = document.getElementById("settingsAgentTtlSelect");
 const settingsAgentClearAllBtn = document.getElementById("settingsAgentClearAllBtn");
 const settingsSaveBtn = document.getElementById("settingsSaveBtn");
@@ -2132,7 +2137,34 @@ function syncPiChatModelSelectForProvider() {
   syncModelCustomVisibility(select, customInput);
 }
 
+function syncAgentRuntimeOptions() {
+  const codexSelected = settingsAgentRuntime?.value === "codex";
+  for (const [id, active] of [["settingsPiRuntimeOptions", !codexSelected], ["settingsCodexRuntimeOptions", codexSelected]]) {
+    const group = document.getElementById(id);
+    if (!group) continue;
+    group.classList.toggle("hidden", !active);
+    for (const input of group.querySelectorAll("input, select")) {
+      input.disabled = !active || state.settingsLoading || state.settingsSaving || state.settingsClosing;
+    }
+  }
+}
+
 function populateSettingsForm() {
+  if (settingsAgentRuntime) settingsAgentRuntime.value = state.runtimeSettings?.agent?.runtime || "pi";
+  if (settingsCodexProvider) settingsCodexProvider.value = state.runtimeSettings?.agent?.codex?.provider || "";
+  if (settingsCodexModel) settingsCodexModel.value = state.runtimeSettings?.agent?.codex?.model || "";
+  if (settingsCodexProfile) settingsCodexProfile.value = state.runtimeSettings?.agent?.codex?.profile || "";
+  if (settingsCodexStatus) {
+    const service = state.runtimeSettings?.api_status?.codex || {};
+    settingsCodexStatus.textContent = service.authenticated
+      ? "Codex CLI 已登录；是否能回答仍以实际请求为准。"
+      : service.login_status === "not_logged_in"
+        ? "CLI 未报告 OpenAI 登录；自定义或本地 provider 不一定需要它，以实际请求结果为准。"
+        : OAR_ERROR_LABELS[service.error] || "尚未确认 Codex CLI 状态；不阻挡请求，以实际结果为准。";
+  }
+  for (const input of [settingsAgentRuntime, settingsCodexProvider, settingsCodexModel, settingsCodexProfile]) {
+    if (input) input.disabled = state.settingsLoading || state.settingsSaving || state.settingsClosing;
+  }
   const llm = state.runtimeSettings?.llm;
   if (!llm) return;
   if (settingsAgentTtlSelect) {
@@ -2182,6 +2214,7 @@ function populateSettingsForm() {
       ? `当前：${currentPiModel}`
       : "当前：Pi 默认模型";
   }
+  syncAgentRuntimeOptions();
 }
 
 function renderDatabaseSettings() {
@@ -2276,6 +2309,8 @@ function runtimeSettingsSavePayload({ hiddenSourceSubkeys = savedFeedHiddenSourc
     },
     agent: {
       session_ttl_hours: Number(settings.agent?.session_ttl_hours) === 24 ? 24 : 72,
+      runtime: settings.agent?.runtime || "pi",
+      codex: { provider: settings.agent?.codex?.provider || "", model: settings.agent?.codex?.model || "", profile: settings.agent?.codex?.profile || "", sandbox: "read-only" },
     },
     database: {
       path: (settings.database?.configured_path || "").trim(),
@@ -2455,6 +2490,8 @@ async function saveRuntimeSettings() {
   const draftTranslationModel = readModelSetting(settingsTranslationModelSelect, settingsTranslationModelCustom);
   const draftPiChatProvider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
   const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
+  const draftRuntime = settingsAgentRuntime?.value || "pi";
+  const draftCodex = { provider: settingsCodexProvider?.value.trim() || "", model: settingsCodexModel?.value.trim() || "", profile: settingsCodexProfile?.value.trim() || "", sandbox: "read-only" };
   const draftAgentTtl = Number(settingsAgentTtlSelect?.value) === 24 ? 24 : 72;
   const database = state.runtimeSettings?.database || {};
   // Capture the input before renderSettingsOverlay() can restore its saved value.
@@ -2471,9 +2508,13 @@ async function saveRuntimeSettings() {
     const payload = runtimeSettingsSavePayload({ hiddenSourceSubkeys: savedFeedHiddenSourceSubkeys() });
     payload.llm.translation.provider = draftTranslationProvider;
     payload.llm.translation.model = draftTranslationModel;
-    payload.llm.pi_chat.provider = draftPiChatProvider;
-    payload.llm.pi_chat.model = draftPiChatModel;
+    if (draftRuntime === "pi") {
+      payload.llm.pi_chat.provider = draftPiChatProvider;
+      payload.llm.pi_chat.model = draftPiChatModel;
+    }
     payload.agent.session_ttl_hours = draftAgentTtl;
+    payload.agent.runtime = draftRuntime;
+    if (draftRuntime === "codex") payload.agent.codex = draftCodex;
     if (!database.environment_override && settingsDatabasePathInput) {
       payload.database.path = draftDatabasePath;
     }
@@ -2491,7 +2532,8 @@ async function saveRuntimeSettings() {
     updateFeedSourceRefreshState();
     const currentPiProvider = data.llm?.pi_chat?.provider || "";
     const currentPiModel = data.llm?.pi_chat?.model || "";
-    if (currentPiModel !== previousPiModel || currentPiProvider !== previousPiProvider) {
+    if ((currentPiModel !== previousPiModel || currentPiProvider !== previousPiProvider)
+        && state.detailChatSession?.provider !== "codex" && state.detailChatProvider !== "codex") {
       state.detailChatSessionId = "";
       state.detailChatProvider = "";
       state.detailChatModel = "";
@@ -3548,7 +3590,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.3.1";
+  version.textContent = "News Reader v2.3.1.1";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5598,13 +5640,13 @@ function renderDetailChatMeta(item, session) {
 
   const modelBadge = document.createElement("span");
   modelBadge.className = "detail-chat-model-badge ok";
-  modelBadge.textContent = `● Pi${chatModelLabel(session) ? ` · ${chatModelLabel(session)}` : ""}`;
+  modelBadge.textContent = `● ${session?.provider === "codex" ? "Codex" : "Pi"}${chatModelLabel(session) ? ` · ${chatModelLabel(session)}` : ""}`;
   detailChatMeta.appendChild(modelBadge);
 
   if (session?.executor_provider) {
     const contextBadge = document.createElement("span");
     contextBadge.className = "detail-chat-source";
-    contextBadge.textContent = session.runtime === "pi-cli"
+    contextBadge.textContent = session.runtime === "codex" ? "Codex CLI · 只读沙盒" : session.runtime === "pi-cli"
       ? `Pi CLI · 兼容模式 · ${session.executor_provider}`
       : `OAR · Pi SDK · ${session.executor_provider}`;
     detailChatMeta.appendChild(contextBadge);
@@ -5618,6 +5660,15 @@ function renderDetailChatMeta(item, session) {
 }
 
 const OAR_ERROR_LABELS = {
+  codex_missing: "未找到 Codex CLI，请先安装。",
+  codex_auth_required: "Codex 请求被所选服务拒绝认证，请检查对应 provider / profile；不要发送凭据。",
+  codex_probe_failed: "Codex 状态探测或命令能力检查失败；不等于未登录。",
+  codex_protocol_error: "Codex 返回不完整或格式异常，本轮未成功。",
+  codex_empty_answer: "Codex 没有返回有效最终答案，请重试。",
+  codex_turn_failed: "Codex 未完成请求，请检查模型、网络和登录后重试。",
+  codex_runtime_failed: "Codex 运行失败，请检查本机模型或配置。",
+  codex_session_invalid: "Codex 会话不匹配，请明确开启新会话。",
+  codex_timeout: "Codex 请求超时，请重试。",
   oar_resources_changed: "此会话需要 Pi 原生资源，请明确开启新会话使用兼容模式；未自动切换执行方式。",
   oar_trust_changed: "此会话的项目信任已改变，请检查 Pi 设置或明确开启新会话；未自动授权或切换执行方式。",
   oar_project_untrusted: "Pi 原有规则未信任此项目，任务已暂停，未自动扩大权限。请在 Pi 检查项目信任。",
@@ -5962,6 +6013,7 @@ async function archiveDetailChat() {
   try {
     const payload = await archiveNewsChat(item, {
       messages,
+      agent_session_id: state.detailChatSession?.id || "",
       model: currentChatModel(),
     });
     const cached = item.url ? (state.detailCacheByUrl.get(item.url) || {}) : {};
@@ -10973,6 +11025,8 @@ if (settingsTranslationModelSelect) {
   });
 }
 
+if (settingsAgentRuntime) settingsAgentRuntime.addEventListener("change", syncAgentRuntimeOptions);
+
 if (settingsPiChatProviderSelect) {
   settingsPiChatProviderSelect.addEventListener("change", () => {
     syncModelCustomVisibility(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
@@ -11119,6 +11173,10 @@ detailPanel.addEventListener("touchcancel", handleDetailTouchEnd, { passive: tru
 detailPanel.addEventListener("click", (event) => {
   if (!state.detailChatPanelOpen || !detailChatBody) return;
   const target = event.target;
+  // Retry synchronously re-renders its button before this click bubbles. The
+  // original event path still identifies an inside click after target detaches.
+  const path = event.composedPath();
+  if (path.includes(detailChatBody) || path.includes(detailAgentLauncher)) return;
   if (target instanceof Node && (detailChatBody.contains(target) || detailAgentLauncher?.contains(target))) return;
   closeDetailAgentPanel();
 });
