@@ -11494,7 +11494,14 @@ def api_review_create_reminder(chain_id: int):
 
 
 # Separate summary history in the selected news database; no writes at import.
-NEWS_SUMMARY_SERVICE = news_summaries.Service(lambda: DB_PATH, current_runtime_settings, lambda: str(resolve_db_path().expanduser().resolve()))
+def news_summary_feed_scope(conn):
+    """Fixed feed scope, independent of transient search/source UI selections."""
+    conn.create_function("feed_source_subkey", 4, feed_source_subkey_sql)
+    conn.create_function("is_bloomberg_video_url", 1, lambda url: int(is_bloomberg_video_url(url)))
+    return _build_news_where_clause("", "unread", "feed", "all")
+
+
+NEWS_SUMMARY_SERVICE = news_summaries.Service(lambda: DB_PATH, current_runtime_settings, lambda: str(resolve_db_path().expanduser().resolve()), scope_getter=news_summary_feed_scope)
 
 
 def _summary_error(exc):

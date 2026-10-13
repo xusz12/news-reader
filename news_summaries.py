@@ -127,20 +127,23 @@ def process_start(pid):
         return ""
 
 
-def select_items(c):
+def select_items(c, scope_getter=None):
+    where, args = scope_getter(c) if scope_getter else ("WHERE st.read_at IS NULL", [])
     return [
         dict(r)
         for r in c.execute(
-            """SELECT i.id,i.title,COALESCE(i.summary,'') summary,COALESCE(d.content,'') body,
- COALESCE(NULLIF(i.date,''),substr(i.published_at,1,10)) date,i.source,i.source_name,i.source_type,i.url,
- st.read_at FROM items i LEFT JOIN item_state st ON st.item_id=i.id LEFT JOIN article_details d ON d.url=i.url
- WHERE st.read_at IS NULL ORDER BY date,i.published_at,i.id"""
+            """SELECT items.id,items.title,COALESCE(items.summary,'') summary,COALESCE(d.content,'') body,
+ COALESCE(NULLIF(items.date,''),substr(items.published_at,1,10)) date,
+ items.source,items.source_name,items.source_type,items.url,st.read_at
+ FROM items LEFT JOIN item_state st ON st.item_id=items.id
+ LEFT JOIN article_details d ON d.url=items.url
+ """ + where + " ORDER BY date,items.published_at,items.id", args
         )
     ]
 
 
-def snapshot(c):
-    rows = select_items(c)
+def snapshot(c, scope_getter=None):
+    rows = select_items(c, scope_getter)
     if not rows:
         raise ValueError("summary_empty")
     rows.sort(
@@ -480,11 +483,12 @@ def run_native(config, prompt, cancel, diagnostics):
 
 
 class Service:
-    def __init__(self, path_getter, settings_getter, route_getter, runner=run_native):
+    def __init__(self, path_getter, settings_getter, route_getter, runner=run_native, scope_getter=None):
         self.path_getter = path_getter
         self.settings_getter = settings_getter
         self.route_getter = route_getter
         self.runner = runner
+        self.scope_getter = scope_getter
         self.lock = threading.RLock()
         self.workers = {}
         self.initial_route = str(route_getter())
@@ -641,10 +645,12 @@ class Service:
                         self.route_getter()
                     ):
                         raise ValueError("summary_database_changed")
+                    if json.loads(row["snapshot_json"]).get("visibility_scope") != "feed-visible-v1":
+                        raise ValueError("summary_preview_invalid")
                     c.commit()
                     return {"preview": self.preview_public(row)}
                 config = capture_config(self.settings_getter())
-                s = snapshot(c)
+                s = snapshot(c, self.scope_getter)
                 start, _, _ = selection.window(s["items"], config["limits"])
                 # Separate historical preference hints, never current input IDs/count.
                 prefs = c.execute(
@@ -657,6 +663,7 @@ class Service:
                     dict(r) for r in prefs if selection.news_date(r["date"])
                 ]
                 s = clean_for_runtime(s, config)
+                s["visibility_scope"] = "feed-visible-v1"
                 preview_id = uuid.uuid4().hex
                 c.execute(
                     "INSERT INTO news_summary_previews VALUES(?,?,?,?,?,?,?,?)",
@@ -761,6 +768,8 @@ class Service:
                 if capture_config(self.settings_getter()) != config:
                     raise ValueError("summary_settings_changed")
                 s = json.loads(row["snapshot_json"])
+                if s.get("visibility_scope") != "feed-visible-v1":
+                    raise ValueError("summary_preview_invalid")
                 if (
                     not s["items"]
                     or not s["all_ids"]

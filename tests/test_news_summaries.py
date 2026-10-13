@@ -1451,3 +1451,63 @@ def test_single_call_has_no_audit_format_or_draft_reserve(setup):
     assert wait(service,job["id"])["status"]=="completed"
     assert len(calls)==1 and "checks" not in calls[0][1] and "待核草稿" not in calls[0][1]
     assert not hasattr(ns,"audit_prompt") and not hasattr(ns,"audited")
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_feed_visible_scope_matches_29_and_protects_hidden_and_arrivals(setup, monkeypatch, failure):
+    import app
+    p, state, s, gate, entered, calls, add, audit = setup
+    settings = s.settings_getter()
+    settings["feed"] = {"hidden_source_subkeys": ["x/fxtrader"]}
+    settings["news_summary"] = {"max_days": 30, "max_items": 1}
+    monkeypatch.setattr(app, "current_runtime_settings", lambda: settings)
+    s.scope_getter = app.news_summary_feed_scope
+    with sqlite3.connect(p) as c:
+        for i in range(4, 35):
+            add(c, i, dt="2026-10-02")
+        for i in (31, 32, 33):
+            c.execute("UPDATE items SET url=? WHERE id=?", (f"https://www.bloomberg.com/news/videos/2026-10-02/{i}", str(i)))
+        c.execute("UPDATE items SET url='https://x.com/fxtrader/status/34',source_type='x',source='x',source_name='fxtrader' WHERE id='34'")
+    with s.connection(p) as c:
+        assert len(ns.select_items(c)) == 33
+    # 1,2 and 4..30 visible; 3 was already read.
+    key, token, x = preview(s)
+    material = stored_preview(p, x)
+    assert x["scope"]["locked_count"] == 29
+    assert x["scope"]["summarized_count"] == 1
+    assert x["scope"]["excluded_count"] == 28
+    assert not set(material["all_ids"]) & {"31", "32", "33", "34"}
+    with s.connection(p) as c:
+        where, args = app.news_summary_feed_scope(c)
+        count = c.execute("SELECT COUNT(DISTINCT items.id) FROM items LEFT JOIN item_state st ON st.item_id=items.id " + where, args).fetchone()[0]
+    assert count == 29
+    with sqlite3.connect(p) as c:
+        add(c, 35, dt="2026-10-03")
+    selected_runner(s, material)
+    if failure:
+        def fail(*args):
+            raise RuntimeError("summary_runtime_failed")
+        s.runner = fail
+    j, _ = s.create(key, token, x["id"])
+    result = wait(s, j["id"])
+    assert result["status"] == ("failed" if failure else "completed")
+    current = reads(p)
+    for i in material["all_ids"]:
+        assert bool(current.get(i)) is (not failure)
+    assert all(not current.get(str(i)) for i in (31, 32, 33, 34, 35))
+
+
+@pytest.mark.parametrize("action", ["prepare", "create"])
+def test_old_visibility_preview_requires_repreview(setup, action):
+    p, state, s, gate, entered, calls, add, audit = setup
+    key, token, x = preview(s)
+    material = stored_preview(p, x)
+    del material["visibility_scope"]
+    with sqlite3.connect(p) as c:
+        c.execute("UPDATE news_summary_previews SET snapshot_json=? WHERE id=?", (json.dumps(material), x["id"]))
+    with pytest.raises(ValueError, match="summary_preview_invalid"):
+        if action == "prepare":
+            s.prepare(key, token)
+        else:
+            s.create(key, token, x["id"])
+    assert not calls and not reads(p).get("1")
+    assert preview(s)[2]["scope"]["locked_count"] == 2
