@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "v2.3.1.1"
+RELEASE_VERSION = "v2.3.3"
 ASSET_VERSION = RELEASE_VERSION.removeprefix("v")
 
 
@@ -23,4 +23,4 @@ def test_release_version_is_consistent_across_metadata_and_ui():
     assert f"/static/app.js?v={ASSET_VERSION}" in index_source
     assert f'version.textContent = "News Reader {RELEASE_VERSION}"' in app_source
     assert f"当前稳定版本：`{RELEASE_VERSION}`" in readme_source
-    assert f"### 2026-10-12 — {RELEASE_VERSION} " in changelog_source
+    assert f"### 2026-10-14 — {RELEASE_VERSION} " in changelog_source

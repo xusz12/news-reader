@@ -67,3 +67,19 @@ def test_environment_database_path_still_overrides_saved_configured_database(mon
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(environment_db))
 
     assert settings.resolve_db_path() == environment_db
+
+
+def test_summary_limits_save_reload_and_legacy_default(monkeypatch, tmp_path):
+    import json
+    p=tmp_path/"settings.json"
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH",str(p))
+    assert settings.load_app_settings()["news_summary"]=={"max_days":20,"max_items":6000}
+    value=settings.load_app_settings()
+    value["news_summary"]={"max_days":7,"max_items":1200}
+    settings.save_app_settings(value)
+    assert settings.load_app_settings()["news_summary"]=={"max_days":7,"max_items":1200}
+    for bad in [{"max_days":0},{"max_items":True},{"max_items":"6000"}]:
+        p.write_text(json.dumps({"news_summary":bad}))
+        assert settings.load_app_settings()["news_summary"]=={"max_days":20,"max_items":6000}
+    p.write_text("[]")
+    assert settings.load_app_settings()["news_summary"]=={"max_days":20,"max_items":6000}

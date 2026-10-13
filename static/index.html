@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.3.1.1</title>
+    <title>News Reader v2.3.3</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.3.1.1&build=db-picker" />
+    <link rel="stylesheet" href="/static/style.css?v=2.3.3&build=news-summary-single-call" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.3.1.1</span>
+          <span class="topbar-version">v2.3.3</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -62,6 +62,7 @@
           </div>
         </details>
         <div class="topbar-brand-actions">
+          <button id="topbarSummariesBtn" type="button" class="detail-retry-btn">新闻总结</button>
           <button id="settingsBtn" class="icon-btn" type="button" title="打开设置" aria-label="打开设置"></button>
           <div class="topbar-bell-wrap">
             <button id="errorStatsBtn" class="icon-btn" type="button" title="查看当日错误统计" aria-label="查看当日错误统计"></button>
@@ -80,6 +81,7 @@
           <h2 id="navReadingHeading">阅读</h2>
           <button id="navSearchBtn" class="nav-btn" type="button"><span class="nav-btn-label">搜索</span></button>
           <button id="navFeedBtn" class="nav-btn active" type="button" aria-current="page"><span class="nav-btn-label">新闻流</span><span id="navFeedBadge" class="nav-btn-badge hidden" aria-hidden="true"></span></button>
+          <button id="navSummariesBtn" class="nav-btn" type="button"><span class="nav-btn-label">新闻总结</span></button>
           <button id="navDailyBtn" class="nav-btn" type="button"><span class="nav-btn-label">日报</span></button>
         </section>
         <section class="nav-group nav-group--personal" aria-labelledby="navPersonalHeading">
@@ -176,7 +178,8 @@
                 <button id="sortOrderBtn" class="icon-btn hidden" type="button"></button>
               </div>
               <div class="feed-toolbar-action-group" role="group" aria-label="批量与维护">
-                <button id="markAllReadBtn" class="icon-btn" type="button"></button>
+                <button id="summarizeUnreadBtn" class="detail-retry-btn" type="button" title="总结全部未读，不受当前筛选影响">总结并全部已读</button>
+              <button id="markAllReadBtn" class="icon-btn" type="button"></button>
                 <button id="refreshBtn" class="icon-btn" type="button"></button>
                 <button id="manageMarketTagsBtn" class="icon-btn hidden" type="button" title="管理板块" aria-label="管理板块"></button>
               </div>
@@ -872,7 +875,7 @@
             <h3 class="settings-card-title">模型管理</h3>
             <div class="settings-form">
               <section class="settings-form-group" aria-labelledby="settingsAgentRuntimeTitle">
-                <h4 id="settingsAgentRuntimeTitle" class="settings-form-group-title">Chat 与新闻研究 Agent</h4>
+                <h4 id="settingsAgentRuntimeTitle" class="settings-form-group-title">Chat、新闻研究与积压总结 Agent</h4>
                 <div class="settings-form-grid">
                   <div class="settings-field">
                     <label for="settingsAgentRuntime">运行方式</label>
@@ -937,6 +940,14 @@
                     <div id="settingsTranslationModelCurrent" class="settings-field-current"></div>
                   </div>
                 </div>
+              </section>
+              <section class="settings-form-group" aria-labelledby="settingsSummaryGroupTitle">
+                <h4 id="settingsSummaryGroupTitle" class="settings-form-group-title">积压新闻总结范围</h4>
+                <div class="settings-form-grid">
+                  <div class="settings-field"><label for="settingsSummaryMaxDays">最多自然日（含起止）</label><input id="settingsSummaryMaxDays" class="settings-input" type="number" min="1" step="1" value="20" /></div>
+                  <div class="settings-field"><label for="settingsSummaryMaxItems">最多未读条数</label><input id="settingsSummaryMaxItems" class="settings-input" type="number" min="1" step="1" value="6000" /></div>
+                </div>
+                <div class="settings-field-help">仅从未读新闻筛选；还会按实际输入大小缩小范围。开始前会显示实际总结和排除数量，成功保存后将全部锁定积压标读，失败或取消不改。使用上方Agent，不使用单篇翻译模型。</div>
               </section>
               <section class="settings-form-group" aria-labelledby="settingsAgentGroupTitle">
                 <h4 id="settingsAgentGroupTitle" class="settings-form-group-title">新闻研究 Agent</h4>
@@ -1024,6 +1035,13 @@
       <button id="mobileMoreTabBtn" class="mobile-tab" type="button">更多</button>
     </nav>
 
-    <script src="/static/app.js?v=2.3.1.1&build=db-picker"></script>
+    <dialog id="newsSummariesDialog" class="news-summaries-dialog" aria-labelledby="newsSummariesTitle">
+      <header class="summary-header"><h2 id="newsSummariesTitle">新闻总结</h2><button id="closeNewsSummaries" type="button">关闭</button></header>
+      <div class="summary-actions"><button id="startNewsSummary" type="button">总结并全部已读</button><button id="cancelNewsSummary" class="hidden" type="button">取消当前任务</button><button id="refreshNewsSummaries" type="button">刷新</button></div>
+      <p id="newsSummaryProgress" role="status" aria-live="polite">只处理点击时全部未读，不受筛选影响；成功保存并核对后才标记本批已读。</p>
+      <div class="summary-workspace"><aside aria-label="历史总结"><div id="newsSummaryList"></div><button id="moreNewsSummaries" class="hidden" type="button">更多历史总结</button></aside><article id="newsSummaryContent"><p>选择一份历史总结，或生成本批未读新闻的总结。</p></article></div>
+    </dialog>
+    <script src="/static/news_summaries.js?build=news-summary-single-call"></script>
+    <script src="/static/app.js?v=2.3.3&build=news-summary-single-call"></script>
   </body>
 </html>

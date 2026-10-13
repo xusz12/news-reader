@@ -5973,3 +5973,21 @@ html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-status="fail
 .settings-update-summary { color: var(--muted); line-height: 1.5; margin: 8px 0 12px; }
 .settings-update-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 390px) { .settings-update-actions { flex-direction: column; } .settings-update-actions button { width: 100%; } }
+
+/* Independent catch-up history, including an accessible mobile entry in the topbar. */
+.news-summaries-dialog { width: min(1200px, 96vw); height: min(850px, 92dvh); max-width: 96vw; max-height: 94dvh; padding: 22px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel); color: var(--text); }
+.news-summaries-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.summary-header, .summary-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.summary-actions { justify-content: flex-start; }
+.news-summaries-dialog button { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; background: var(--panel-soft); color: var(--text); cursor: pointer; }
+.news-summaries-dialog button:disabled { opacity: .55; cursor: wait; }
+.summary-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 22px; height: calc(100% - 155px); }
+.summary-workspace > aside, #newsSummaryContent { min-width: 0; overflow: auto; }
+.summary-history-item { display: block; width: 100%; text-align: left; white-space: pre-line; margin-bottom: 8px; }
+.summary-history-item.active { border-color: var(--accent); }
+#newsSummaryContent { line-height: 1.85; overflow-wrap: anywhere; padding: 0 10px; }
+#newsSummaryContent .summary-citation { padding: 0 2px; color: var(--accent); border: 0; font-size: 12px; vertical-align: super; }
+#newsSummaryContent section { border-top: 1px solid var(--border); padding: 10px 0; }
+#newsSummaryContent section:focus { outline: 2px solid var(--accent); }
+#newsSummaryProgress { font-size: 14px; color: var(--muted); }
+@media (max-width: 720px) { .news-summaries-dialog { padding: 14px; } .summary-workspace { grid-template-columns: 1fr; height: auto; } .summary-workspace > aside { max-height: 180px; } #newsSummaryContent { max-height: 60dvh; padding: 0; } }

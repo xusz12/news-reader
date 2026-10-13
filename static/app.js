@@ -476,6 +476,8 @@ const settingsPiChatModelSelect = document.getElementById("settingsPiChatModelSe
 const settingsPiChatModelCustom = document.getElementById("settingsPiChatModelCustom");
 const settingsPiChatModelCurrent = document.getElementById("settingsPiChatModelCurrent");
 const settingsChatArchiveNote = document.getElementById("settingsChatArchiveNote");
+const settingsSummaryMaxDays = document.getElementById("settingsSummaryMaxDays");
+const settingsSummaryMaxItems = document.getElementById("settingsSummaryMaxItems");
 const settingsAgentRuntime = document.getElementById("settingsAgentRuntime");
 const settingsCodexProvider = document.getElementById("settingsCodexProvider");
 const settingsCodexModel = document.getElementById("settingsCodexModel");
@@ -1464,9 +1466,14 @@ function markLoadedRowsReadLocally(itemIds = null) {
   });
 }
 
+function summaryPanelObscuresFeed() {
+  return !!document.getElementById("newsSummariesDialog")?.open;
+}
+
 function scheduleFeedEndAutoReadIfNeeded() {
   const canSchedule =
     state.collection === "feed" &&
+    !summaryPanelObscuresFeed() &&
     !state.hasMore &&
     state.total > 0 &&
     isListHintVisible();
@@ -1488,6 +1495,7 @@ function scheduleFeedEndAutoReadIfNeeded() {
     feedEndAutoReadTimer = null;
     const stillValid =
       state.collection === "feed" &&
+      !summaryPanelObscuresFeed() &&
       !state.hasMore &&
       state.total > 0 &&
       isListHintVisible();
@@ -2150,6 +2158,8 @@ function syncAgentRuntimeOptions() {
 }
 
 function populateSettingsForm() {
+  if (settingsSummaryMaxDays) settingsSummaryMaxDays.value = state.runtimeSettings?.news_summary?.max_days || 20;
+  if (settingsSummaryMaxItems) settingsSummaryMaxItems.value = state.runtimeSettings?.news_summary?.max_items || 6000;
   if (settingsAgentRuntime) settingsAgentRuntime.value = state.runtimeSettings?.agent?.runtime || "pi";
   if (settingsCodexProvider) settingsCodexProvider.value = state.runtimeSettings?.agent?.codex?.provider || "";
   if (settingsCodexModel) settingsCodexModel.value = state.runtimeSettings?.agent?.codex?.model || "";
@@ -2162,7 +2172,7 @@ function populateSettingsForm() {
         ? "CLI 未报告 OpenAI 登录；自定义或本地 provider 不一定需要它，以实际请求结果为准。"
         : OAR_ERROR_LABELS[service.error] || "尚未确认 Codex CLI 状态；不阻挡请求，以实际结果为准。";
   }
-  for (const input of [settingsAgentRuntime, settingsCodexProvider, settingsCodexModel, settingsCodexProfile]) {
+  for (const input of [settingsAgentRuntime, settingsCodexProvider, settingsCodexModel, settingsCodexProfile, settingsSummaryMaxDays, settingsSummaryMaxItems]) {
     if (input) input.disabled = state.settingsLoading || state.settingsSaving || state.settingsClosing;
   }
   const llm = state.runtimeSettings?.llm;
@@ -2304,6 +2314,7 @@ function runtimeSettingsSavePayload({ hiddenSourceSubkeys = savedFeedHiddenSourc
         model: llm.pi_chat?.model || "",
       },
     },
+    news_summary: settings.news_summary || { max_days: 20, max_items: 6000 },
     feed: {
       hidden_source_subkeys: hiddenSourceSubkeys,
     },
@@ -2492,6 +2503,7 @@ async function saveRuntimeSettings() {
   const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
   const draftRuntime = settingsAgentRuntime?.value || "pi";
   const draftCodex = { provider: settingsCodexProvider?.value.trim() || "", model: settingsCodexModel?.value.trim() || "", profile: settingsCodexProfile?.value.trim() || "", sandbox: "read-only" };
+  const draftSummaryLimits = { max_days: Number(settingsSummaryMaxDays?.value ?? state.runtimeSettings?.news_summary?.max_days ?? 20), max_items: Number(settingsSummaryMaxItems?.value ?? state.runtimeSettings?.news_summary?.max_items ?? 6000) };
   const draftAgentTtl = Number(settingsAgentTtlSelect?.value) === 24 ? 24 : 72;
   const database = state.runtimeSettings?.database || {};
   // Capture the input before renderSettingsOverlay() can restore its saved value.
@@ -2501,6 +2513,7 @@ async function saveRuntimeSettings() {
   state.settingsSaving = true;
   renderSettingsOverlay();
   try {
+    if (!Object.values(draftSummaryLimits).every(x => Number.isSafeInteger(x) && x > 0)) throw new Error("invalid_summary_limits");
     const feedSourceSaveOk = await flushFeedSourceVisibilitySave({ force: true });
     if (!feedSourceSaveOk) return;
     const previousPiProvider = state.runtimeSettings?.llm?.pi_chat?.provider || "";
@@ -2512,6 +2525,7 @@ async function saveRuntimeSettings() {
       payload.llm.pi_chat.provider = draftPiChatProvider;
       payload.llm.pi_chat.model = draftPiChatModel;
     }
+    payload.news_summary = draftSummaryLimits;
     payload.agent.session_ttl_hours = draftAgentTtl;
     payload.agent.runtime = draftRuntime;
     if (draftRuntime === "codex") payload.agent.codex = draftCodex;
@@ -3590,7 +3604,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.3.1.1";
+  version.textContent = "News Reader v2.3.3";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -8221,7 +8235,7 @@ function setupReadObserver() {
   if (readObserver) readObserver.disconnect();
   readObserver = new IntersectionObserver(
     (entries) => {
-      if (document.hidden) return;
+      if (document.hidden || summaryPanelObscuresFeed()) return;
       if (state.collection !== "feed") return;
       const scrollingDown = lastScrollDirectionDown;
       const listTop = entries[0]?.rootBounds?.top ?? newsList.getBoundingClientRect().top;
@@ -8248,7 +8262,7 @@ function setupReadObserver() {
 }
 
 function processFeedAutoReadByScroll() {
-  if (state.collection !== "feed") return;
+  if (state.collection !== "feed" || summaryPanelObscuresFeed()) return;
   if (document.hidden) return;
   if (!lastScrollDirectionDown) return;
   const listRect = newsList.getBoundingClientRect();
@@ -12983,3 +12997,14 @@ if (reviewRetrackSaveBtn) {
     }
   });
 }
+
+// A completed summary marks only its bound snapshot, so refresh feed state rather than editing visible rows optimistically.
+window.addEventListener("news-summary-completed", async () => {
+  await refreshNavSummary();
+  if (state.collection === "feed") await loadFirstPage();
+});
+
+window.addEventListener("news-summary-visibility", () => {
+  if (summaryPanelObscuresFeed()) clearFeedEndAutoReadTimer();
+  else { setupReadObserver(); scheduleFeedEndAutoReadIfNeeded(); }
+});

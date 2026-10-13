@@ -45,6 +45,7 @@ from updater import git_state as update_git_state
 from updater import local_health_url, request_supervisor
 
 import codex_client
+import news_summaries
 from oar_client import bridge_command, bridge_request, parse_event as parse_oar_event, run_once as run_oar_once, cleanup_config as cleanup_oar_config, terminate_group, ERROR_MESSAGES as OAR_ERROR_MESSAGES
 
 from settings import (
@@ -1971,6 +1972,7 @@ def current_runtime_settings() -> dict:
     database = raw.get("database") if isinstance(raw, dict) else {}
     if isinstance(database, dict) and isinstance(database.get("path"), str):
         merged["database"]["path"] = database["path"].strip()
+    merged["news_summary"] = news_summaries.selection.limits(raw.get("news_summary"))
     return merged
 
 
@@ -2459,6 +2461,7 @@ def serialize_runtime_settings() -> dict:
         "feed_source_subkeys": feed_source_snapshot,
         "tracked": settings["tracked"],
         "agent": settings["agent"],
+        "news_summary": settings["news_summary"],
         "database": database_runtime_snapshot(settings),
         "restart_notice": "翻译 / 总结与 chat 的新请求通常立即生效；涉及 app.py 本版改动，终验前请重启 Flask。",
     }
@@ -2515,7 +2518,11 @@ def validate_runtime_settings(payload: object) -> dict:
     elif configured_db_path:
         configured_db_path = validate_existing_database_path(configured_db_path)
 
+    if "news_summary" in payload and not isinstance(payload["news_summary"], dict):
+        raise ValueError("invalid_summary_limits")
+    summary_limits = news_summaries.selection.limits(payload.get("news_summary", current_settings["news_summary"]))
     normalized = {
+        "news_summary": summary_limits,
         "llm": {
             "translation": {
                 "provider": "deepseek",
@@ -7840,7 +7847,9 @@ def api_settings_update():
         normalized = validate_runtime_settings(body)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    save_app_settings(normalized)
+    # Serialize routing changes with summary commit: the first action wins cleanly.
+    with NEWS_SUMMARY_SERVICE.lock:
+        save_app_settings(normalized)
     refresh_agent_session_expiries()
     return jsonify({"ok": True, **serialize_runtime_settings()})
 
@@ -11508,6 +11517,92 @@ def api_review_create_reminder(chain_id: int):
         return jsonify({"ok": True, "reminder_id": reminder_id})
     finally:
         conn.close()
+
+
+
+# Separate summary history in the selected news database; no writes at import.
+NEWS_SUMMARY_SERVICE = news_summaries.Service(lambda: DB_PATH, current_runtime_settings, lambda: str(resolve_db_path().expanduser().resolve()))
+
+
+def _summary_error(exc):
+    code = str(exc) if str(exc) in news_summaries.ERRORS or str(exc) in {"invalid_request_id", "invalid_runtime"} else "summary_save_failed"
+    return jsonify({"ok": False, "error": code, "message": news_summaries.ERRORS.get(code, "请求格式不正确。")}), 409 if code in {"summary_database_changed", "summary_empty"} else 400
+
+
+@app.get("/api/news-summaries")
+def api_news_summaries():
+    try:
+        offset = max(0, min(1000000, int(request.args.get("offset", "0"))))
+        return jsonify({"ok": True, **NEWS_SUMMARY_SERVICE.listing(offset)})
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        return _summary_error(exc)
+
+
+@app.post("/api/news-summaries/prepare")
+def api_news_summary_prepare():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "invalid_request_body"}), 400
+    try:
+        return jsonify({"ok": True, **NEWS_SUMMARY_SERVICE.prepare(body.get("request_id"), body.get("database_token"))})
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        return _summary_error(exc)
+
+
+@app.post("/api/news-summaries/previews/<preview_id>/discard")
+def api_news_summary_discard_preview(preview_id):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "invalid_request_body"}), 400
+    try:
+        NEWS_SUMMARY_SERVICE.discard_preview(preview_id, body.get("database_token"))
+        return jsonify({"ok": True})
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        return _summary_error(exc)
+
+
+@app.post("/api/news-summaries")
+def api_news_summary_create():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "invalid_request_body"}), 400
+    try:
+        if not isinstance(body.get("preview_id"), str) or not body["preview_id"]:
+            raise ValueError("summary_preview_invalid")
+        job, created = NEWS_SUMMARY_SERVICE.create(body.get("request_id"), body.get("database_token"), body["preview_id"])
+        return jsonify({"ok": True, "job": job, "created": created}), 202
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        return _summary_error(exc)
+
+
+@app.get("/api/news-summaries/jobs/<job_id>")
+def api_news_summary_job(job_id):
+    try:
+        job = NEWS_SUMMARY_SERVICE.job(job_id)
+        return (jsonify({"ok": True, "job": job}) if job else (jsonify({"ok": False, "error": "summary_not_found"}), 404))
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        return _summary_error(exc)
+
+
+@app.post("/api/news-summaries/jobs/<job_id>/cancel")
+def api_news_summary_cancel(job_id):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "invalid_request_body"}), 400
+    try:
+        job = NEWS_SUMMARY_SERVICE.cancel(job_id, body.get("database_token"))
+        return (jsonify({"ok": True, "job": job}) if job else (jsonify({"ok": False, "error": "summary_not_found"}), 404))
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        return _summary_error(exc)
+
+
+@app.get("/api/news-summaries/<summary_id>")
+def api_news_summary_detail(summary_id):
+    try:
+        detail = NEWS_SUMMARY_SERVICE.detail(summary_id)
+        return (jsonify({"ok": True, "summary": detail}) if detail else (jsonify({"ok": False, "error": "summary_not_found"}), 404))
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        return _summary_error(exc)
 
 
 def main() -> None:

@@ -67,6 +67,7 @@ DEFAULT_APP_SETTINGS = {
     "database": {
         "path": "",
     },
+    "news_summary": {"max_days": 20, "max_items": 6000},
 }
 
 
@@ -194,6 +195,11 @@ def load_app_settings() -> dict:
         if isinstance(configured_path, str):
             base["database"]["path"] = configured_path.strip()
 
+    from news_summary_selection import limits
+    try:
+        base["news_summary"] = limits(payload.get("news_summary") if isinstance(payload, dict) else None)
+    except ValueError:
+        pass
     return base
 
 
