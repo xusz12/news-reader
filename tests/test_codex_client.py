@@ -193,6 +193,7 @@ def test_background_resume_settings_sticky_archive_and_new_session(tmp_path,monk
     assert payload['jobs'][-1]['answer_text']=='有效最终结论'
     assert 'DO_NOT_EXPOSE' not in json.dumps(payload)
     settings['agent']['runtime']='pi';settings['agent']['codex']['model']='changed'
+    settings['llm']['pi_chat']={'provider':'ollama','model':'minimax-m3:cloud'}
     second=client.post(f"/api/news/{item['id']}/agent/jobs",json={'question':'second','session_id':first['session']['id']})
     assert second.status_code==202 and second.get_json()['session']['provider']=='codex'
     assert app.process_pending_agent_once()
@@ -278,6 +279,7 @@ def test_pi_saved_session_and_archive_remain_pi_after_runtime_change(tmp_path, m
     codex_log = fake_codex(tmp_path, monkeypatch)
     settings = select_codex(app, monkeypatch)
     settings['agent']['runtime'] = 'pi'
+    settings['llm']['pi_chat'] = {'provider':'ollama','model':'minimax-m3:cloud'}
     first = client.post(f"/api/news/{item['id']}/agent/jobs", json={'question': 'Pi first'}).get_json()
     assert first['session']['provider'] == 'pi'
     assert app.process_pending_agent_once()

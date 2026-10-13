@@ -2801,9 +2801,9 @@ def test_v2125_title_clamps_and_version_contract():
     assert "-webkit-line-clamp: 5" in selected_title_rule
     assert "-webkit-line-clamp: 5" in detail_title_rule
     assert "-webkit-line-clamp: 3" in summary_rule
-    assert "News Reader v2.3.3" in html
-    assert "/static/style.css?v=2.3.3" in html
-    assert "/static/app.js?v=2.3.3" in html
+    assert "News Reader v2.3.4" in html
+    assert "/static/style.css?v=2.3.4" in html
+    assert "/static/app.js?v=2.3.4" in html
     assert 'id="settingsDatabaseBrowseBtn"' in html
     assert 'class="settings-database-current-path"' in html
     app_source = Path("static/app.js").read_text(encoding="utf-8")
@@ -4069,7 +4069,7 @@ def test_deepseek_failure_uses_pi_fallback_and_persists_result(tmp_path: Path, m
     assert "pi-fallback-structured" in ai_row["raw_json"]
     assert job_row["status"] == "success"
     assert job_row["last_error"] is None
-    assert fallback_called["pi_provider"] == "ollama"
+    assert fallback_called["pi_provider"] == ""
 
 
 def test_error_stats_today_with_and_without_errors(tmp_path: Path, monkeypatch):
@@ -4456,10 +4456,10 @@ def test_frontend_is_v2120_without_later_visual_experiments():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     review_styles = style_source.split("/* ===== Review (复盘) styles ===== */", 1)[1]
 
-    assert "News Reader v2.3.3" in app_source
-    assert "News Reader v2.3.3" in index_source
-    assert "/static/style.css?v=2.3.3" in index_source
-    assert "/static/app.js?v=2.3.3" in index_source
+    assert "News Reader v2.3.4" in app_source
+    assert "News Reader v2.3.4" in index_source
+    assert "/static/style.css?v=2.3.4" in index_source
+    assert "/static/app.js?v=2.3.4" in index_source
     assert 'id="navFeedBadge"' in index_source
     assert 'id="navReadLaterBadge"' in index_source
     assert 'id="navReviewsBadge"' in index_source
@@ -4560,7 +4560,7 @@ def test_settings_shell_uses_visible_labels_and_content_fitted_desktop_height():
 
     assert '<h2 class="settings-title">设置</h2>' in index_source
     assert '<div class="settings-eyebrow">Settings</div>' not in index_source
-    assert '<span class="settings-nav-label">服务</span>' in index_source
+    assert '<span class="settings-nav-label">服务</span>' not in index_source
     assert '<span class="settings-nav-label">模型</span>' in index_source
     assert '<span class="settings-nav-label">更新</span>' in index_source
     assert 'aria-label="更新记录"' in index_source
@@ -5165,7 +5165,7 @@ def test_settings_default_pi_and_ignore_unknown_executor_fields(tmp_path: Path, 
     assert set(initial["llm"]) == {"translation", "pi_chat"}
     assert set(initial["api_status"]) == {"deepseek", "pi", "codex"}
     assert initial["agent"]["runtime"] == "pi"
-    assert set(initial["model_catalogs"]) == {"translation", "pi_chat"}
+    assert set(initial["model_catalogs"]) == {"translation", "pi_chat", "codex"}
     assert initial["llm"]["translation"]["model"] == "deepseek-saved"
 
     saved = client.put(
@@ -5370,45 +5370,34 @@ def test_pi_chat_settings_snapshot_detects_providers(tmp_path: Path, monkeypatch
     snapshot = app_module.pi_chat_settings_snapshot("minimax-m3:cloud", "deepseek")
     catalog = snapshot["catalog"]
     assert catalog["saved_provider"] == "deepseek"
-    assert catalog["resolved_default_provider"] == "ollama"
+    assert catalog["resolved_default_provider"] == ""
     provider_values = [opt["value"] for opt in catalog["provider_options"]]
     assert "deepseek" in provider_values and "ollama" in provider_values
     # 默认模型选项仍保留
-    assert catalog["resolved_default_model"] == "minimax-m3:cloud"
+    assert catalog["resolved_default_model"] == ""
     # 真实目录成功：source/used_fallback 准确反映 pi-list-models。
     assert catalog["source"] == "pi-list-models"
-    assert snapshot["service"]["used_fallback"] is False
+    assert snapshot["catalog"]["source"] == "pi-list-models"
     grouped = catalog["model_options_by_provider"]
     # 已保存模型不在其保存 provider 的真实目录内时，只追加到保存 provider 组。
-    assert [opt["value"] for opt in grouped["deepseek"]] == ["deepseek-v4-flash", "minimax-m3:cloud"]
+    assert [opt["value"] for opt in grouped["deepseek"]] == ["deepseek-v4-flash"]
     assert [opt["value"] for opt in grouped["ollama"]] == ["minimax-m3:cloud"]
-    assert [opt["source"] for opt in grouped["deepseek"]][-1] == "saved"
+    assert all(opt["source"] == "pi-list-models" for opt in grouped["deepseek"])
     # 顶层兼容 options 为保存 provider 的分组（含已保存追加）。
-    assert [opt["value"] for opt in catalog["options"]] == ["deepseek-v4-flash", "minimax-m3:cloud"]
+    assert [opt["value"] for opt in catalog["options"]] == ["deepseek-v4-flash"]
 
 
 def test_pi_chat_settings_snapshot_falls_back_and_keeps_saved_provider(tmp_path: Path, monkeypatch):
-    # pi --list-models 失败时回退默认 ollama，且不丢已保存 provider。
-    settings_path = tmp_path / "app_settings.json"
-    settings_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
     import app as app_module
-
-    importlib.reload(app_module)
-    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/opt/homebrew/bin/pi")
-    monkeypatch.setattr(app_module.subprocess, "run", _fake_pi_subprocess(help_ok=True, models_stdout=None, models_ok=False))
-    snapshot = app_module.pi_chat_settings_snapshot("minimax-m3:cloud", "custom-provider")
-    provider_values = [opt["value"] for opt in snapshot["catalog"]["provider_options"]]
-    # 回退默认 ollama + 已保存 custom-provider 被追加保留
-    assert "ollama" in provider_values
-    assert "custom-provider" in provider_values
-    assert snapshot["catalog"]["saved_provider"] == "custom-provider"
-    # 失败回退：source/used_fallback 准确，且无分组目录。
-    assert snapshot["catalog"]["source"] == "fallback"
-    assert snapshot["service"]["used_fallback"] is True
-    assert snapshot["catalog"]["model_options_by_provider"] == {}
-    option_values = [opt["value"] for opt in snapshot["catalog"]["options"]]
-    assert option_values[0] == "minimax-m3:cloud"
+    monkeypatch.setattr(app_module.subprocess, "run", _fake_pi_subprocess(models_ok=False))
+    snapshot = app_module.pi_chat_settings_snapshot("old-model", "custom-provider")
+    catalog = snapshot["catalog"]
+    assert catalog["provider_options"] == []
+    assert catalog["options"] == []
+    assert catalog["saved_provider"] == "custom-provider"
+    assert catalog["saved_model"] == "old-model"
+    assert catalog["error"] and catalog["source"] == "unavailable"
+    assert catalog["model_options_by_provider"] == {}
 
 
 def test_pi_chat_settings_snapshot_appends_saved_provider_not_detected(tmp_path: Path, monkeypatch):
@@ -5428,12 +5417,12 @@ def test_pi_chat_settings_snapshot_appends_saved_provider_not_detected(tmp_path:
     snapshot = app_module.pi_chat_settings_snapshot("minimax-m3:cloud", "deepseek")
     provider_values = [opt["value"] for opt in snapshot["catalog"]["provider_options"]]
     assert "ollama" in provider_values
-    assert "deepseek" in provider_values  # saved 不在检测结果里，仍追加
+    assert "deepseek" not in provider_values  # 保存值单独保留，不伪装发现候选
     assert snapshot["catalog"]["saved_provider"] == "deepseek"
     # 已保存 provider 缺失时补组，且已保存模型只进自己的组；ollama 组不被污染。
     grouped = snapshot["catalog"]["model_options_by_provider"]
-    assert [opt["value"] for opt in grouped["deepseek"]] == ["minimax-m3:cloud"]
-    assert grouped["deepseek"][-1]["source"] == "saved"
+    assert "deepseek" not in grouped
+    assert snapshot["catalog"]["saved_model"] == "minimax-m3:cloud"
     assert [opt["value"] for opt in grouped["ollama"]] == ["minimax-m3:cloud"]
 
 
@@ -5476,11 +5465,11 @@ def test_frontend_pi_chat_provider_model_linkage_contract():
     # 联动读取按 provider 分组的真实目录，并保留当前/已保存值或选首个候选；自定义输入入口保留。
     assert "catalog.model_options_by_provider" in app_source
     assert "const belongs = !!currentModel && options.some((opt) => (opt?.value || \"\").trim() === currentModel);" in app_source
-    assert "const nextValue = belongs ? currentModel : ((options[0]?.value || \"\").trim());" in app_source
+    assert 'const nextValue = belongs ? currentModel : "";' in app_source
     assert "SETTINGS_CUSTOM_MODEL_VALUE" in app_source
     # 回归：真实目录成功时未知/自定义 provider 不得回退到已保存 provider 的 catalog.options（跨组串组）。
     assert "const hasRealCatalog = Object.keys(grouped).length > 0;" in app_source
-    assert "const options = hasGroup ? groupValues : (hasRealCatalog ? [] : fallbackOptions);" in app_source
+    assert "const options = hasGroup ? groupValues : [];" in app_source
     assert "const options = hasGroup ? groupValues : fallbackOptions;" not in app_source
     # 不混入 ollama list。
     assert "ollama list" not in app_source
@@ -5736,8 +5725,8 @@ def test_news_chat_archive_always_uses_pi_and_appends_note(tmp_path: Path, monke
     payload = response.get_json()
     assert payload["provider"] == "pi"
     assert payload["archive_summary"] == "归档结论。"
-    assert captured["pi_provider"] == "ollama"
-    assert captured["pi_model"] == "minimax-m3:cloud"
+    assert captured["pi_provider"] == ""
+    assert captured["pi_model"] == ""
     assert "归档结论。" in payload["note"]["note"]
 
 
@@ -9266,10 +9255,10 @@ def test_frontend_article_highlight_contract_and_version():
     style_source = Path("static/style.css").read_text(encoding="utf-8")
     render_source = app_source.split("function renderDetail(item", 1)[1].split("function renderDetailMediaGallery", 1)[0]
 
-    assert "News Reader v2.3.3" in app_source
-    assert "News Reader v2.3.3" in index_source
-    assert "/static/style.css?v=2.3.3" in index_source
-    assert "/static/app.js?v=2.3.3" in index_source
+    assert "News Reader v2.3.4" in app_source
+    assert "News Reader v2.3.4" in index_source
+    assert "/static/style.css?v=2.3.4" in index_source
+    assert "/static/app.js?v=2.3.4" in index_source
     assert 'id="detailHighlightPopover"' in index_source
     assert 'id="detailHighlightActionBtn"' not in index_source
     assert 'id="detailHighlightColorButtons"' in index_source
@@ -10600,6 +10589,9 @@ def _setup_agent_api_fixture(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NEWS_READER_DB_PATH", str(db_path))
     monkeypatch.setenv("NEWS_READER_AGENT_DB_PATH", str(agent_db_path))
     monkeypatch.setenv("NEWS_READER_AGENT_RUNTIME_DIR", str(tmp_path / "agent-runtime"))
+    settings_path = tmp_path / "agent-fixture-settings.json"
+    settings_path.write_text(json.dumps({"llm": {"pi_chat": {"provider": "ollama", "model": "minimax-m3:cloud"}}}))
+    monkeypatch.setenv("NEWS_READER_APP_SETTINGS_PATH", str(settings_path))
     import app as app_module
 
     importlib.reload(app_module)
@@ -10777,10 +10769,10 @@ def test_agent_frontend_traffic_lights_and_right_aligned_actions_contract():
     index_source = Path("static/index.html").read_text(encoding="utf-8")
     style_source = Path("static/style.css").read_text(encoding="utf-8")
 
-    assert "News Reader v2.3.3" in index_source
-    assert "/static/style.css?v=2.3.3" in index_source
-    assert "/static/app.js?v=2.3.3" in index_source
-    assert 'version.textContent = "News Reader v2.3.3"' in app_source
+    assert "News Reader v2.3.4" in index_source
+    assert "/static/style.css?v=2.3.4" in index_source
+    assert "/static/app.js?v=2.3.4" in index_source
+    assert 'version.textContent = "News Reader v2.3.4"' in app_source
 
     collapse = '<button id="detailChatBackBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-collapse" type="button" aria-label="收起 Agent 浮窗" title="收起 Agent 浮窗"></button>'
     expand = '<button id="detailAgentExpandBtn" class="detail-retry-btn detail-agent-window-control detail-agent-window-control-expand" type="button" aria-label="放大 Agent 浮窗" title="放大 Agent 浮窗"></button>'
@@ -11717,7 +11709,7 @@ const savedPayloads = [];
 const state = { runtimeSettings: null };
 const context = {
   state,
-  document: { activeElement: null },
+  document: { activeElement: null, getElementById: () => null },
   settingsDatabasePathInput: input,
   settingsDatabaseActualPath: {}, settingsDatabasePathHelp: {}, settingsDatabaseStatus: {},
   settingsDatabaseBrowseBtn: button("browse"), settingsDatabaseSaveBtn: button("save"),

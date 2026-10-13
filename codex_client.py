@@ -19,6 +19,7 @@ import uuid
 from oar_client import terminate_group
 
 ROOT = Path(__file__).resolve().parent
+REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 MAX_BYTES = 2 * 1024 * 1024
 ERROR_MESSAGES = {
     "codex_missing": "未找到 Codex CLI，请先安装 Codex。",
@@ -44,6 +45,12 @@ def normalize_config(value: object) -> dict:
         # Keep legacy session mappings byte-compatible when provider is inherited.
         if key != "provider" or raw:
             result[key] = raw
+    effort = value.get("reasoning_effort", "")
+    if not isinstance(effort, str) or (effort and effort not in REASONING_EFFORTS):
+        raise ValueError("invalid_codex_reasoning_effort")
+    # Do not add empty fields to old session mappings: their byte compatibility matters.
+    if effort:
+        result["reasoning_effort"] = effort
     # News Chat does not need write access. Profiles cannot escalate this policy.
     if value.get("sandbox", "read-only") != "read-only":
         raise ValueError("invalid_codex_sandbox")
@@ -113,6 +120,8 @@ def command(config: dict, *, thread_id: str = "", cwd: Path = ROOT, ephemeral: b
         args += ["--profile", config["profile"]]
     if config.get("provider"):
         args += ["-c", "model_provider=" + json.dumps(config["provider"])]
+    if config.get("reasoning_effort"):
+        args += ["-c", "model_reasoning_effort=" + json.dumps(config["reasoning_effort"])]
     if ephemeral:
         args.append("--ephemeral")
     if thread_id:
@@ -253,12 +262,13 @@ class EventParser:
             raise RuntimeError("codex_protocol_error") from None
 
 
-def run_once(config: dict, prompt: str, *, thread_id: str = "", timeout: int = 90, ephemeral: bool = False) -> tuple[str, str]:
+def run_once(config: dict, prompt: str, *, thread_id: str = "", timeout: int = 90, ephemeral: bool = False, finish_on_completion: bool = False) -> tuple[str, str]:
     require_ready()
     parser = EventParser(thread_id)
     proc = None
     selector = selectors.DefaultSelector()
     terminal = None
+    completion_deadline = None
     try:
         proc = subprocess.Popen(command(config, thread_id=thread_id, ephemeral=ephemeral),
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -273,6 +283,11 @@ def run_once(config: dict, prompt: str, *, thread_id: str = "", timeout: int = 9
         buffer = b""
         deadline = time.monotonic() + timeout
         while selector.get_map():
+            # Connection probes measure the turn, not native CLI/plugin teardown.
+            # Drain immediately queued output briefly to catch failures/duplicates,
+            # then finally reaps this invocation's entire process group.
+            if finish_on_completion and completion_deadline is not None and time.monotonic() >= completion_deadline:
+                break
             if time.monotonic() >= deadline:
                 raise RuntimeError("codex_timeout")
             for key, _ in selector.select(0.1):
@@ -293,6 +308,8 @@ def run_once(config: dict, prompt: str, *, thread_id: str = "", timeout: int = 9
                         event = parser.parse(buffer.decode())
                         if event["type"] == "oar_result":
                             terminal = event
+                            if finish_on_completion:
+                                completion_deadline = min(deadline, time.monotonic() + 0.25)
                         buffer = b""
                 elif key.data == "stdout":
                     buffer += chunk
@@ -304,6 +321,25 @@ def run_once(config: dict, prompt: str, *, thread_id: str = "", timeout: int = 9
                             event = parser.parse(line.decode())
                             if event["type"] == "oar_result":
                                 terminal = event
+                                if finish_on_completion:
+                                    completion_deadline = min(deadline, time.monotonic() + 0.25)
+        if finish_on_completion and terminal is not None:
+            if buffer.strip():
+                # No trailing malformed/partial payload may hide behind a completed turn.
+                parser.parse(buffer.decode())
+            if terminal.get("outcome") != "completed":
+                raise RuntimeError(terminal["error"])
+            # A known nonzero exit is still a failure. A still-running process is
+            # deliberately terminated in finally after the authoritative turn result.
+            if not selector.get_map() and proc.poll() is None:
+                try:
+                    proc.wait(timeout=min(0.25, max(0.01, deadline - time.monotonic())))
+                except subprocess.TimeoutExpired:
+                    pass
+            code = proc.poll()
+            if code is not None and code != 0:
+                raise RuntimeError("codex_runtime_failed")
+            return terminal["answer"], parser.thread_id
         proc.wait(timeout=max(0.01, deadline - time.monotonic()))
         if terminal is None:
             raise RuntimeError("codex_protocol_error")

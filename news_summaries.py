@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS news_summaries (
  config_json TEXT NOT NULL,validation_json TEXT NOT NULL,body_hash TEXT NOT NULL);
 """
 ERRORS = {
+    "pi_model_not_selected": "请先在模型管理中选择 Pi 服务商和模型；不会自动使用旧默认。",
     "invalid_summary_limits": "总结限制必须是有效的正整数。",
     "summary_preview_invalid": "预览不存在、已过期或不属于此数据库；请重新预览。",
     "summary_settings_changed": "预览后运行方式或总结限制已改变；请重新预览并确认。",
@@ -299,6 +300,8 @@ def capture_config(settings):
             pi_provider=settings["llm"]["pi_chat"]["provider"],
             pi_model=settings["llm"]["pi_chat"]["model"],
         )
+        if not config["pi_provider"] or not config["pi_model"]:
+            raise ValueError("pi_model_not_selected")
     else:
         raise ValueError("invalid_runtime")
     config["native_config_stamp"] = sha(native_config_stamp(config))

@@ -2,9 +2,11 @@
 
 本地新闻阅读器（Web 版），数据源来自 `DailyNews`，用于新闻流扫读、稍后阅读、想法沉淀、提醒、跟踪主题与复盘。
 
-当前稳定版本：`v2.3.3`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前稳定版本：`v2.3.4`。版本更新历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 核心能力
+
+- **模型管理与连接测试**：Chat、研究Agent及积压总结共享运行方式、模型和已知推理强度；Codex目录刷新及高级连接覆盖，Pi不再强制默认Ollama。独立连接测试使用当前未保存选择，不写聊天或新闻；成功仅证明该次模型请求可用。
 
 - **DailyNews 增量索引**：扫描 `dailyFreshNews_*.md` 作为输入锚点；同名 `.newsreader.json` sidecar 存在且合法时优先使用 JSON，缺失或解析失败时回退 Markdown。
 - **三栏工作台**：左侧集合/筛选，中栏新闻列表，右栏详情与工具区；移动端使用单栏与底部 Tab。

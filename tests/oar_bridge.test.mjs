@@ -319,3 +319,38 @@ test('private config cleanup tokens are validated and separate invocation direct
   assert.throws(() => validateRequest({ ...request, config_id: '../other' }), /oar_invalid_request/);
   await assert.rejects(prepareConfig(source, request.state_dir, '../other'), /oar_invalid_request/);
 });
+
+test('lost old session rebuild pins saved model after native defaults change and fails if unknown', async t => {
+  const request = await fixture(t);
+  request.provider = 'old-provider';request.model = 'old-model';
+  const mappingFile = path.join(request.state_dir, 'session.json');
+  await fs.writeFile(mappingFile, JSON.stringify({id:'old-session', runtime:'oar'}));
+  const calls = [], currentDefault = 'new-provider/new-model';
+  const runtime = {async session(_installation, options) {
+    calls.push({...options});
+    if (options.resume) throw Object.assign(new Error('missing'), {name:'SessionNotFoundError'});
+    const selected = options.model ?? currentDefault;
+    return {id:selected, events(callback){this.listener=callback;}, async dispose(){}};
+  }};
+  const events = [];
+  assert.equal(await execute(request, runtime, {}, e=>events.push(e), undefined, completed), true);
+  assert.equal(calls[0].model, undefined); // Ordinary resume does not override the native model.
+  assert.equal(calls[1].model, 'old-provider/old-model');
+  assert.equal(events[0].id, 'old-provider/old-model');
+  assert.equal(events.at(-1).answer, `answer:${request.prompt}`); // Full saved history is replayed.
+  assert.equal(JSON.parse(await fs.readFile(mappingFile)).id, 'old-provider/old-model');
+
+  // Unknown original configuration: no reconstruction, no success, mapping unchanged.
+  await fs.writeFile(mappingFile, JSON.stringify({id:'old-session', runtime:'oar'}));
+  request.provider = '';request.model = '';
+  const unknown = fakeRuntime({missing:true}), rejected = [];
+  await assert.rejects(execute(request, unknown, {}, e=>rejected.push(e), undefined, completed), /oar_legacy_session_missing/);
+  assert.equal(unknown.calls.length, 1);
+  assert.equal(rejected.length, 0);
+  assert.equal(JSON.parse(await fs.readFile(mappingFile)).id, 'old-session');
+  // The same legacy mapping remains resumable when its native session still exists.
+  const available = fakeRuntime();
+  assert.equal(await execute(request, available, {}, ()=>{}, undefined, completed), true);
+  assert.equal(available.calls.length, 1);assert.equal(available.calls[0].model, undefined);
+  assert.equal(available.calls[0].resume, 'old-session');
+});

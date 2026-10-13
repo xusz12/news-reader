@@ -147,8 +147,8 @@ export function validateRequest(request) {
       typeof request.resume_prompt !== 'string' ||
       typeof request.cwd !== 'string' || !path.isAbsolute(request.cwd) ||
       typeof request.state_dir !== 'string' || !path.isAbsolute(request.state_dir) ||
-      typeof request.provider !== 'string' || !request.provider ||
-      typeof request.model !== 'string' || !request.model ||
+      typeof request.provider !== 'string' ||
+      typeof request.model !== 'string' ||
       (request.config_id !== undefined &&
        (typeof request.config_id !== 'string' || !/^[a-f0-9]{32}$/.test(request.config_id))) ||
       (request.legacy_native_id !== undefined &&
@@ -167,7 +167,12 @@ export async function execute(request, runtime, installation, emit, signal, wait
     nativeId = saved.id;
     historyReplayed = Boolean(saved.history_replayed);
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const options = { cwd: request.cwd, model: `${request.provider}/${request.model}` };
+  const options = { cwd: request.cwd };
+  // Resumed sessions own their model; a changed application default must not replace it.
+  if (!nativeId) {
+    if (!request.provider || !request.model) throw new Error('oar_model_unavailable');
+    options.model = `${request.provider}/${request.model}`;
+  }
   let session;
   let resumed = false;
   try {
@@ -176,6 +181,11 @@ export async function execute(request, runtime, installation, emit, signal, wait
       catch (error) {
         if (error.name !== 'SessionNotFoundError') throw error;
         if (request.legacy_native_id) throw new Error('oar_legacy_session_missing');
+        // Rebuilding is a new native session: pin the application's saved model,
+        // never inherit a possibly changed local default. Legacy configurations
+        // that cannot be determined must fail instead of reporting a new success.
+        if (!request.provider || !request.model) throw new Error('oar_legacy_session_missing');
+        options.model = `${request.provider}/${request.model}`;
         historyReplayed = Boolean(request.history_replayed);
       }
     }
@@ -266,7 +276,11 @@ export async function executeCli(request, emit, signal, spawnProcess = spawn) {
   const sessionArgs = saved ? ['--session', nativeId] : ['--session-id', nativeId];
   const cliFile = fileURLToPath(new URL('bundle/cli.js', import.meta.resolve('@earendil-works/pi-coding-agent')));
   const args = [cliFile, '-p', '--mode', 'json', '--session-dir', sessionDir,
-    ...sessionArgs, '--provider', request.provider, '--model', request.model];
+    ...sessionArgs];
+  if (!saved) {
+    if (!request.provider || !request.model) throw new Error('oar_model_unavailable');
+    args.push('--provider', request.provider, '--model', request.model);
+  }
   if (signal?.aborted) throw new Error('oar_stopped');
   const child = spawnProcess(process.execPath, args, { cwd: request.cwd, env: process.env, stdio: ['pipe','pipe','pipe'] });
   const stop = () => child.kill('SIGTERM');

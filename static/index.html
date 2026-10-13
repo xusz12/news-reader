@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.3.3</title>
+    <title>News Reader v2.3.4</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.3.3&build=news-summary-single-call" />
+    <link rel="stylesheet" href="/static/style.css?v=2.3.4&build=model-settings-connection" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.3.3</span>
+          <span class="topbar-version">v2.3.4</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -828,9 +828,6 @@
         <div id="settingsStatus" class="detail-status muted hidden">读取中...</div>
         <div class="settings-shell">
           <nav class="settings-nav" aria-label="设置板块">
-            <button id="settingsNavServices" class="settings-nav-btn" type="button" data-section="services" aria-label="服务管理" title="服务管理">
-              <span class="settings-nav-label">服务</span>
-            </button>
             <button id="settingsNavDatabase" class="settings-nav-btn" type="button" data-section="database" aria-label="数据库位置" title="数据库位置">
               <span class="settings-nav-label">数据库</span>
             </button>
@@ -845,10 +842,6 @@
             </button>
           </nav>
           <div class="settings-content">
-          <section id="settingsSectionServices" class="settings-card settings-section-panel">
-            <h3 class="settings-card-title">服务管理</h3>
-            <div id="settingsApiStatus" class="settings-api-status"></div>
-          </section>
           <section id="settingsSectionDatabase" class="settings-card settings-section-panel hidden">
             <h3 class="settings-card-title">数据库位置</h3>
             <div class="settings-field-note">这里只能选择已经存在、可读写且能正常打开的 SQLite 文件。保存后下次启动生效；不会迁移、合并、导入或复制数据。</div>
@@ -894,10 +887,10 @@
                       <option value="ollama">ollama</option>
                     </select>
                     <input id="settingsPiChatProviderCustom" class="settings-input hidden" type="text" maxlength="40" placeholder="输入自定义 pi provider" />
-                    <div class="settings-field-help">默认 ollama，可自定义 provider，如 deepseek</div>
+                    <div class="settings-field-help">候选来自 Pi 当前目录；原选择未发现时保留并提示，不自动换服务商。</div>
                   </div>
                   <div class="settings-field">
-                    <label for="settingsPiChatModelSelect">Pi chat 默认模型</label>
+                    <label for="settingsPiChatModelSelect">模型</label>
                     <select id="settingsPiChatModelSelect" class="pref-select"></select>
                     <input id="settingsPiChatModelCustom" class="settings-input hidden" type="text" maxlength="120" placeholder="输入自定义 Pi 模型名" />
                     <div id="settingsPiChatModelCurrent" class="settings-field-current"></div>
@@ -905,27 +898,28 @@
                 </div>
                 <div id="settingsCodexRuntimeOptions" class="settings-form-grid hidden">
                   <div class="settings-field">
-                    <label for="settingsCodexProvider">Codex provider（留空使用本机配置）</label>
+                    <label for="settingsCodexModelSelect">模型</label>
+                    <select id="settingsCodexModelSelect" class="pref-select"></select>
+                    <input id="settingsCodexModel" class="settings-input hidden" type="text" maxlength="120" autocomplete="off" placeholder="输入其他模型" />
+                  </div>
+                  <details class="settings-field"><summary>高级设置：本机配置覆盖</summary>
+                    <label for="settingsCodexProvider">连接覆盖（provider）</label>
                     <input id="settingsCodexProvider" class="settings-input" type="text" maxlength="80" autocomplete="off" />
-                    <div class="settings-field-help">填写本机 Codex 已配置的 provider 名称，不是 Pi provider；不修改账号或原生配置。</div>
-                  </div>
-                  <div class="settings-field">
-                    <label for="settingsCodexModel">Codex 模型（留空使用 CLI 默认）</label>
-                    <input id="settingsCodexModel" class="settings-input" type="text" maxlength="120" autocomplete="off" />
-                  </div>
-                  <div class="settings-field">
-                    <label for="settingsCodexProfile">Codex profile（可选，本机已配置名称）</label>
+                    <div class="settings-field-help">留空继承本机连接；显式值需为本机已配置名称，不是 Pi 服务商。</div>
+                    <label for="settingsCodexProfile">命名配置预设（profile）</label>
                     <input id="settingsCodexProfile" class="settings-input" type="text" maxlength="80" autocomplete="off" />
-                    <div class="settings-field-help">固定只读文件沙盒；MCP、hooks 和远程工具仍受本机权限管理。不会自动登录或转移 Pi 会话。</div>
-                  </div>
-                  <div class="settings-field">
-                    <label>Codex CLI 状态（非可用性判定）</label>
-                    <div id="settingsCodexStatus" class="settings-field-help" role="status" aria-live="polite"></div>
-                  </div>
+                    <div class="settings-field-help">不是账号或模型。留空沿用本机配置，不修改本机配置或登录信息。</div>
+                  </details>
                 </div>
+                <div class="settings-field"><label for="settingsReasoningEffort">推理强度</label><select id="settingsReasoningEffort" class="pref-select"><option value="">沿用默认</option></select><div id="settingsReasoningHelp" class="settings-field-help"></div></div>
+                <div class="settings-actions"><button id="settingsModelsRefreshBtn" class="detail-retry-btn" type="button">刷新模型列表</button><button id="settingsConnectionTestBtn" class="detail-retry-btn" type="button">测试连接</button></div>
+                <div id="settingsModelsNotice" class="settings-field-help" role="status" aria-live="polite"></div>
+                <div class="settings-field-help">Pi/Codex 使用各自本机登录。测试采用当前未保存选择，会消耗少量请求；不携带新闻或接续会话。Codex独立发送“hi”，保留现有只读权限；Pi使用无工具模式。</div>
+                <div id="settingsConnectionResult" class="settings-field-help" role="status" aria-live="polite"></div>
               </section>
               <section class="settings-form-group" aria-labelledby="settingsTranslationGroupTitle">
-                <h4 id="settingsTranslationGroupTitle" class="settings-form-group-title">翻译与总结</h4>
+                <h4 id="settingsTranslationGroupTitle" class="settings-form-group-title">翻译与单篇固定任务</h4>
+                <div id="settingsApiStatus" class="settings-api-status"></div>
                 <div class="settings-form-grid">
                   <div class="settings-field">
                     <label for="settingsTranslationProvider">翻译 / 总结 provider</label>
@@ -1042,6 +1036,6 @@
       <div class="summary-workspace"><aside aria-label="历史总结"><div id="newsSummaryList"></div><button id="moreNewsSummaries" class="hidden" type="button">更多历史总结</button></aside><article id="newsSummaryContent"><p>选择一份历史总结，或生成本批未读新闻的总结。</p></article></div>
     </dialog>
     <script src="/static/news_summaries.js?build=news-summary-single-call"></script>
-    <script src="/static/app.js?v=2.3.3&build=news-summary-single-call"></script>
+    <script src="/static/app.js?v=2.3.4&build=model-settings-connection"></script>
   </body>
 </html>

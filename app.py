@@ -1,4 +1,6 @@
 from __future__ import annotations
+import model_catalogs
+import connection_tests
 
 import math
 import hashlib
@@ -2198,108 +2200,27 @@ def parse_pi_providers(stdout: str) -> list[str]:
 
 
 def pi_chat_settings_snapshot(saved_model: str, saved_provider: str = "") -> dict:
-    cli_available = bool(shutil.which("pi"))
-    exec_available = False
-    last_error = ""
-    status_bits: list[str] = []
-    catalog_detected = False
-    provider_options = fallback_model_options(PI_CHAT_PROVIDER_FALLBACKS, source="fallback")
-    provider_source = "fallback"
-    grouped_options: dict[str, list[dict]] = {}
-
-    if not cli_available:
-        status_bits.append("未发现 Pi CLI，使用默认候选。")
-    else:
-        try:
-            exec_probe = subprocess.run(
-                ["pi", "--help"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-                cwd=str(BASE_DIR),
-            )
-            exec_available = exec_probe.returncode == 0
-            status_bits.append("pi 可用。" if exec_available else "pi --help 返回非零。")
-            if not exec_available and not last_error:
-                last_error = trim_settings_error(exec_probe.stderr or exec_probe.stdout or f"exit_{exec_probe.returncode}")
-        except Exception as exc:  # pragma: no cover - env-specific
-            last_error = trim_settings_error(exc)
-            status_bits.append("pi 检查失败。")
-
-        # 同一次 `pi --list-models` 调用解析 provider/model 两列；失败/空回退默认，不丢已保存值。
-        if exec_available:
-            try:
-                models_probe = subprocess.run(
-                    ["pi", "--list-models"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    check=False,
-                    cwd=str(BASE_DIR),
-                    env=_pi_subprocess_env(),
-                )
-                if models_probe.returncode == 0:
-                    providers, models_by_provider = parse_pi_model_catalog(models_probe.stdout or "")
-                    if providers:
-                        catalog_detected = True
-                        provider_options = [build_model_option(name, source="pi-list-models") for name in providers]
-                        provider_source = "pi-list-models"
-                        grouped_options = {
-                            provider: [build_model_option(model, source="pi-list-models") for model in models]
-                            for provider, models in models_by_provider.items()
-                        }
-                        status_bits.append("pi --list-models 检测到 provider 与模型目录。")
-                    else:
-                        status_bits.append("pi --list-models 返回空，使用默认候选。")
-                else:
-                    status_bits.append("pi --list-models 不可读取，使用默认候选。")
-            except Exception as exc:  # pragma: no cover - env-specific
-                status_bits.append("pi --list-models 检测失败，使用默认候选。")
-
-    saved_provider = (saved_provider or "").strip()
-    provider_options = merge_model_options(provider_options, saved_provider)
-
-    # 真实目录可用时：按 provider 分组模型；已保存 provider/model 缺失时只追加到其保存 provider，不污染其它组。
-    saved_model_value = (saved_model or "").strip()
-    if catalog_detected:
-        grouped = {provider: list(options) for provider, options in grouped_options.items()}
-        effective_provider = saved_provider or DEFAULT_PI_CHAT_PROVIDER
-        grouped.setdefault(effective_provider, [])
-        group = grouped[effective_provider]
-        if saved_model_value and all(opt["value"] != saved_model_value for opt in group):
-            group.append(build_model_option(saved_model_value, description="当前已保存模型", source="saved"))
-        model_options: list[dict] = list(group)
-        used_fallback = False
-        catalog_source = "pi-list-models"
-    else:
-        grouped = {}
-        model_options = fallback_model_options(PI_CHAT_MODEL_FALLBACKS, source="fallback")
-        used_fallback = True
-        catalog_source = "fallback"
-
-    return {
-        "service": {
-            "cli_available": cli_available,
-            "exec_available": exec_available,
-            "used_fallback": used_fallback,
-            "last_error": last_error,
-            "status_text": " ".join(status_bits).strip(),
-        },
-        "catalog": {
-            "source": catalog_source,
-            "saved_model": (saved_model or "").strip(),
-            "saved_provider": saved_provider,
-            "resolved_default_model": DEFAULT_PI_CHAT_MODEL,
-            "resolved_default_provider": DEFAULT_PI_CHAT_PROVIDER,
-            "provider_source": provider_source,
-            "custom_allowed": True,
-            "default_label": DEFAULT_PI_CHAT_MODEL,
-            "options": merge_model_options(model_options, saved_model),
-            "provider_options": provider_options,
-            "model_options_by_provider": grouped,
-        },
-    }
+    providers, grouped = [], {}
+    error = ""
+    try:
+        probe = subprocess.run(["pi", "--list-models"], capture_output=True, text=True,
+                               timeout=15, cwd=str(BASE_DIR), env=_pi_subprocess_env())
+        if probe.returncode != 0:
+            error = "Pi 模型目录读取失败。"
+        else:
+            providers, grouped = parse_pi_model_catalog(probe.stdout)
+    except (OSError, subprocess.TimeoutExpired):
+        error = "Pi 模型目录读取失败。"
+    options = {p: [build_model_option(m, source="pi-list-models") for m in ms] for p, ms in grouped.items()}
+    # Saved absent values are preserved by the form, not presented as discovered models.
+    return {"service": {"last_error": error, "status_text": error or "目录仅表示候选，不证明调用成功。"},
+            "catalog": {"source": "unavailable" if error else "pi-list-models", "error": error,
+                        "saved_model": saved_model, "saved_provider": saved_provider,
+                        "resolved_default_model": "", "resolved_default_provider": "",
+                        "default_label": "请选择模型", "custom_allowed": False,
+                        "options": options.get(saved_provider, []),
+                        "provider_options": [build_model_option(p, source="pi-list-models") for p in providers],
+                        "model_options_by_provider": options}}
 
 
 def build_feed_source_settings_snapshot(hidden_keys: list[str]) -> dict:
@@ -2450,11 +2371,12 @@ def serialize_runtime_settings() -> dict:
         "api_status": {
             "deepseek": deepseek_snapshot["service"],
             "pi": pi_snapshot["service"],
-            "codex": codex_client.status_snapshot(),
+            "codex": {},
         },
         "model_catalogs": {
             "translation": deepseek_snapshot["catalog"],
             "pi_chat": pi_snapshot["catalog"],
+            "codex": {"options": [], "default_label": "沿用本机默认", "resolved_default_model": ""},
         },
         "llm": settings["llm"],
         "feed": settings["feed"],
@@ -2482,8 +2404,8 @@ def validate_runtime_settings(payload: object) -> dict:
     translation_provider = (translation.get("provider") or "").strip().lower()
     translation_model = normalize_deepseek_model((translation.get("model") or "").strip())
     pi_chat = llm.get("pi_chat") if isinstance(llm.get("pi_chat"), dict) else {}
-    pi_chat_provider = (pi_chat.get("provider") or DEFAULT_PI_CHAT_PROVIDER).strip()
-    pi_chat_model = (pi_chat.get("model") or DEFAULT_PI_CHAT_MODEL).strip()
+    pi_chat_provider = (pi_chat.get("provider") or "").strip()
+    pi_chat_model = (pi_chat.get("model") or "").strip()
     if translation_provider != "deepseek":
         raise ValueError("unsupported_translation_provider")
     if len(translation_model) > 120:
@@ -2506,6 +2428,8 @@ def validate_runtime_settings(payload: object) -> dict:
     if not isinstance(runtime, str) or runtime not in {"pi", "codex"}:
         raise ValueError("invalid_agent_runtime")
     codex_config = codex_client.normalize_config(agent_payload.get("codex", current_settings["agent"]["codex"]))
+    if codex_config != current_settings["agent"]["codex"] and codex_config.get("reasoning_effort"):
+        codex_config = model_catalogs.validate_effort(codex_config)
 
     configured_db_path = _database_path_from_payload(payload, current_settings)
     if os.environ.get("NEWS_READER_DB_PATH", "").strip():
@@ -2553,8 +2477,8 @@ def current_pi_chat_config() -> dict[str, str]:
     llm = current_runtime_settings()["llm"]
     pi_chat = llm.get("pi_chat", {})
     return {
-        "provider": (pi_chat.get("provider") or DEFAULT_PI_CHAT_PROVIDER).strip(),
-        "model": (pi_chat.get("model") or DEFAULT_PI_CHAT_MODEL).strip(),
+        "provider": (pi_chat.get("provider") or "").strip(),
+        "model": (pi_chat.get("model") or "").strip(),
     }
 
 
@@ -2729,6 +2653,8 @@ def run_pi_chat(
     reset: bool = False,
     timeout: int = 180,
 ) -> dict:
+    if (not pi_provider or not pi_model) and (not session_id or reset):
+        raise ValueError("pi_model_not_selected")
     prompt = question.strip()
     if not prompt:
         raise ValueError("empty_question")
@@ -2748,11 +2674,21 @@ def run_pi_chat(
     runtime_dir.mkdir(parents=True, exist_ok=True)
     chat_prompt = build_chat_prompt(title=title, source=source, published_at=published_at,
                                    content=content, question=prompt, context_level=context_level)
+    config_path = runtime_dir / "pi-config.json"
+    if config_path.exists():
+        saved_pi = json.loads(config_path.read_text())
+        pi_provider, pi_model = saved_pi["provider"], saved_pi["model"]
+    elif (runtime_dir / "session.json").exists():
+        # Legacy native session owns its model; do not label it with today's default.
+        pi_provider, pi_model = "", ""
     request_payload = bridge_request(prompt=chat_prompt, resume_prompt=prompt, state_dir=runtime_dir,
                                      provider=pi_provider, model=pi_model)
     if legacy_native_id:
         request_payload["legacy_native_id"] = legacy_native_id
     answer = run_oar_once(bridge_command(session), request_payload, _pi_subprocess_env(), timeout)
+    if not config_path.exists() and pi_provider and pi_model:
+        config_path.write_text(json.dumps({"provider": pi_provider, "model": pi_model}), encoding="utf-8")
+        config_path.chmod(0o600)
     return {"provider": "pi", "session_id": session, "model": pi_model, "answer": answer, **agent_runtime_metadata(session)}
 
 
@@ -3526,6 +3462,8 @@ def _agent_create_session(
     model: str,
     executor_provider: str,
 ) -> sqlite3.Row:
+    if provider == "pi" and (not model or not executor_provider):
+        raise ValueError("pi_model_not_selected")
     context = build_agent_context(item, detail)
     if not context:
         raise ValueError("detail_not_ready")
@@ -3804,6 +3742,8 @@ def api_agent_session_create(item_id: str):
         for job_id in process_ids:
             _terminate_agent_process(job_id)
         return jsonify({"ok": True, "context_available": True, **response_payload})
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
     finally:
         conn.close()
 
@@ -7819,6 +7759,34 @@ def api_release_notes():
     return jsonify({"ok": True, "items": parse_release_notes()})
 
 
+@app.post("/api/settings/models")
+def api_settings_models():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(ok=False, error="invalid_payload"), 400
+    if body.get("runtime") == "codex":
+        try:
+            config = codex_client.normalize_config(body.get("codex", {}))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, catalog=model_catalogs.safe_catalog(config))
+    if body.get("runtime") == "pi":
+        return jsonify(ok=True, catalog=pi_chat_settings_snapshot("", "")["catalog"])
+    return jsonify(ok=False, error="invalid_agent_runtime"), 400
+
+
+@app.post("/api/settings/connection-test")
+def api_settings_connection_test():
+    body = request.get_json(silent=True)
+    try:
+        result = connection_tests.test_connection(body)
+        return jsonify(ok=True, **result)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except connection_tests.Busy:
+        return jsonify(ok=False, error="connection_test_busy"), 409
+
+
 @app.get("/api/settings")
 def api_settings():
     return jsonify({"ok": True, **serialize_runtime_settings()})
@@ -9870,6 +9838,11 @@ def api_news_chat_archive(item_id: str):
                 archive_config = codex_client.saved_config(agent_session_runtime_dir(sync_session_id))
             elif not re.fullmatch(r"[a-zA-Z0-9_-]{1,200}", sync_session_id):
                 raise RuntimeError("pi_session_invalid")
+            else:
+                pi_path = agent_session_runtime_dir(sync_session_id) / "pi-config.json"
+                if pi_path.exists():
+                    pi_config = json.loads(pi_path.read_text())
+                    pi_model = pi_config["model"]
         elif current_runtime_settings()["agent"].get("runtime") == "codex":
             archive_config = current_runtime_settings()["agent"]["codex"]
         if archive_config is not None:

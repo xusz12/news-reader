@@ -29,8 +29,8 @@ def resolve_default_db_path() -> Path:
 DEFAULT_DB_PATH = resolve_default_db_path()
 DEFAULT_APP_SETTINGS_PATH = Path(__file__).resolve().parent / "app_settings.json"
 
-DEFAULT_PI_CHAT_PROVIDER = "ollama"
-DEFAULT_PI_CHAT_MODEL = "minimax-m3:cloud"
+DEFAULT_PI_CHAT_PROVIDER = ""
+DEFAULT_PI_CHAT_MODEL = ""
 
 DEFAULT_APP_SETTINGS = {
     "llm": {
@@ -153,7 +153,8 @@ def load_app_settings() -> dict:
 
     pi_chat = llm.get("pi_chat")
     if isinstance(pi_chat, dict):
-        provider = (pi_chat.get("provider") or "").strip()
+        provider = pi_chat.get("provider")
+        provider = provider.strip() if isinstance(provider, str) else ""
         model = pi_chat.get("model")
         if isinstance(provider, str):
             base["llm"]["pi_chat"]["provider"] = provider

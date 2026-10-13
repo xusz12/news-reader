@@ -120,7 +120,7 @@ let state = {
   settingsDatabasePickerBusy: false,
   settingsSecretBusyProvider: "",
   settingsSecretEditorProvider: "",
-  settingsSection: "services",
+  settingsSection: "models",
   runtimeSettings: null,
   releaseNotes: [],
   updateCheck: null,
@@ -1650,7 +1650,6 @@ function renderSettingsApiStatus() {
   const apiStatus = state.runtimeSettings?.api_status || {};
   [
     ["deepseek", "DeepSeek"],
-    ["pi", "Pi CLI"],
   ].forEach(([key, label]) => {
     const service = apiStatus[key] || {};
     const row = document.createElement("div");
@@ -1683,7 +1682,7 @@ function renderSettingsApiStatus() {
     const badge = document.createElement("span");
     const healthy = key === "deepseek" ? !!service.configured : !!service.exec_available;
     badge.className = `settings-api-badge ${healthy ? "ok" : "muted"}`;
-    badge.textContent = healthy ? "可用" : "待处理";
+    badge.textContent = healthy ? "Key 已配置" : "未配置";
     top.appendChild(head);
     top.appendChild(badge);
     row.appendChild(top);
@@ -2030,7 +2029,7 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
   if (!defaultInOptions) {
     const defaultOption = document.createElement("option");
     defaultOption.value = "";
-    defaultOption.textContent = catalog?.default_label ? `默认：${catalog.default_label}` : "deepseek-v4-flash";
+    defaultOption.textContent = catalog?.default_label || "请选择";
     select.appendChild(defaultOption);
   }
   realOptions.forEach((option) => select.appendChild(option));
@@ -2041,14 +2040,14 @@ function populateModelSelect(select, customInput, catalog, currentValue) {
     values.add(savedValue);
     const savedOption = document.createElement("option");
     savedOption.value = savedValue;
-    savedOption.textContent = savedValue;
+    savedOption.textContent = `${savedValue}（原选择当前未发现）`;
     select.appendChild(savedOption);
   }
 
   const customOption = document.createElement("option");
   customOption.value = SETTINGS_CUSTOM_MODEL_VALUE;
   customOption.textContent = "自定义输入...";
-  select.appendChild(customOption);
+  if (catalog?.custom_allowed !== false) select.appendChild(customOption);
 
   if (savedValue && values.has(savedValue)) {
     select.value = savedValue;
@@ -2127,18 +2126,18 @@ function syncPiChatModelSelectForProvider() {
   // 真实目录成功但当前 provider 无分组：显示空目录（仅默认占位 + 自定义输入），
   // 绝不继承 catalog.options（那是已保存 provider 的分组），避免跨 provider 串组；
   // 仅真实目录失败或为空时才回退 fallback options。
-  const options = hasGroup ? groupValues : (hasRealCatalog ? [] : fallbackOptions);
+  const options = hasGroup ? groupValues : [];
   const currentModel = readModelSetting(select, customInput).trim();
   // 当前/已保存模型属于该 provider 时保留，否则选该 provider 的首个真实候选；自定义输入始终可用。
   const belongs = !!currentModel && options.some((opt) => (opt?.value || "").trim() === currentModel);
-  const nextValue = belongs ? currentModel : ((options[0]?.value || "").trim());
+  const nextValue = belongs ? currentModel : "";
   populateModelSelect(
     select,
     customInput,
     {
       options,
       resolved_default_model: catalog.resolved_default_model || "",
-      default_label: catalog.default_label || "",
+      default_label: catalog.default_label || "请选择模型", custom_allowed: false,
     },
     nextValue,
   );
@@ -2191,16 +2190,15 @@ function populateSettingsForm() {
     settingsPiChatProviderSelect,
     settingsPiChatProviderCustom,
     {
-      options: (state.runtimeSettings?.model_catalogs?.pi_chat?.provider_options) || [{ value: "ollama", label: "ollama" }],
-      resolved_default_model: (state.runtimeSettings?.model_catalogs?.pi_chat?.resolved_default_provider) || "ollama",
-      default_label: (state.runtimeSettings?.model_catalogs?.pi_chat?.resolved_default_provider) || "ollama",
+      options: (state.runtimeSettings?.model_catalogs?.pi_chat?.provider_options) || [],
+      resolved_default_model: "", default_label: "请选择服务商", custom_allowed: false,
     },
-    llm.pi_chat?.provider || "ollama",
+    llm.pi_chat?.provider || "",
   );
   populateModelSelect(
     settingsPiChatModelSelect,
     settingsPiChatModelCustom,
-    state.runtimeSettings?.model_catalogs?.pi_chat,
+    {...state.runtimeSettings?.model_catalogs?.pi_chat, custom_allowed: false},
     llm.pi_chat?.model || "",
   );
   if (settingsTranslationModelCurrent) {
@@ -2222,9 +2220,10 @@ function populateSettingsForm() {
     const currentPiModel = (llm.pi_chat?.model || "").trim();
     settingsPiChatModelCurrent.textContent = currentPiModel
       ? `当前：${currentPiModel}`
-      : "当前：Pi 默认模型";
+      : "未选择模型；不会自动使用 Ollama。";
   }
   syncAgentRuntimeOptions();
+  populateAgentModelControls();
 }
 
 function renderDatabaseSettings() {
@@ -2310,7 +2309,7 @@ function runtimeSettingsSavePayload({ hiddenSourceSubkeys = savedFeedHiddenSourc
         model: llm.translation?.model || "",
       },
       pi_chat: {
-        provider: llm.pi_chat?.provider || "ollama",
+        provider: llm.pi_chat?.provider || "",
         model: llm.pi_chat?.model || "",
       },
     },
@@ -2321,7 +2320,7 @@ function runtimeSettingsSavePayload({ hiddenSourceSubkeys = savedFeedHiddenSourc
     agent: {
       session_ttl_hours: Number(settings.agent?.session_ttl_hours) === 24 ? 24 : 72,
       runtime: settings.agent?.runtime || "pi",
-      codex: { provider: settings.agent?.codex?.provider || "", model: settings.agent?.codex?.model || "", profile: settings.agent?.codex?.profile || "", sandbox: "read-only" },
+      codex: { provider: settings.agent?.codex?.provider || "", model: settings.agent?.codex?.model || "", profile: settings.agent?.codex?.profile || "", reasoning_effort: settings.agent?.codex?.reasoning_effort || "", sandbox: "read-only" },
     },
     database: {
       path: (settings.database?.configured_path || "").trim(),
@@ -2502,7 +2501,7 @@ async function saveRuntimeSettings() {
   const draftPiChatProvider = readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom);
   const draftPiChatModel = readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom);
   const draftRuntime = settingsAgentRuntime?.value || "pi";
-  const draftCodex = { provider: settingsCodexProvider?.value.trim() || "", model: settingsCodexModel?.value.trim() || "", profile: settingsCodexProfile?.value.trim() || "", sandbox: "read-only" };
+  const draftCodex = { provider: settingsCodexProvider?.value.trim() || "", model: readModelSetting(document.getElementById("settingsCodexModelSelect"), settingsCodexModel), reasoning_effort: document.getElementById("settingsReasoningEffort")?.value || "", profile: settingsCodexProfile?.value.trim() || "", sandbox: "read-only" };
   const draftSummaryLimits = { max_days: Number(settingsSummaryMaxDays?.value ?? state.runtimeSettings?.news_summary?.max_days ?? 20), max_items: Number(settingsSummaryMaxItems?.value ?? state.runtimeSettings?.news_summary?.max_items ?? 6000) };
   const draftAgentTtl = Number(settingsAgentTtlSelect?.value) === 24 ? 24 : 72;
   const database = state.runtimeSettings?.database || {};
@@ -2546,14 +2545,7 @@ async function saveRuntimeSettings() {
     updateFeedSourceRefreshState();
     const currentPiProvider = data.llm?.pi_chat?.provider || "";
     const currentPiModel = data.llm?.pi_chat?.model || "";
-    if ((currentPiModel !== previousPiModel || currentPiProvider !== previousPiProvider)
-        && state.detailChatSession?.provider !== "codex" && state.detailChatProvider !== "codex") {
-      state.detailChatSessionId = "";
-      state.detailChatProvider = "";
-      state.detailChatModel = "";
-      state.detailChatMessages = [];
-      state.detailChatStatus = "Pi chat 配置已切换，当前临时对话已清空。";
-    }
+    // Saved conversations keep their runtime and model; settings affect new sessions only.
     state.settingsMessage = "保存成功。新请求通常立即生效；终验前建议重启 Flask。";
     state.settingsMessageTone = "ready";
   } catch {
@@ -3560,7 +3552,7 @@ function renderMobileMoreOptions() {
     desc: "模型、服务与运行配置",
     onClick: async () => {
       closeMobileCollectionSheet();
-      state.settingsSection = "services";
+      state.settingsSection = "models";
       await openSettingsOverlay();
     },
   });
@@ -3604,7 +3596,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.3.3";
+  version.textContent = "News Reader v2.3.4";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5674,6 +5666,7 @@ function renderDetailChatMeta(item, session) {
 }
 
 const OAR_ERROR_LABELS = {
+  pi_model_not_selected: "请先在模型管理中选择 Pi 服务商和模型。",
   codex_missing: "未找到 Codex CLI，请先安装。",
   codex_auth_required: "Codex 请求被所选服务拒绝认证，请检查对应 provider / profile；不要发送凭据。",
   codex_probe_failed: "Codex 状态探测或命令能力检查失败；不等于未登录。",
@@ -11039,7 +11032,7 @@ if (settingsTranslationModelSelect) {
   });
 }
 
-if (settingsAgentRuntime) settingsAgentRuntime.addEventListener("change", syncAgentRuntimeOptions);
+if (settingsAgentRuntime) settingsAgentRuntime.addEventListener("change", () => { syncAgentRuntimeOptions(); resetConnectionResult(); syncReasoningControls(settingsAgentRuntime.value === "codex" ? state.runtimeSettings?.agent?.codex?.reasoning_effort || "" : ""); refreshAgentModels(); });
 
 if (settingsPiChatProviderSelect) {
   settingsPiChatProviderSelect.addEventListener("change", () => {
@@ -13008,3 +13001,118 @@ window.addEventListener("news-summary-visibility", () => {
   if (summaryPanelObscuresFeed()) clearFeedEndAutoReadTimer();
   else { setupReadObserver(); scheduleFeedEndAutoReadIfNeeded(); }
 });
+
+// Model discovery and connection checks are independent of settings persistence.
+const agentModelUi = { catalog: null, catalogKey: "", sequence: 0, connectionSequence: 0, busy: false, fetching: false };
+function agentModelDraft() {
+  return { runtime: settingsAgentRuntime?.value || "pi", codex: {
+    provider: settingsCodexProvider?.value.trim() || "", profile: settingsCodexProfile?.value.trim() || "",
+    model: readModelSetting(document.getElementById("settingsCodexModelSelect"), settingsCodexModel),
+    reasoning_effort: document.getElementById("settingsReasoningEffort")?.value || "", sandbox: "read-only",
+  }, pi: { provider: readModelSetting(settingsPiChatProviderSelect, settingsPiChatProviderCustom),
+           model: readModelSetting(settingsPiChatModelSelect, settingsPiChatModelCustom) } };
+}
+function agentCatalogKey(draft) { return JSON.stringify([draft.runtime, draft.codex.provider, draft.codex.profile]); }
+function resetConnectionResult() {
+  agentModelUi.connectionSequence += 1;
+  document.getElementById("settingsConnectionResult").textContent = "";
+}
+function syncReasoningControls(preferred = "") {
+  const input = document.getElementById("settingsReasoningEffort");
+  const draft = agentModelDraft();
+  const catalog = agentModelUi.catalogKey === agentCatalogKey(draft) ? agentModelUi.catalog : null;
+  const model = catalog?.options?.find(x => x.value === draft.codex.model);
+  const efforts = draft.runtime === "codex" ? (model?.reasoning_efforts || []) : [];
+  input.replaceChildren(new Option("沿用默认", ""));
+  for (const effort of efforts) input.add(new Option(effort, effort));
+  input.value = efforts.includes(preferred) ? preferred : "";
+  // A failed/unknown catalog must not silently erase a previously saved strength.
+  const saved = state.runtimeSettings?.agent?.codex || {};
+  const unchanged = draft.runtime === "codex" && draft.codex.model === (saved.model || "") && draft.codex.provider === (saved.provider || "") && draft.codex.profile === (saved.profile || "");
+  if (preferred && !efforts.length && unchanged && preferred === saved.reasoning_effort) {
+    const preserved = new Option(`${preferred}（原设置，能力未确认）`, preferred);
+    preserved.disabled = true; input.add(preserved); input.value = preferred;
+  }
+  document.getElementById("settingsReasoningHelp").textContent = efforts.length
+    ? "档位来自所选模型目录，留空继承本机配置。" : "当前选择的逐模型能力未确认，仅沿用默认；不猜测档位。";
+  const test = document.getElementById("settingsConnectionTestBtn");
+  test.disabled = agentModelUi.busy;
+  test.textContent = "测试连接";
+}
+function populateAgentModelControls() {
+  resetConnectionResult();
+  const saved = state.runtimeSettings?.agent?.codex || {};
+  const draft = agentModelDraft();
+  const catalog = agentModelUi.catalogKey === agentCatalogKey(draft) ? agentModelUi.catalog : null;
+  populateModelSelect(document.getElementById("settingsCodexModelSelect"), settingsCodexModel,
+    catalog || {options: [], default_label: "沿用本机默认"}, saved.model || "");
+  syncReasoningControls(saved.reasoning_effort || "");
+  if (!catalog && !agentModelUi.fetching && !state.settingsLoading && !state.settingsSaving && state.settingsOpen) refreshAgentModels();
+}
+async function refreshAgentModels() {
+  const before = agentModelDraft(); const key = agentCatalogKey(before);
+  const seq = ++agentModelUi.sequence; agentModelUi.fetching = true;
+  const notice = document.getElementById("settingsModelsNotice");
+  const btn = document.getElementById("settingsModelsRefreshBtn"); btn.disabled = true;
+  notice.textContent = "正在读取模型目录…";
+  try {
+    const res = await fetch("/api/settings/models", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(before)});
+    const data = await res.json();
+    if (seq !== agentModelUi.sequence || key !== agentCatalogKey(agentModelDraft())) return;
+    if (!res.ok || !data.ok) throw new Error("模型目录读取失败。");
+    agentModelUi.catalog = data.catalog; agentModelUi.catalogKey = key;
+    // Keep current, unsaved values. Discovery must never silently replace them.
+    const now = agentModelDraft();
+    if (now.runtime === "codex") {
+      populateModelSelect(document.getElementById("settingsCodexModelSelect"), settingsCodexModel, data.catalog, now.codex.model);
+      const saved = state.runtimeSettings?.agent?.codex || {};
+      const unchanged = now.codex.model === (saved.model || "") && now.codex.provider === (saved.provider || "") && now.codex.profile === (saved.profile || "");
+      syncReasoningControls(now.codex.reasoning_effort || (unchanged ? saved.reasoning_effort || "" : ""));
+    } else {
+      state.runtimeSettings.model_catalogs.pi_chat = data.catalog;
+      populateModelSelect(settingsPiChatProviderSelect, settingsPiChatProviderCustom,
+        {options: data.catalog.provider_options, default_label: "请选择服务商", custom_allowed: false}, now.pi.provider);
+      populateModelSelect(settingsPiChatModelSelect, settingsPiChatModelCustom,
+        {...data.catalog, options: data.catalog.model_options_by_provider?.[now.pi.provider] || [], custom_allowed: false}, now.pi.model);
+      syncReasoningControls("");
+    }
+    notice.textContent = data.catalog.error || (data.catalog.options?.length || data.catalog.provider_options?.length
+      ? (data.catalog.notice || "已读取候选目录；不代表账号可调用。") : "未发现模型。原选择保留，请核对后重新选择。");
+  } catch (error) {
+    if (seq === agentModelUi.sequence) notice.textContent = "模型目录读取失败，原选择保持不变。";
+  } finally { if (seq === agentModelUi.sequence) { agentModelUi.fetching = false; btn.disabled = false; } }
+}
+async function testAgentConnection() {
+  if (agentModelUi.busy) return;
+  const draft = agentModelDraft();
+  const fingerprint = JSON.stringify(draft);
+  const seq = ++agentModelUi.connectionSequence;
+  const result = document.getElementById("settingsConnectionResult");
+  agentModelUi.busy = true; syncReasoningControls(draft.codex.reasoning_effort);
+  result.textContent = "测试中…";
+  try {
+    const res = await fetch("/api/settings/connection-test", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(draft)});
+    const data = await res.json();
+    if (seq !== agentModelUi.connectionSequence || fingerprint !== JSON.stringify(agentModelDraft())) return;
+    result.textContent = data.ok ? `${data.message} · ${data.elapsed_ms}ms · ${data.checked_at}` : (data.error === "connection_test_busy" ? "已有测试正在执行。" : "测试请求失败，请核对选择。");
+  } catch {
+    if (seq === agentModelUi.connectionSequence) result.textContent = "测试接口连接失败；尚不能判断模型服务是否可用。";
+  } finally { agentModelUi.busy = false; syncReasoningControls(agentModelDraft().codex.reasoning_effort); }
+}
+document.getElementById("settingsModelsRefreshBtn").addEventListener("click", refreshAgentModels);
+document.getElementById("settingsConnectionTestBtn").addEventListener("click", testAgentConnection);
+const codexModelSelect = document.getElementById("settingsCodexModelSelect");
+codexModelSelect.addEventListener("change", () => { syncModelCustomVisibility(codexModelSelect, settingsCodexModel); resetConnectionResult(); syncReasoningControls(""); });
+for (const el of [settingsCodexModel, settingsCodexProvider, settingsCodexProfile, settingsPiChatProviderSelect, settingsPiChatModelSelect]) {
+  el?.addEventListener("input", () => { resetConnectionResult(); syncReasoningControls(""); });
+  el?.addEventListener("change", () => { resetConnectionResult(); syncReasoningControls(""); });
+}
+document.getElementById("settingsReasoningEffort").addEventListener("change", resetConnectionResult);
+
+for (const el of [settingsCodexProvider, settingsCodexProfile]) {
+  el?.addEventListener("input", () => {
+    agentModelUi.sequence += 1; agentModelUi.fetching = false;
+    document.getElementById("settingsModelsRefreshBtn").disabled = false;
+    document.getElementById("settingsModelsNotice").textContent = "连接覆盖或预设已变更，请刷新模型目录。";
+  });
+}
