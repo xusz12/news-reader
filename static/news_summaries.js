@@ -165,7 +165,10 @@
   function scopeText(scope) {
     if (!scope) return "";
     const x = scope.excluded_by || {};
-    return `将总结 ${scope.summarized_count} 条；另有 ${scope.excluded_count} 条不进入总结，但成功后也将标为已读。清理范围共 ${scope.locked_count} 条。\n排除：日期 ${x.date || 0}、条数 ${x.count || 0}、输入大小 ${x.size || 0}。\n日期缺失/无效 ${scope.undated_count || 0} 条，其中纳入 ${scope.undated_summarized || 0} 条；不猜日期。`;
+    const counts = Number.isInteger(scope.feed_visible_unread_count)
+      ? `新闻流可见未读 ${scope.feed_visible_unread_count} 条；总结锁定未读 ${scope.locked_count} 条，其中含已关闭信源 ${scope.hidden_source_unread_count || 0} 条。关闭信源仅在新闻流隐藏，仍参与总结候选及成功后标读；Bloomberg视频不在本次范围。\n`
+      : "";
+    return counts + `将总结 ${scope.summarized_count} 条；另有 ${scope.excluded_count} 条不进入总结，但成功后也将标为已读。清理范围共 ${scope.locked_count} 条。\n排除：日期 ${x.date || 0}、条数 ${x.count || 0}、输入大小 ${x.size || 0}。\n日期缺失/无效 ${scope.undated_count || 0} 条，其中纳入 ${scope.undated_summarized || 0} 条；不猜日期。`;
   }
   async function start() {
     if (busy) return;

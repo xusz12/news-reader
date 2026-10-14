@@ -128,7 +128,7 @@ def process_start(pid):
 
 
 def select_items(c, scope_getter=None):
-    where, args = scope_getter(c) if scope_getter else ("WHERE st.read_at IS NULL", [])
+    where, args = (scope_getter(c) if scope_getter else ("WHERE st.read_at IS NULL", []))[:2]
     return [
         dict(r)
         for r in c.execute(
@@ -143,7 +143,8 @@ def select_items(c, scope_getter=None):
 
 
 def snapshot(c, scope_getter=None):
-    rows = select_items(c, scope_getter)
+    scope_query = scope_getter(c) if scope_getter else None
+    rows = select_items(c, (lambda _: scope_query) if scope_query else None)
     if not rows:
         raise ValueError("summary_empty")
     rows.sort(
@@ -179,6 +180,7 @@ def snapshot(c, scope_getter=None):
         )
     ]
     return {
+        "visibility_counts": scope_query[2] if scope_query and len(scope_query) > 2 else {},
         "items": rows,
         "preferences": prefs,
         "start": min(
@@ -645,7 +647,7 @@ class Service:
                         self.route_getter()
                     ):
                         raise ValueError("summary_database_changed")
-                    if json.loads(row["snapshot_json"]).get("visibility_scope") != "feed-visible-v1":
+                    if json.loads(row["snapshot_json"]).get("visibility_scope") != "feed-all-sources-v2":
                         raise ValueError("summary_preview_invalid")
                     c.commit()
                     return {"preview": self.preview_public(row)}
@@ -663,7 +665,11 @@ class Service:
                     dict(r) for r in prefs if selection.news_date(r["date"])
                 ]
                 s = clean_for_runtime(s, config)
-                s["visibility_scope"] = "feed-visible-v1"
+                s["visibility_scope"] = "feed-all-sources-v2"
+                visible_count = s.get("visibility_counts", {}).get("feed_visible_unread_count")
+                if visible_count is not None:
+                    s["scope"]["feed_visible_unread_count"] = visible_count
+                    s["scope"]["hidden_source_unread_count"] = len(s["all_ids"]) - visible_count
                 preview_id = uuid.uuid4().hex
                 c.execute(
                     "INSERT INTO news_summary_previews VALUES(?,?,?,?,?,?,?,?)",
@@ -768,7 +774,7 @@ class Service:
                 if capture_config(self.settings_getter()) != config:
                     raise ValueError("summary_settings_changed")
                 s = json.loads(row["snapshot_json"])
-                if s.get("visibility_scope") != "feed-visible-v1":
+                if s.get("visibility_scope") != "feed-all-sources-v2":
                     raise ValueError("summary_preview_invalid")
                 if (
                     not s["items"]

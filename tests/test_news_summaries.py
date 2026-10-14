@@ -1169,7 +1169,7 @@ scenario(process.argv[1]||'http-success').catch(e=>{console.error(e);process.exi
 def test_summary_http_uuid_cache_bust():
     root = Path(__file__).resolve().parents[1]
     assert (
-        "news_summaries.js?build=news-summary-single-call"
+        "news_summaries.js?build=news-summary-all-sources-v2"
         in (root / "static/index.html").read_text()
     )
 
@@ -1453,7 +1453,7 @@ def test_single_call_has_no_audit_format_or_draft_reserve(setup):
     assert not hasattr(ns,"audit_prompt") and not hasattr(ns,"audited")
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_feed_visible_scope_matches_29_and_protects_hidden_and_arrivals(setup, monkeypatch, failure):
+def test_feed_scope_includes_hidden_source_and_protects_videos_and_arrivals(setup, monkeypatch, failure):
     import app
     p, state, s, gate, entered, calls, add, audit = setup
     settings = s.settings_getter()
@@ -1466,20 +1466,25 @@ def test_feed_visible_scope_matches_29_and_protects_hidden_and_arrivals(setup, m
             add(c, i, dt="2026-10-02")
         for i in (31, 32, 33):
             c.execute("UPDATE items SET url=? WHERE id=?", (f"https://www.bloomberg.com/news/videos/2026-10-02/{i}", str(i)))
-        c.execute("UPDATE items SET url='https://x.com/fxtrader/status/34',source_type='x',source='x',source_name='fxtrader' WHERE id='34'")
+        c.execute("UPDATE items SET url='https://x.com/fxtrader/status/34',source_type='x',source='x',source_name='fxtrader',date='2026-10-03',published_at='2026-10-03 10:00' WHERE id='34'")
     with s.connection(p) as c:
         assert len(ns.select_items(c)) == 33
     # 1,2 and 4..30 visible; 3 was already read.
     key, token, x = preview(s)
     material = stored_preview(p, x)
-    assert x["scope"]["locked_count"] == 29
+    assert x["scope"]["locked_count"] == 30
     assert x["scope"]["summarized_count"] == 1
-    assert x["scope"]["excluded_count"] == 28
-    assert not set(material["all_ids"]) & {"31", "32", "33", "34"}
+    assert x["scope"]["excluded_count"] == 29
+    assert not set(material["all_ids"]) & {"31", "32", "33"}
     with s.connection(p) as c:
-        where, args = app.news_summary_feed_scope(c)
+        where, args, counts = app.news_summary_feed_scope(c)
         count = c.execute("SELECT COUNT(DISTINCT items.id) FROM items LEFT JOIN item_state st ON st.item_id=items.id " + where, args).fetchone()[0]
-    assert count == 29
+    assert count == 30
+    assert counts["feed_visible_unread_count"] == 29
+    assert x["scope"]["feed_visible_unread_count"] == 29
+    assert x["scope"]["hidden_source_unread_count"] == 1
+    assert "34" in material["all_ids"]
+    assert material["summary_ids"] == ["34"]
     with sqlite3.connect(p) as c:
         add(c, 35, dt="2026-10-03")
     selected_runner(s, material)
@@ -1493,7 +1498,7 @@ def test_feed_visible_scope_matches_29_and_protects_hidden_and_arrivals(setup, m
     current = reads(p)
     for i in material["all_ids"]:
         assert bool(current.get(i)) is (not failure)
-    assert all(not current.get(str(i)) for i in (31, 32, 33, 34, 35))
+    assert all(not current.get(str(i)) for i in (31, 32, 33, 35))
 
 
 @pytest.mark.parametrize("action", ["prepare", "create"])
@@ -1501,7 +1506,7 @@ def test_old_visibility_preview_requires_repreview(setup, action):
     p, state, s, gate, entered, calls, add, audit = setup
     key, token, x = preview(s)
     material = stored_preview(p, x)
-    del material["visibility_scope"]
+    material["visibility_scope"] = "feed-visible-v1"
     with sqlite3.connect(p) as c:
         c.execute("UPDATE news_summary_previews SET snapshot_json=? WHERE id=?", (json.dumps(material), x["id"]))
     with pytest.raises(ValueError, match="summary_preview_invalid"):
@@ -1511,3 +1516,17 @@ def test_old_visibility_preview_requires_repreview(setup, action):
             s.create(key, token, x["id"])
     assert not calls and not reads(p).get("1")
     assert preview(s)[2]["scope"]["locked_count"] == 2
+
+
+def test_scope_prompt_discloses_visible_and_hidden_counts():
+    source = (Path(__file__).resolve().parents[1] / "static/news_summaries.js").read_text()
+    start = source.index("  function scopeText(scope)")
+    end = source.index("  async function start()", start)
+    script = source[start:end] + """
+const text = scopeText({feed_visible_unread_count:29, hidden_source_unread_count:1,
+ locked_count:30, summarized_count:30, excluded_count:0});
+if (!text.includes('新闻流可见未读 29 条') || !text.includes('总结锁定未读 30 条')
+ || !text.includes('已关闭信源 1 条') || !text.includes('成功后标读')) throw Error(text);
+if (scopeText({locked_count:33}).includes('新闻流可见未读')) throw Error('invented legacy count');
+"""
+    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)

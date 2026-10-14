@@ -11495,10 +11495,15 @@ def api_review_create_reminder(chain_id: int):
 
 # Separate summary history in the selected news database; no writes at import.
 def news_summary_feed_scope(conn):
-    """Fixed feed scope, independent of transient search/source UI selections."""
+    """Hidden sources remain summary candidates; global videos are excluded."""
     conn.create_function("feed_source_subkey", 4, feed_source_subkey_sql)
     conn.create_function("is_bloomberg_video_url", 1, lambda url: int(is_bloomberg_video_url(url)))
-    return _build_news_where_clause("", "unread", "feed", "all")
+    visible_where, visible_args = _build_news_where_clause("", "unread", "feed", "all")
+    visible_count = conn.execute(
+        "SELECT COUNT(DISTINCT items.id) FROM items LEFT JOIN item_state st ON st.item_id=items.id "
+        + visible_where, visible_args,
+    ).fetchone()[0]
+    return "WHERE " + visible_news_sql() + " AND st.read_at IS NULL", [], {"feed_visible_unread_count": visible_count}
 
 
 NEWS_SUMMARY_SERVICE = news_summaries.Service(lambda: DB_PATH, current_runtime_settings, lambda: str(resolve_db_path().expanduser().resolve()), scope_getter=news_summary_feed_scope)
