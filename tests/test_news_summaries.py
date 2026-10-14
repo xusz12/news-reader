@@ -1530,3 +1530,10 @@ if (!text.includes('新闻流可见未读 29 条') || !text.includes('总结锁�
 if (scopeText({locked_count:33}).includes('新闻流可见未读')) throw Error('invented legacy count');
 """
     subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+
+def test_public_diagnostic_whitelists_scalar_evidence_only():
+    raw = [{"exit_code": 1, "seconds": 2.5, "terminal": True, "stderr_present": True,
+            "stderr": "Authorization: secret", "body": "private news", "config": {"key":"secret"}}]
+    assert ns.public_diagnostic(json.dumps(raw)) == {"exit_code":1,"seconds":2.5,"terminal":True,"stderr_present":True}
+    assert ns.public_diagnostic('["private news"]') == {}
+    assert ns.public_diagnostic('{bad') == {}

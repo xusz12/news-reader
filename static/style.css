@@ -5991,3 +5991,9 @@ html[data-theme="eink"] .news-item[data-read-later="1"][data-detail-status="fail
 #newsSummaryContent section:focus { outline: 2px solid var(--accent); }
 #newsSummaryProgress { font-size: 14px; color: var(--muted); }
 @media (max-width: 720px) { .news-summaries-dialog { padding: 14px; } .summary-workspace { grid-template-columns: 1fr; height: auto; } .summary-workspace > aside { max-height: 180px; } #newsSummaryContent { max-height: 60dvh; padding: 0; } }
+
+/* Compact accessible error details, shared across request entry points. */
+.user-error-details { margin-top: .45rem; font-size: .85rem; white-space: normal; }
+.user-error-details summary { cursor: pointer; }
+.user-error-details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; margin: .5rem 0; }
+.user-error-details button { margin-right: .5rem; }

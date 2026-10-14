@@ -260,6 +260,20 @@ def checked_body(body, snapshot):
     }
 
 
+def public_diagnostic(value):
+    """Only bounded scalar process evidence, never prompts/native errors/config."""
+    try:
+        d = json.loads(value)
+        if isinstance(d, list): d = d[-1] if d else {}
+        if not isinstance(d, dict): return {}
+        d = d.get("generation", d)
+        if not isinstance(d, dict): return {}
+        return {k: d[k] for k in ("exit_code", "seconds", "terminal", "stderr_present")
+                if isinstance(d.get(k), (bool, int, float)) and str(d[k]) not in ("nan", "inf", "-inf")}
+    except (ValueError, TypeError):
+        return {}
+
+
 def public_scope(scope):
     return {k: v for k, v in scope.items() if k != "excluded_ids"}
 
@@ -581,6 +595,7 @@ class Service:
             "status": d["status"],
             "cancel_requested": bool(d["cancel_requested"]),
             "error": d["error"],
+            "diagnostic": public_diagnostic(d.get("diagnostic_json", "{}")),
             "message": (
                 ERRORS.get(d["error"], "执行失败；未标记本批已读。")
                 if d["error"]

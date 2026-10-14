@@ -22,8 +22,12 @@
   async function api(path, options = {}) {
     const r = await fetch(path, { cache: "no-store", ...options });
     const x = await r.json();
-    if (!r.ok || !x.ok) { const e = new Error(x.message || x.error || "请求失败"); e.code = x.error; throw e; }
+    if (!r.ok || !x.ok) { const e = globalThis.NewsErrors ? NewsErrors.fromResponse(x, r, "unknown") : new Error(x.message || x.error || "请求失败"); e.code = x.error; throw e; }
     return x;
+  }
+  function showError(error, stage = "request", confirmedUncommitted = false) {
+    if (globalThis.NewsErrors) NewsErrors.render(status, error, {context: "summary", stage, confirmedUncommitted});
+    else status.textContent = error.message || "请求结果未确认，请刷新核对任务状态。";
   }
   function controls() {
     $("startNewsSummary").disabled = busy || running(active);
@@ -37,6 +41,7 @@
     const labels = { pending: "已锁定未读，准备生成", generating: "正在生成新闻补课", checking: "正在自动核对事实、日期与引用", completed: "总结已保存，可回看；仅本批新闻已标读", failed: "任务失败，未清除本批未读", cancelled: "已取消，未清除本批未读" };
     status.textContent = job ? `${labels[job.status] || job.status} · ${job.start_date} → ${job.end_date} · ${job.item_count} 条${job.cancel_requested && running(job) ? " · 正在停止并回收运行进程" : ""}${job.message ? "。" + job.message : ""}` : "成功生成并保存可读取结果后，才标记点击时这一批已读；新到新闻不受影响。";
     if (job?.scope) status.textContent += "\n" + scopeText(job.scope);
+    if (job?.status === "failed") showError(job, job.error === "summary_save_failed" ? "save" : job.error === "summary_validation_failed" ? "validation" : "generation", true);
     controls();
   }
   function renderList(total) {
@@ -97,7 +102,7 @@
         details.appendChild(p);
       });
       content.appendChild(details); renderList(totalRecords);
-    } catch (e) { if (current === generation) status.textContent = e.message; }
+    } catch (e) { if (current === generation) showError(e); }
   }
   async function finishResult(id) {
     const current = generation, bound = token;
@@ -158,10 +163,10 @@
         if (current !== generation || bound !== token || active?.id !== jobId) return;
         if (x.job.database_token !== token) { await reload(); return; }
         await receiveJob(x.job);
-      } catch (e) { if (current !== generation || bound !== token) return; status.textContent = e.message; if (dialog.open) timer = setTimeout(() => reload().catch(e => { status.textContent = e.message; }), 3000); }
+      } catch (e) { if (current !== generation || bound !== token) return; showError(e); if (dialog.open) timer = setTimeout(() => reload().catch(e => { showError(e); }), 3000); }
     }, 1200);
   }
-  async function open() { if (!dialog.open) { dialog.showModal(); window.dispatchEvent(new Event("news-summary-visibility")); } try { await reload(); return true; } catch (e) { status.textContent = e.message; return false; } }
+  async function open() { if (!dialog.open) { dialog.showModal(); window.dispatchEvent(new Event("news-summary-visibility")); } try { await reload(); return true; } catch (e) { showError(e); return false; } }
   function scopeText(scope) {
     if (!scope) return "";
     const x = scope.excluded_by || {};
@@ -203,25 +208,28 @@
     } catch (e) {
       if (["summary_settings_changed", "summary_preview_invalid"].includes(e.code)) sessionStorage.removeItem(key);
       const message = String(e.message || e).replace(/[。.!！]+$/, "");
-      if (current === generation && bound === token) status.textContent = submitted
-        ? `启动请求失败：${message}。请刷新确认任务状态，未创建时可重试。`
-        : `未能启动总结，尚未确认创建任务：${message}`;
+      if (current === generation && bound === token) {
+        if (globalThis.NewsErrors) showError(e);
+        else status.textContent = submitted
+          ? `启动请求失败：${message}。请刷新确认任务状态，未创建时可重试。`
+          : `未能启动总结，尚未确认创建任务：${message}`;
+      }
     }
     finally { busy = false; controls(); }
   }
-  $("startNewsSummary").addEventListener("click", () => start().catch(e => { status.textContent = e.message; }));
-  $("summarizeUnreadBtn").addEventListener("click", () => start().catch(e => { status.textContent = e.message; }));
+  $("startNewsSummary").addEventListener("click", () => start().catch(e => { showError(e); }));
+  $("summarizeUnreadBtn").addEventListener("click", () => start().catch(e => { showError(e); }));
   ["navSummariesBtn", "topbarSummariesBtn"].forEach(id => $(id)?.addEventListener("click", open));
   dialog.addEventListener("close", () => window.dispatchEvent(new Event("news-summary-visibility")));
   $("closeNewsSummaries").addEventListener("click", () => dialog.close());
-  $("refreshNewsSummaries").addEventListener("click", () => reload().catch(e => { status.textContent = e.message; }));
-  $("moreNewsSummaries").addEventListener("click", () => reload(true).catch(e => { status.textContent = e.message; }));
+  $("refreshNewsSummaries").addEventListener("click", () => reload().catch(e => { showError(e); }));
+  $("moreNewsSummaries").addEventListener("click", () => reload(true).catch(e => { showError(e); }));
   $("cancelNewsSummary").addEventListener("click", async () => {
     if (!running(active) || busy) return;
     const current = generation, bound = token, jobId = active.id;
     busy = true; controls();
     try { const x = await api(`/api/news-summaries/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ database_token: token }) }); if (current !== generation || bound !== token || active?.id !== jobId) return; if (x.job.database_token !== token) { await reload(); return; } await receiveJob(x.job); }
-    catch (e) { if (current === generation && bound === token) status.textContent = e.message; }
+    catch (e) { if (current === generation && bound === token) showError(e); }
     finally { busy = false; controls(); }
   });
 })();

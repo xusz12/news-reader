@@ -1631,7 +1631,7 @@ async function saveApiSecret(provider, key) {
     body: JSON.stringify({ key }),
   });
   const data = await res.json();
-  if (!res.ok || !data.ok) throw new Error(data.error || "settings_secret_save_failed");
+  if (!res.ok || !data.ok) throw (globalThis.NewsErrors ? NewsErrors.fromResponse(data, res, "settings_secret_save_failed") : new Error(data.error || "settings_secret_save_failed"));
   return data;
 }
 
@@ -1640,7 +1640,7 @@ async function deleteApiSecret(provider) {
     method: "DELETE",
   });
   const data = await res.json();
-  if (!res.ok || !data.ok) throw new Error(data.error || "settings_secret_delete_failed");
+  if (!res.ok || !data.ok) throw (globalThis.NewsErrors ? NewsErrors.fromResponse(data, res, "settings_secret_delete_failed") : new Error(data.error || "settings_secret_delete_failed"));
   return data;
 }
 
@@ -1737,6 +1737,7 @@ function renderSettingsApiStatus() {
             state.settingsMessage = "已保存，重启 Flask 后生效。";
             state.settingsMessageTone = "ready";
           } catch (error) {
+            state.settingsError = error; state.settingsErrorForMessage = "";
             const code = error instanceof Error ? error.message : "";
             state.settingsMessage =
               code === "keychain_unavailable"
@@ -1791,6 +1792,7 @@ function renderSettingsApiStatus() {
           state.settingsMessage = "已删除，重启 Flask 后生效。";
           state.settingsMessageTone = "ready";
         } catch (error) {
+          state.settingsError = error; state.settingsErrorForMessage = "";
           const code = error instanceof Error ? error.message : "";
           state.settingsMessage =
             code === "keychain_unavailable"
@@ -2296,6 +2298,11 @@ function renderSettingsStatus() {
       : state.settingsMessage || "";
   const tone = state.settingsLoading || state.settingsSaving ? "pending" : (state.settingsMessageTone || "muted");
   settingsStatus.textContent = statusText;
+  if (tone === "pending" || tone === "ready") { state.settingsError = null; state.settingsErrorForMessage = ""; }
+  if (tone === "failed" && state.settingsError && globalThis.NewsErrors) {
+    if (state.settingsError && !state.settingsErrorForMessage) state.settingsErrorForMessage = statusText;
+    NewsErrors.render(settingsStatus, state.settingsErrorForMessage === statusText ? state.settingsError : "unknown", {context: "settings", stage: "settings"});
+  }
   settingsStatus.className = `detail-status ${tone}${statusText ? "" : " hidden"}`;
 }
 
@@ -2360,7 +2367,7 @@ async function startFeedSourceVisibilitySave(targetHiddenSourceSubkeys, savedBef
         body: JSON.stringify(runtimeSettingsSavePayload({ hiddenSourceSubkeys: target })),
       });
       const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
+      if (!res.ok || !data.ok) throw (globalThis.NewsErrors ? NewsErrors.fromResponse(data, res, "settings_save_failed") : new Error(data.error || "settings_save_failed"));
 
       const draftAtResponse = normalizeFeedHiddenSourceSubkeys(Array.from(feedHiddenDraftSet()));
       const persisted = normalizeFeedHiddenSourceSubkeys(data.feed?.hidden_source_subkeys || target);
@@ -2381,7 +2388,8 @@ async function startFeedSourceVisibilitySave(targetHiddenSourceSubkeys, savedBef
       state.settingsMessageTone = state.settingsFeedSaveDirty ? "pending" : "ready";
       saveSucceeded = true;
       return true;
-    } catch {
+    } catch (error) {
+      state.settingsError = error; state.settingsErrorForMessage = "";
       state.settingsFeedHiddenSaved = savedBefore;
       state.settingsFeedHiddenDraft = new Set(savedBefore);
       syncRuntimeFeedHiddenSourceSubkeys(savedBefore);
@@ -2537,7 +2545,7 @@ async function saveRuntimeSettings() {
       body: JSON.stringify(payload),
     });
     const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "settings_save_failed");
+    if (!res.ok || !data.ok) throw (globalThis.NewsErrors ? NewsErrors.fromResponse(data, res, "settings_save_failed") : new Error(data.error || "settings_save_failed"));
     state.runtimeSettings = data;
     state.settingsFeedHiddenSaved = normalizeFeedHiddenSourceSubkeys(data.feed?.hidden_source_subkeys);
     state.settingsFeedHiddenDraft = null;
@@ -2548,8 +2556,9 @@ async function saveRuntimeSettings() {
     // Saved conversations keep their runtime and model; settings affect new sessions only.
     state.settingsMessage = "保存成功。新请求通常立即生效；终验前建议重启 Flask。";
     state.settingsMessageTone = "ready";
-  } catch {
-    state.settingsMessage = "保存失败，请检查输入后重试。";
+  } catch (error) {
+    state.settingsError = error; state.settingsErrorForMessage = "";
+    state.settingsMessage = "保存结果尚未确认，请刷新读取设置核对。";
     state.settingsMessageTone = "failed";
   } finally {
     state.settingsSaving = false;
@@ -3596,7 +3605,7 @@ function renderMobileMoreOptions() {
   });
   const version = document.createElement("div");
   version.className = "mobile-more-version";
-  version.textContent = "News Reader v2.3.6";
+  version.textContent = "News Reader v2.3.7";
   system.appendChild(version);
   mobileCollectionOptions.appendChild(system);
 }
@@ -5790,10 +5799,17 @@ async function parseDetailAgentResponse(res, fallbackCode) {
     || ([404, 405].includes(status) ? "agent_api_unavailable" : status ? `http_${status}` : fallbackCode);
   const error = new Error(code || fallbackCode);
   error.httpStatus = status;
+  error.code = payload?.error || code;
   throw error;
 }
 
 function detailAgentErrorMessage(error, fallbackMessage) {
+  if (globalThis.NewsErrors) {
+    const info = NewsErrors.explain(error, {context: "agent"});
+    state.detailChatError = error;
+    state.detailChatErrorText = [info.message, info.action].join(" ");
+    return state.detailChatErrorText;
+  }
   const code = error instanceof Error ? error.message : "";
   const httpStatus = Number.isInteger(error?.httpStatus) && error.httpStatus > 0
     ? error.httpStatus
@@ -5929,6 +5945,9 @@ function renderDetailChat(item) {
         : contextAvailable ? "问题会在后台异步处理，关闭面板或切换新闻不会取消。" : "等待完整英文原文。"
   );
   detailChatStatus.textContent = statusText;
+  if (globalThis.NewsErrors && state.detailChatErrorText === statusText) {
+    NewsErrors.render(detailChatStatus, state.detailChatError, {context: "agent"});
+  }
   detailChatStatus.className = `detail-status ${activeJob ? "pending" : contextUpdated ? "muted" : "muted"}`;
 
   const jobById = new Map(state.detailChatJobs.map((job) => [job.id, job]));
@@ -5968,6 +5987,7 @@ function renderDetailChat(item) {
         : job.status === "interrupted"
           ? "服务曾重启，任务已中断；可以重试。"
           : `研究失败：${OAR_ERROR_LABELS[job.error] || job.error || "请重试"}`;
+      if (job.status === "failed" && globalThis.NewsErrors) NewsErrors.render(error, job, {context: "agent", stage: "generation"});
       card.appendChild(error);
       const retry = document.createElement("button");
       retry.type = "button";
@@ -6046,7 +6066,7 @@ async function archiveDetailChat() {
       provider_timeout: "Pi 归档超时，请稍后重试。",
       provider_failed: "Pi 归档失败，请稍后重试。",
     };
-    state.detailChatStatus = labelMap[code] || "归档失败，请稍后重试。";
+    state.detailChatStatus = globalThis.NewsErrors ? detailAgentErrorMessage(error, "归档未完成，请刷新核对后反馈。") : labelMap[code] || "归档失败，请稍后重试。";
   } finally {
     state.detailChatArchiving = false;
     renderDetailChat(item);
@@ -6125,8 +6145,8 @@ async function stopDetailAgentJob() {
     if (!res.ok || !payload.ok) throw new Error(payload.error || "agent_stop_failed");
     mergeDetailAgentJob(payload.job);
     state.detailChatStatus = "已停止；部分输出已保留。";
-  } catch {
-    state.detailChatStatus = "停止失败，请稍后重试。";
+  } catch (error) {
+    state.detailChatStatus = detailAgentErrorMessage(error, "停止状态尚未确认，请刷新。");
   } finally {
     stopDetailAgentStream();
     renderDetailChat(item);
@@ -6146,8 +6166,8 @@ async function retryDetailAgentJob(item, jobId) {
     state.detailChatStatus = "";
     const active = activeDetailAgentJob();
     if (active) startDetailAgentStream(item, active.id);
-  } catch {
-    state.detailChatStatus = "重试失败，请稍后重试。";
+  } catch (error) {
+    state.detailChatStatus = globalThis.NewsErrors ? detailAgentErrorMessage(error, "请求状态尚未确认，请刷新。") : "重试失败，请稍后重试。";
   } finally {
     state.detailChatSending = false;
     renderDetailChat(item);
@@ -8011,7 +8031,8 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
     retryBtn.classList.add("hidden");
   } else if (status === "failed") {
     const err = cached?.job?.last_error || item.detail_error || "详情获取失败";
-    statusEl.textContent = `获取失败，可重试：${err}`;
+    statusEl.textContent = "正文获取未完成，请稍后重试。";
+    if (globalThis.NewsErrors) NewsErrors.render(statusEl, err, {context: "detail", stage: "fetch"});
     statusEl.className = "detail-status failed";
     contentEl.classList.add("hidden");
     retryBtn.classList.remove("hidden");
@@ -8024,6 +8045,7 @@ function renderDetail(item, { preserveTransientUi = false } = {}) {
     } else {
       statusEl.textContent = "已跳过（该来源暂不抓正文）";
     }
+    if (globalThis.NewsErrors && item.source_type !== "twitter") NewsErrors.render(statusEl, "unsupported_source", {context: "detail", stage: "fetch"});
     statusEl.className = "detail-status muted";
     contentEl.classList.add("hidden");
     retryBtn.classList.add("hidden");
@@ -13094,9 +13116,16 @@ async function testAgentConnection() {
     const res = await fetch("/api/settings/connection-test", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(draft)});
     const data = await res.json();
     if (seq !== agentModelUi.connectionSequence || fingerprint !== JSON.stringify(agentModelDraft())) return;
-    result.textContent = data.ok ? `${data.message} · ${data.elapsed_ms}ms · ${data.checked_at}` : (data.error === "connection_test_busy" ? "已有测试正在执行。" : "测试请求失败，请核对选择。");
-  } catch {
-    if (seq === agentModelUi.connectionSequence) result.textContent = "测试接口连接失败；尚不能判断模型服务是否可用。";
+    if (data.ok && data.status === "success") result.textContent = `${data.message} · ${data.elapsed_ms}ms · ${data.checked_at}`;
+    else if (globalThis.NewsErrors) {
+      NewsErrors.render(result, NewsErrors.fromResponse(data, res, data.category || "unknown"), {context: "connection", stage: "connection"});
+      if (data.checked_at) result.appendChild(document.createTextNode(` · ${data.elapsed_ms}ms · ${data.checked_at}`));
+    } else result.textContent = "测试未完成，原因尚未确定。";
+  } catch (error) {
+    if (seq === agentModelUi.connectionSequence) {
+      result.textContent = "测试结果未收到，尚不能判断模型服务是否可用。";
+      if (globalThis.NewsErrors) NewsErrors.render(result, error, {context: "connection", stage: "connection"});
+    }
   } finally { agentModelUi.busy = false; syncReasoningControls(agentModelDraft().codex.reasoning_effort); }
 }
 document.getElementById("settingsModelsRefreshBtn").addEventListener("click", refreshAgentModels);

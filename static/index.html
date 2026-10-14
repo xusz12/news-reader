@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>News Reader v2.3.6</title>
+    <title>News Reader v2.3.7</title>
     <script>
       (function () {
         var VALID = ["system", "light", "dark", "eink"];
@@ -25,14 +25,14 @@
         document.documentElement.setAttribute("data-theme", mode);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=2.3.6&build=model-settings-connection" />
+    <link rel="stylesheet" href="/static/style.css?v=2.3.7&build=model-settings-connection-errors411" />
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title-row">
           <h1>News Reader</h1>
-          <span class="topbar-version">v2.3.6</span>
+          <span class="topbar-version">v2.3.7</span>
         </div>
         <p class="topbar-subtitle">如果是牛市，那么永远不缺机会。</p>
       </div>
@@ -1035,7 +1035,8 @@
       <p id="newsSummaryProgress" role="status" aria-live="polite">只处理点击时全部未读，不受筛选影响；成功保存并核对后才标记本批已读。</p>
       <div class="summary-workspace"><aside aria-label="历史总结"><div id="newsSummaryList"></div><button id="moreNewsSummaries" class="hidden" type="button">更多历史总结</button></aside><article id="newsSummaryContent"><p>选择一份历史总结，或生成本批未读新闻的总结。</p></article></div>
     </dialog>
-    <script src="/static/news_summaries.js?build=news-summary-all-sources-v2"></script>
-    <script src="/static/app.js?v=2.3.6&build=model-settings-connection"></script>
+    <script src="/static/error_ui.js?build=errors-411"></script>
+    <script src="/static/news_summaries.js?build=news-summary-all-sources-v2-errors411"></script>
+    <script src="/static/app.js?v=2.3.7&build=model-settings-connection-errors411"></script>
   </body>
 </html>

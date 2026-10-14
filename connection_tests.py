@@ -20,10 +20,28 @@ TIMEOUT = 45
 class Busy(Exception): pass
 
 def classify(text):
-    if re.search(r'capacity|overloaded|too many requests|rate.limit|\b429\b',text,re.I): return 'capacity'
-    if re.search(r'no API key|not authenticated|unauthorized|invalid.api.key|\b401\b|\b403\b',text,re.I): return 'credentials'
-    if re.search(r'model.{0,50}(not found|not supported|unavailable)|unknown model',text,re.I): return 'model'
-    if re.search(r'connection refused|connection reset|ENOTFOUND|ECONN|timed out|network unreachable',text,re.I): return 'connection'
+    # Explicit structured upstream codes, or complete established diagnostic lines.
+    # Never infer quota/network/application blame from isolated English words.
+    codes = {'insufficient_quota':'quota', 'quota_exceeded':'quota',
+             'rate_limit_exceeded':'rate', 'rate_limit_error':'rate',
+             'overloaded_error':'capacity', 'service_overloaded':'capacity',
+             'invalid_api_key':'credentials', 'authentication_error':'credentials',
+             'model_not_found':'model', 'model_not_supported':'model',
+             'context_length_exceeded':'input'}
+    for line in str(text).splitlines():
+        try:
+            data=json.loads(line)
+            error=data.get('error', data) if isinstance(data,dict) else {}
+            if isinstance(error,dict):
+                for key in ('code','type'):
+                    if error.get(key) in codes: return codes[error[key]]
+        except (ValueError,TypeError): pass
+        value=line.strip().lower()
+        if value in ('401 unauthorized', 'not authenticated', 'invalid api key', 'no api key'): return 'credentials'
+        if value in ('capacity exceeded', 'service overloaded'): return 'capacity'
+        if value in ('model not found', 'model not supported', 'unknown model'): return 'model'
+        if value in ('econnreset','econnrefused','enotfound','enetunreach','connection refused','connection reset','network unreachable'): return 'connection'
+        if value in ('timed out','etimedout'): return 'timeout'
     return 'unknown'
 
 def pi_command(config):
@@ -103,7 +121,7 @@ def test_connection(payload):
             except RuntimeError as exc: category=str(exc);status='failed'
             except Exception: category='unknown';status='failed'
         labels={'no_tool_mode_unsupported':'当前版本暂不支持无工具连接测试。','credentials':'凭据或登录被服务拒绝。',
-                'connection':'连接失败。','capacity':'服务容量或请求频率受限。','model':'模型不可用或不受支持。',
+                'quota':'服务明确报告账户额度不足。','rate':'服务限制请求频率，不等于额度耗尽。','input':'输入超出服务限制。','connection':'服务连接未建立或断开。','capacity':'服务容量或请求频率受限。','model':'模型不可用或不受支持。',
                 'timeout':'连接测试超时。','invalid_answer':'未收到有效测试答案。','cli_missing':'未找到 CLI。','cli_incompatible':'CLI能力检查失败，请检查本机版本和配置。',
                 'tool_mode_violation':'无工具模式验证失败，未报告连接成功。','unknown':'测试失败，原因尚不能确定。'}
         return {'status':status,'category':category,'message':'本次模型请求成功；不代表后续稳定或网页工具可用。' if not category else labels.get(category,labels['unknown']),

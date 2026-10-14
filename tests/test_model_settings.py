@@ -255,3 +255,13 @@ time.sleep(30)
     for pid in json.loads(pids.read_text()):
         state=subprocess.run(['ps','-o','stat=','-p',str(pid)],capture_output=True,text=True).stdout.strip()
         assert not state or state.startswith('Z'),(pid,state)
+
+@pytest.mark.parametrize('text,category', [
+ ('HTTP 429', 'unknown'), ('403', 'unknown'),
+ ('discussion of capacity planning', 'unknown'), ('timed out', 'timeout'),
+ ('{"error":{"code":"insufficient_quota"}}', 'quota'),
+ ('{"error":{"type":"rate_limit_error"}}', 'rate'),
+ ('{"error":{"code":"context_length_exceeded"}}', 'input'),
+])
+def test_error_classification_requires_explicit_evidence(text, category):
+    assert checks.classify(text) == category
